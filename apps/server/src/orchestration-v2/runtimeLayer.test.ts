@@ -4607,6 +4607,54 @@ it.layer(layerSharedApplicationDataPlaneTest)("snooze projection", (it) => {
       assert.isNull(awakened.thread.snoozedAt);
     }),
   );
+
+  it.effect("settling a snoozed thread clears the snooze", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectService.ProjectService;
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make("runtime-layer-settle-snoozed-project");
+      const threadId = ThreadId.make("runtime-layer-settle-snoozed-thread");
+
+      yield* projects.create({
+        commandId: CommandId.make("runtime-layer-settle-snoozed-project-create"),
+        projectId,
+        title: "Settle a snoozed thread",
+        workspaceRoot: "/tmp/runtime-layer-settle-snoozed-project",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-settle-snoozed-thread-create"),
+        threadId,
+        projectId,
+        title: "Snoozed then settled",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.snooze",
+        commandId: CommandId.make("runtime-layer-settle-snoozed-thread-snooze"),
+        threadId,
+        snoozedUntil: "2099-07-25T09:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("runtime-layer-settle-snoozed-thread-settle"),
+        threadId,
+      });
+
+      const shell = yield* orchestrator.getShellSnapshot();
+      const thread = shell.threads.find((candidate) => candidate.id === threadId);
+      assert.isDefined(thread);
+      assert.equal(thread.settledOverride, "settled");
+      assert.isNull(thread.snoozedUntil ?? null);
+      assert.isNull(thread.snoozedAt ?? null);
+    }),
+  );
 });
 
 it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {

@@ -2823,11 +2823,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.unarchive":
           return { ...thread, archivedAt: null, updatedAt: now };
         case "thread.settle": {
-          // Settling is "I'm done with this": it clears a pin the same way it
-          // parks the thread (mirrors the v1 decider's settle/pin exclusion).
+          // Settling is "I'm done with this": it clears a pin and a snooze the
+          // same way it parks the thread (mirrors the v1 decider's settle/pin
+          // exclusion). A settled thread belongs in Settled, not behind a wake
+          // time it would bounce back from.
           const wasPinned = thread.pinnedAt != null;
+          const wasSnoozed = thread.snoozedUntil != null || thread.snoozedAt != null;
           const alreadySettled =
-            thread.settledOverride === "settled" && thread.settledAt !== null && !wasPinned;
+            thread.settledOverride === "settled" &&
+            thread.settledAt !== null &&
+            !wasPinned &&
+            !wasSnoozed;
           return {
             ...thread,
             settledOverride: "settled",
@@ -2837,6 +2843,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             pinnedAt: null,
             pinOrderKey: null,
             activeOrderKey: null,
+            snoozedUntil: null,
+            snoozedAt: null,
             updatedAt: alreadySettled ? thread.updatedAt : now,
           };
         }
