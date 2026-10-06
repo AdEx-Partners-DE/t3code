@@ -74,10 +74,17 @@ const commandFailure = (result: {
 
 const confirm = (title: string, message: string, action: string) =>
   new Promise<boolean>((resolve) => {
-    Alert.alert(title, message, [
-      { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-      { text: action, onPress: () => resolve(true) },
-    ]);
+    Alert.alert(
+      title,
+      message,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+        { text: action, onPress: () => resolve(true) },
+      ],
+      // Android dismisses an open alert when the next one shows; a dismissed
+      // request is declined rather than left holding an in-flight slot.
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
   });
 
 /** A captured MCP App in the thread feed, hosted in a WebView over the MCP Apps bridge. */
@@ -303,8 +310,10 @@ export function ThreadMcpApp(props: {
           nestedScrollEnabled
           originWhitelist={["*"]}
           // Only the outer page loads at the top; the app opens links through the bridge.
+          // Android reports every navigation as top-frame, including the
+          // outer page's iframe, so the app document is allowed by URL too.
           onShouldStartLoadWithRequest={(request) =>
-            request.isTopFrame === false || request.url === "about:blank"
+            request.isTopFrame === false || request.url === "about:blank" || request.url === uri
           }
           setSupportMultipleWindows={false}
           onLoadEnd={() => setLoaded(true)}

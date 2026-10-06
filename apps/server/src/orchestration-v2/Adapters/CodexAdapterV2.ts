@@ -5760,6 +5760,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   updated.set(input.nativeTurnId, input.context);
                   return updated;
                 });
+                // Background work that finished between the check above and
+                // the turn being recorded as settled saw no settled turn to
+                // release, so it is re-checked once recorded.
+                yield* releaseSettledTurnIfIdle(input.nativeTurnId);
               }
               yield* Ref.update(activeTurns, (current) => {
                 const updated = new Map(current);
