@@ -227,6 +227,7 @@ function HomeTopContentSpacer() {
 
 function HomeScrollView(props: ComponentProps<typeof ScrollView>) {
   const insets = useSafeAreaInsets();
+  const primaryColumn = use(NativePrimaryColumnContext);
   if (Platform.OS !== "ios") return <ScrollView {...props} />;
 
   // v5 needs the actual content scroll view registered with its screen controller.
@@ -242,6 +243,8 @@ function HomeScrollView(props: ComponentProps<typeof ScrollView>) {
     >
       <ScrollView
         {...props}
+        // UIKit's scroll-edge material needs the scroll view's own surface color.
+        className={cn(props.className, primaryColumn ? "bg-drawer" : "bg-screen")}
         // v5 sits inside a presentation stack. Automatic scroll insets can
         // disappear after scrolling; use the owning column's native safe area.
         automaticallyAdjustContentInsets={false}
