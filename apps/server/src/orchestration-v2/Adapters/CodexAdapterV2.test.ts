@@ -6276,6 +6276,92 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  // The turn fails while the app's resource read is still outstanding (Codex
+  // never answers it), so the capture must be cancelled and its tool row
+  // settled before the terminal event closes ingestion.
+  const failedMcpAppTranscript = makeCodexReplayTranscript({
+    scenario: "codex-mcp-app-capture-failed-turn",
+    entries: [
+      ...codexReplayPreamble({
+        nativeThreadId: MCP_APP_NATIVE_THREAD,
+        nativeTurnId: MCP_APP_NATIVE_TURN,
+        prompt: MCP_APP_PROMPT,
+      }),
+      {
+        type: "emit_inbound",
+        label: "item/completed/app-tool",
+        frame: {
+          method: "item/completed",
+          params: {
+            item: mcpAppToolItem("completed"),
+            threadId: MCP_APP_NATIVE_THREAD,
+            turnId: MCP_APP_NATIVE_TURN,
+            completedAtMs: 1782622441500,
+          },
+        },
+      },
+      {
+        type: "expect_outbound",
+        label: "mcpServer/resource/read",
+        frame: {
+          id: 4,
+          method: "mcpServer/resource/read",
+          params: { threadId: MCP_APP_NATIVE_THREAD, server: "weather", uri: MCP_APP_RESOURCE },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "turn/completed",
+        frame: {
+          method: "turn/completed",
+          params: {
+            threadId: MCP_APP_NATIVE_THREAD,
+            turn: {
+              ...makeCodexReplayTurn({ id: MCP_APP_NATIVE_TURN, status: "failed" }),
+              error: { message: "provider failed mid-capture" },
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  it.effect("settles a pending MCP app capture before a failed turn's terminal event", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeCodexReplayHarness(failedMcpAppTranscript);
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-mcp-app-failed"),
+            text: MCP_APP_PROMPT,
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "failed terminal");
+        assert.equal(harness.terminalEvents()[0]?.status, "failed");
+
+        const terminalIndex = harness.events.findIndex((event) => event.type === "turn.terminal");
+        const rows = harness.events.flatMap((event, index) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "dynamic_tool" &&
+          event.turnItem.status === "completed"
+            ? [{ index, turnItem: event.turnItem }]
+            : [],
+        );
+        // Settled once, as a plain tool row, ahead of the terminal event.
+        assert.lengthOf(rows, 1);
+        assert.isBelow(rows[0]!.index, terminalIndex);
+        const output = rows[0]!.turnItem.type === "dynamic_tool" ? rows[0]!.turnItem.output : null;
+        assert.isUndefined((output as Record<string, unknown> | null)?.[MCP_APP_OUTPUT_KEY]);
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
   const ORPHAN_WAIT_SCENARIO = "codex-orphaned-dynamic-tool";
   const ORPHAN_WAIT_NATIVE_THREAD = "native-codex-orphan-wait-thread";
   const ORPHAN_WAIT_NATIVE_TURN = "native-codex-orphan-wait-turn";

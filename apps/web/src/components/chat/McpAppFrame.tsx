@@ -57,6 +57,7 @@ export function McpAppFrame(props: {
   const boxRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(MCP_APP_DEFAULT_HEIGHT);
+  const [navigatedAway, setNavigatedAway] = useState(false);
   useLayoutEffect(() => {
     const box = boxRef.current;
     if (!box) return;
@@ -109,6 +110,17 @@ export function McpAppFrame(props: {
     latest.current = { theme, width, props, callTool, toolInfo, readResource };
   });
   const hostRef = useRef<McpAppHost | null>(null);
+  // The bridge belongs to the captured document. A frame that navigates keeps
+  // its window, so a second load stops the app rather than handing a document
+  // T3 never served (and its policy never covered) the bridge.
+  const loads = useRef(0);
+  const onFrameLoad = () => {
+    loads.current += 1;
+    if (loads.current > 1) {
+      hostRef.current?.dispose();
+      setNavigatedAway(true);
+    }
+  };
 
   useEffect(() => {
     if (src === null) return;
@@ -215,7 +227,11 @@ export function McpAppFrame(props: {
       )}
       style={{ height }}
     >
-      {src !== null ? (
+      {navigatedAway ? (
+        <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
+          The {app.server} app left its page and was stopped
+        </p>
+      ) : src !== null ? (
         <iframe
           ref={frameRef}
           src={src}
@@ -223,6 +239,7 @@ export function McpAppFrame(props: {
           // Never allow-same-origin: the opaque origin keeps the app out of the session.
           sandbox="allow-scripts allow-forms"
           allow={mcpAppAllowAttribute(app.permissions)}
+          onLoad={onFrameLoad}
           className="block size-full border-0"
           style={{ colorScheme: theme.appearance }}
         />

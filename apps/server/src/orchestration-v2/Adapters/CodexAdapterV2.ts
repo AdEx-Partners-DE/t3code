@@ -69,6 +69,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -2025,17 +2026,31 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             return [remaining.size === 0, updated] as const;
           });
 
-        // MCP app captures still reading their resource, by native turn. Each
-        // counts as retained background work, so the turn's context and the
-        // run's ingestion stay open until its app lands on the item.
-        const pendingMcpAppCaptures = yield* Ref.make(new Map<string, number>());
-        const adjustPendingMcpAppCaptures = (nativeTurnId: string, delta: 1 | -1) =>
-          Ref.update(pendingMcpAppCaptures, (current) => {
-            const next = (current.get(nativeTurnId) ?? 0) + delta;
+        // MCP app captures still reading their resource, by native turn and
+        // item. Each counts as retained background work, so the turn's context
+        // and the run's ingestion stay open until its app lands on the item.
+        // A turn that ends badly cancels its captures and settles their items
+        // itself (terminalizeMcpAppCaptures).
+        interface PendingMcpAppCapture {
+          readonly item: Extract<CodexDynamicToolItem, { readonly type: "mcpToolCall" }>;
+          readonly fiber: Fiber.Fiber<void>;
+        }
+        const pendingMcpAppCaptures = yield* Ref.make(
+          new Map<string, ReadonlyMap<string, PendingMcpAppCapture>>(),
+        );
+        /** Removes a capture; true when this call removed it (each settles once). */
+        const takePendingMcpAppCapture = (nativeTurnId: string, nativeItemId: string) =>
+          Ref.modify(pendingMcpAppCaptures, (current) => {
+            const captures = current.get(nativeTurnId);
+            if (captures === undefined || !captures.has(nativeItemId)) {
+              return [false, current] as const;
+            }
+            const remaining = new Map(captures);
+            remaining.delete(nativeItemId);
             const updated = new Map(current);
-            if (next <= 0) updated.delete(nativeTurnId);
-            else updated.set(nativeTurnId, next);
-            return updated;
+            if (remaining.size === 0) updated.delete(nativeTurnId);
+            else updated.set(nativeTurnId, remaining);
+            return [true, updated] as const;
           });
 
         const trackRunningDynamicTool = (nativeTurnId: string, item: CodexDynamicToolItem) =>
@@ -3555,18 +3570,21 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           resourceUri: string,
         ) =>
           Effect.gen(function* () {
-            yield* adjustPendingMcpAppCaptures(nativeTurnId, 1);
-            // Released once: before the final emit, or on interruption.
-            let released = false;
-            const release = Effect.suspend(() => {
-              if (released) return Effect.void;
-              released = true;
-              return adjustPendingMcpAppCaptures(nativeTurnId, -1);
-            });
-            yield* captureMcpAppItem(context, nativeTurnId, item, resourceUri, release).pipe(
-              Effect.onInterrupt(() => release),
+            // Registered before it can run, so a turn ending right away sees it.
+            const started = yield* Deferred.make<void>();
+            const fiber = yield* Deferred.await(started).pipe(
+              Effect.andThen(captureMcpAppItem(context, nativeTurnId, item, resourceUri)),
               Effect.forkIn(scope, { startImmediately: true }),
             );
+            yield* Ref.update(pendingMcpAppCaptures, (current) => {
+              const updated = new Map(current);
+              updated.set(
+                nativeTurnId,
+                new Map(current.get(nativeTurnId) ?? []).set(item.id, { item, fiber }),
+              );
+              return updated;
+            });
+            yield* Deferred.succeed(started, undefined);
           });
 
         const captureMcpAppItem = (
@@ -3574,7 +3592,6 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           nativeTurnId: string,
           item: Extract<CodexDynamicToolItem, { readonly type: "mcpToolCall" }>,
           resourceUri: string,
-          release: Effect.Effect<void>,
         ) =>
           Effect.gen(function* () {
             const reference =
@@ -3611,8 +3628,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 : undefined;
             const artifacts = yield* buildDynamicToolArtifacts(context, item);
             // Cleared before the final emit: ingestion re-checks pending work
-            // after each event, and must see this capture done by then.
-            yield* release;
+            // after each event, and must see this capture done by then. A turn
+            // that already ended badly took the capture and settled its item.
+            if (!(yield* takePendingMcpAppCapture(nativeTurnId, item.id))) return;
             const turnItem =
               reference === undefined || artifacts.turnItem.type !== "dynamic_tool"
                 ? artifacts.turnItem
@@ -3632,6 +3650,33 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               turnItem,
             });
             yield* releaseSettledTurnIfIdle(nativeTurnId);
+          });
+
+        /**
+         * Settles the items of app captures still running when their turn is
+         * interrupted or fails: the capture is cancelled and its tool call is
+         * reported as it completed, without the app, before the turn's
+         * terminal event closes ingestion.
+         */
+        const terminalizeMcpAppCaptures = (context: ActiveCodexTurnContext, nativeTurnId: string) =>
+          Effect.gen(function* () {
+            const captures = (yield* Ref.get(pendingMcpAppCaptures)).get(nativeTurnId);
+            if (captures === undefined) return;
+            for (const { item, fiber } of captures.values()) {
+              if (!(yield* takePendingMcpAppCapture(nativeTurnId, item.id))) continue;
+              yield* Fiber.interrupt(fiber);
+              const artifacts = yield* buildDynamicToolArtifacts(context, item);
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: artifacts.turnItem,
+              });
+            }
           });
 
         const buildProposedPlanArtifacts = (input: {
@@ -5647,6 +5692,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   input.status,
                   input.completedAt,
                 );
+                yield* terminalizeMcpAppCaptures(input.context, input.nativeTurnId);
               }
               const dynamicToolStatus: "cancelled" | "interrupted" | "failed" =
                 input.status === "interrupted" || input.status === "failed"
@@ -6812,6 +6858,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                         completedAt,
                         true,
                       );
+                      yield* terminalizeMcpAppCaptures(context, context.nativeTurnId);
                       yield* Ref.update(runningCommandItemsByTurn, (current) => {
                         const updated = new Map(current);
                         updated.delete(context.nativeTurnId);

@@ -79,9 +79,11 @@ function makeLayer(input: {
             Effect.succeed(
               input.live === false
                 ? Option.none()
-                : Option.some({
-                    ...(input.mcpApps === undefined ? {} : { mcpApps: input.mcpApps }),
-                  } as ProviderAdapterV2SessionRuntime),
+                : Option.some(
+                    (input.mcpApps === undefined
+                      ? {}
+                      : { mcpApps: input.mcpApps }) as ProviderAdapterV2SessionRuntime,
+                  ),
             ),
         }),
       ),

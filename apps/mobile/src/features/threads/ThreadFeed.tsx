@@ -1596,6 +1596,7 @@ function renderFeedEntry(
       <ThreadMcpApp
         environmentId={props.environmentId}
         threadId={entry.sourceThreadId}
+        conversationThreadId={props.threadId}
         itemId={entry.itemId}
         revision={entry.revision}
         app={entry.app}

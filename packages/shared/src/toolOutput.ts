@@ -161,11 +161,21 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
       }
     }
   }
-  if (encoder.encode(JSON.stringify(output)).byteLength > MAX_METADATA_BYTES) {
+  const oversized = () => encoder.encode(JSON.stringify(output)).byteLength > MAX_METADATA_BYTES;
+  if (oversized()) {
     delete output.threads;
     delete output.threadId;
     delete output.status;
   }
+  // An app's declared origins are the only unbounded-ish part of its
+  // reference; hosting works without them (the stored document carries its
+  // own policy), so they go before the app does.
+  const app = output[MCP_APP_OUTPUT_KEY];
+  if (app?.csp !== undefined && oversized()) {
+    const { csp: _csp, ...rest } = app;
+    output[MCP_APP_OUTPUT_KEY] = rest;
+  }
+  if (oversized()) delete output[MCP_APP_OUTPUT_KEY];
   return Object.keys(output).length === 0 ? undefined : output;
 }
 
@@ -181,13 +191,17 @@ export function htmlRenderFromToolItem(item: {
 
 /**
  * The MCP App a completed tool call carries, if any. The adapter that captured
- * it put the reference in the output; any provider following the MCP Apps spec
- * can, so this does not check the tool name.
+ * it put the reference in the output, beside the tool's own result. A tool's
+ * result can imitate that shape, so the reference only counts when it names
+ * the very server and tool the item records: a server can then only ever
+ * point at an app of its own.
  */
 export function mcpAppFromToolItem(item: {
+  readonly toolName: string | null | undefined;
   readonly output?: unknown;
 }): McpAppReference | undefined {
-  return compactDynamicToolOutput(item.output)?.[MCP_APP_OUTPUT_KEY];
+  const app = compactDynamicToolOutput(item.output)?.[MCP_APP_OUTPUT_KEY];
+  return app !== undefined && item.toolName === `${app.server}.${app.tool}` ? app : undefined;
 }
 
 /** Some providers report completion even when command output describes a failure. */

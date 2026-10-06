@@ -20,23 +20,31 @@ const encoder = new TextEncoder();
 /**
  * The HTML document in a `resources/read` result, with the `_meta.ui` the
  * resource declared. Only `text/html;profile=mcp-app` content counts; a blob is
- * base64 per MCP.
+ * base64 per MCP. A null document is one too large to store.
  */
 function readMcpAppDocument(
   contents: ReadonlyArray<unknown>,
   uri: string,
-): { readonly html: string; readonly meta: unknown } | undefined {
+): { readonly html: string | null; readonly meta: unknown } | undefined {
   for (const content of contents) {
     if (!Predicate.isObject(content)) continue;
     if (content.uri !== undefined && content.uri !== uri) continue;
     const mimeType = typeof content.mimeType === "string" ? content.mimeType : "";
     if (mimeType.replace(/\s+/g, "").toLowerCase() !== MCP_APP_MIME_TYPE) continue;
+    // Sizes are checked before decoding, so an oversized resource is
+    // refused without first being copied: a string's UTF-8 form is at least
+    // its length, and base64 decodes to three quarters of its own.
     const html =
       typeof content.text === "string"
-        ? content.text
+        ? content.text.length > MCP_APP_MAX_HTML_BYTES
+          ? null
+          : content.text
         : typeof content.blob === "string"
-          ? Buffer.from(content.blob, "base64").toString("utf8")
+          ? content.blob.length > Math.ceil(MCP_APP_MAX_HTML_BYTES / 3) * 4
+            ? null
+            : Buffer.from(content.blob, "base64").toString("utf8")
           : undefined;
+    if (html === null) return { html: null, meta: undefined };
     if (html === undefined || html.trim() === "") continue;
     const meta = Predicate.isObject(content._meta) ? content._meta.ui : undefined;
     return { html, meta };
@@ -61,7 +69,7 @@ export const snapshotMcpApp = Effect.fn("McpAppSnapshot.snapshot")(function* (in
   if (!input.resourceUri.startsWith(MCP_APP_RESOURCE_SCHEME)) return undefined;
   const document = readMcpAppDocument(input.contents, input.resourceUri);
   if (document === undefined) return undefined;
-  if (encoder.encode(document.html).byteLength > MCP_APP_MAX_HTML_BYTES) {
+  if (document.html === null || encoder.encode(document.html).byteLength > MCP_APP_MAX_HTML_BYTES) {
     yield* Effect.logWarning("MCP app document exceeds the size limit.", {
       server: input.server,
       resourceUri: input.resourceUri,
@@ -78,10 +86,11 @@ export const snapshotMcpApp = Effect.fn("McpAppSnapshot.snapshot")(function* (in
           relativePath: `${attachmentId}.html`,
         });
   if (attachmentId === null || filePath === null) return undefined;
+  const html = document.html;
   const ui = Predicate.isObject(document.meta) ? document.meta : {};
   const csp = readMcpAppCsp(ui.csp);
   const fileSystem = yield* FileSystem.FileSystem;
-  yield* fileSystem.writeFileString(filePath, injectMcpAppCsp(document.html, csp));
+  yield* fileSystem.writeFileString(filePath, injectMcpAppCsp(html, csp));
   const permissions = readMcpAppPermissions(ui.permissions);
   return {
     attachmentId,

@@ -15,6 +15,7 @@ import {
   mcpAppFileName,
   type McpAppReference,
 } from "@t3tools/shared/mcpApp";
+import * as Predicate from "effect/Predicate";
 import Constants from "expo-constants";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Platform, View } from "react-native";
@@ -45,15 +46,24 @@ export function mcpAppRowHeight() {
 // `event.source` of host replies are a real window, which the MCP Apps SDK
 // requires. The outer page only relays: app → React Native, and host
 // replies (injected as `__t3McpAppReceive(...)`) → app.
-function outerDocument(src: string, allow: string) {
+//
+// Android exposes `ReactNativeWebView` to every frame, so a frame nested in
+// the app could post to React Native directly. The outer page therefore wraps
+// what it relays with a secret only it holds, and React Native drops anything
+// else. The bridge belongs to the captured document: once the app frame loads
+// a second time (it navigated itself), the outer page stops relaying and says
+// so, rather than handing a document T3 never served the bridge.
+function outerDocument(src: string, allow: string, secret: string) {
   const attribute = (value: string) =>
     value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
 <style>html,body{margin:0;height:100%;background:transparent}iframe{border:0;display:block;width:100%;height:100%}</style></head>
 <body><iframe id="app" sandbox="allow-scripts allow-forms" allow="${attribute(allow)}" src="${attribute(src)}"></iframe>
-<script>(function(){var frame=document.getElementById("app");
-window.addEventListener("message",function(e){if(e.source===frame.contentWindow)window.ReactNativeWebView.postMessage(JSON.stringify(e.data));});
-window.__t3McpAppReceive=function(m){frame.contentWindow&&frame.contentWindow.postMessage(m,"*");};})();</script></body></html>`;
+<script>(function(){var frame=document.getElementById("app"),secret=${JSON.stringify(secret)},loads=0,live=true;
+var send=function(m){window.ReactNativeWebView.postMessage(JSON.stringify({secret:secret,message:m}));};
+frame.addEventListener("load",function(){loads+=1;if(loads>1&&live){live=false;send({t3:"navigated"});}});
+window.addEventListener("message",function(e){if(live&&e.source===frame.contentWindow)send(e.data);});
+window.__t3McpAppReceive=function(m){live&&frame.contentWindow&&frame.contentWindow.postMessage(m,"*");};})();</script></body></html>`;
 }
 
 const commandFailure = (result: {
@@ -76,7 +86,10 @@ const confirm = (title: string, message: string, action: string) =>
 /** A captured MCP App in the thread feed, hosted in a WebView over the MCP Apps bridge. */
 export function ThreadMcpApp(props: {
   readonly environmentId: EnvironmentId;
+  /** The thread that produced the app, which its requests run against. */
   readonly threadId: ThreadId;
+  /** The thread on screen, which approved app messages are sent to. */
+  readonly conversationThreadId: ThreadId;
   readonly itemId: TurnItemId;
   readonly revision: string;
   readonly app: McpAppReference;
@@ -111,6 +124,9 @@ export function ThreadMcpApp(props: {
   const [uri, setUri] = useState<string | null>(null);
   if (uri === null && asset._tag === "Success") setUri(asset.url);
   const [loaded, setLoaded] = useState(false);
+  const [navigatedAway, setNavigatedAway] = useState(false);
+  // Minted per view, so only this view's outer page can speak for its app.
+  const [secret] = useState(uuidv4);
 
   // The feed omits tool input and output; the app needs both.
   const detail = useEnvironmentQuery(
@@ -208,7 +224,7 @@ export function ThreadMcpApp(props: {
         // connection; the thread's own settings fill in when it sends.
         await enqueueThreadOutboxMessage({
           environmentId: latest.current.props.environmentId,
-          threadId: latest.current.props.threadId,
+          threadId: latest.current.props.conversationThreadId,
           messageId: MessageId.make(uuidv4()),
           commandId: CommandId.make(uuidv4()),
           text,
@@ -241,13 +257,21 @@ export function ThreadMcpApp(props: {
 
   const source = useMemo(
     () =>
-      uri === null ? null : { html: outerDocument(uri, mcpAppAllowAttribute(app.permissions)) },
-    [uri, app.permissions],
+      uri === null
+        ? null
+        : { html: outerDocument(uri, mcpAppAllowAttribute(app.permissions), secret) },
+    [uri, app.permissions, secret],
   );
 
   return (
     <View style={{ height: MCP_APP_ROW_HEIGHT, marginBottom: ROW_BOTTOM_MARGIN }}>
-      {uri !== null ? (
+      {navigatedAway ? (
+        <View className="flex-1 items-center justify-center">
+          <Text className="text-sm text-foreground-muted">
+            The {app.server} app left its page and was stopped
+          </Text>
+        </View>
+      ) : uri !== null ? (
         <WebView<object>
           ref={webView}
           source={source!}
@@ -262,11 +286,20 @@ export function ThreadMcpApp(props: {
           setSupportMultipleWindows={false}
           onLoadEnd={() => setLoaded(true)}
           onMessage={(event: WebViewMessageEvent) => {
+            let envelope: unknown;
             try {
-              hostRef.current?.receive(JSON.parse(event.nativeEvent.data));
+              envelope = JSON.parse(event.nativeEvent.data);
             } catch {
-              // Not JSON: not a bridge message.
+              return; // Not JSON: not a bridge message.
             }
+            if (!Predicate.isObject(envelope) || envelope.secret !== secret) return;
+            const message = envelope.message;
+            if (Predicate.isObject(message) && message.t3 === "navigated") {
+              hostRef.current?.dispose();
+              setNavigatedAway(true);
+              return;
+            }
+            hostRef.current?.receive(message);
           }}
         />
       ) : asset._tag === "Failure" ? (
