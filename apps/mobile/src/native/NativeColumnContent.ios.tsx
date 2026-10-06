@@ -19,7 +19,7 @@ export function NativeColumnContent(props: {
           <View style={{ flex: 1 }}>
             <NativeLayoutObserver onChange={setMetrics} />
             <NativeColumnLayoutMetricsContext value={metrics}>
-              <HeaderHeightContext value={metrics?.safeArea.top || undefined}>
+              <HeaderHeightContext value={metrics?.safeArea.top ?? undefined}>
                 {props.children}
               </HeaderHeightContext>
             </NativeColumnLayoutMetricsContext>
