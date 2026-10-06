@@ -245,11 +245,12 @@ function HomeScrollView(props: ComponentProps<typeof ScrollView>) {
         {...props}
         // UIKit's scroll-edge material needs the scroll view's own surface color.
         className={cn(props.className, primaryColumn ? "bg-drawer" : "bg-screen")}
-        // v5 sits inside a presentation stack. Automatic scroll insets can
-        // disappear after scrolling; use the owning column's native safe area.
+        // Use the column's measured inset so UIKit recognizes the resting top.
+        // Padding visually clears the bar but leaves the native scroll offset
+        // past its edge, activating scroll-edge protection before any scroll.
         automaticallyAdjustContentInsets={false}
         contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={[props.contentContainerStyle, { paddingTop: insets.top }]}
+        contentOffset={props.contentOffset ?? { x: 0, y: -insets.top }}
       />
     </ScrollViewMarker>
   );
@@ -1059,7 +1060,9 @@ export function HomeScreen(props: HomeScreenProps) {
             ListEmptyComponent={v2ListEmpty}
             style={{ flex: 1 }}
             automaticallyAdjustsScrollIndicatorInsets={Platform.OS === "ios"}
-            contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+            contentInsetAdjustmentBehavior="never"
+            contentInset={Platform.OS === "ios" ? { top: insets.top } : undefined}
+            contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
             showsVerticalScrollIndicator={false}
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
