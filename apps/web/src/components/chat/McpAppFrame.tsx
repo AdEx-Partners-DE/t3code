@@ -111,8 +111,10 @@ export function McpAppFrame(props: {
   });
   const hostRef = useRef<McpAppHost | null>(null);
   // The bridge belongs to the captured document. A frame that navigates keeps
-  // its window, so a second load stops the app rather than handing a document
-  // T3 never served (and its policy never covered) the bridge.
+  // its window, so a second load stops the app rather than letting a page T3
+  // never served pose as it. This is not a confidentiality boundary: a frame
+  // can always navigate itself, so the app could carry anything it read out
+  // in a URL either way.
   const loads = useRef(0);
   const onFrameLoad = () => {
     loads.current += 1;

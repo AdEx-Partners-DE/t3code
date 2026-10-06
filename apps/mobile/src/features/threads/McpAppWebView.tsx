@@ -9,12 +9,7 @@ import {
 } from "@t3tools/client-runtime/mcp-apps";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { CommandId, MessageId } from "@t3tools/contracts";
-import {
-  MCP_APP_MAX_HEIGHT,
-  mcpAppAllowAttribute,
-  mcpAppFileName,
-  type McpAppReference,
-} from "@t3tools/shared/mcpApp";
+import { mcpAppAllowAttribute, mcpAppFileName, type McpAppReference } from "@t3tools/shared/mcpApp";
 import * as Predicate from "effect/Predicate";
 import Constants from "expo-constants";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -52,7 +47,9 @@ export function mcpAppRowHeight() {
 // what it relays with a secret only it holds, and React Native drops anything
 // else. The bridge belongs to the captured document: once the app frame loads
 // a second time (it navigated itself), the outer page stops relaying and says
-// so, rather than handing a document T3 never served the bridge.
+// so, rather than letting a page T3 never served pose as the app. This is not
+// a confidentiality boundary: a frame can always navigate itself, so the app
+// could carry anything it read out in a URL either way.
 function outerDocument(src: string, allow: string, secret: string) {
   const attribute = (value: string) =>
     value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
@@ -169,7 +166,8 @@ export function ThreadMcpApp(props: {
       styles: { variables: mcpAppStyleVariables(latest.current.theme.variables) },
       displayMode: "inline",
       availableDisplayModes: ["inline"],
-      containerDimensions: { width: latest.current.props.width, maxHeight: MCP_APP_MAX_HEIGHT },
+      // The feed row is a fixed box, so the app is told its exact height.
+      containerDimensions: { width: latest.current.props.width, height: MCP_APP_ROW_HEIGHT },
       platform: "mobile",
     });
     const next = makeMcpAppHost({

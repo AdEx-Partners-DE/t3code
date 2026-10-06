@@ -20,7 +20,14 @@ export interface McpAppHostContext {
   readonly styles: { readonly variables: Readonly<Record<string, string>> };
   readonly displayMode: "inline";
   readonly availableDisplayModes: ReadonlyArray<"inline">;
-  readonly containerDimensions: { readonly width: number; readonly maxHeight: number };
+  /**
+   * `maxHeight` when the host sizes the frame to the app's reported height,
+   * `height` when the frame is a fixed box the app must fit (spec
+   * "Container Dimensions").
+   */
+  readonly containerDimensions:
+    | { readonly width: number; readonly maxHeight: number }
+    | { readonly width: number; readonly height: number };
   readonly platform: "web" | "desktop" | "mobile";
   readonly locale?: string;
   readonly timeZone?: string;
