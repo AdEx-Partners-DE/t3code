@@ -90,7 +90,11 @@ export const snapshotMcpApp = Effect.fn("McpAppSnapshot.snapshot")(function* (in
   const ui = Predicate.isObject(document.meta) ? document.meta : {};
   const csp = readMcpAppCsp(ui.csp);
   const fileSystem = yield* FileSystem.FileSystem;
-  yield* fileSystem.writeFileString(filePath, injectMcpAppCsp(html, csp));
+  // Only the returned reference lets thread deletion find the document, so a
+  // write that fails or is interrupted removes it.
+  yield* fileSystem
+    .writeFileString(filePath, injectMcpAppCsp(html, csp))
+    .pipe(Effect.onError(() => fileSystem.remove(filePath, { force: true }).pipe(Effect.ignore)));
   const permissions = readMcpAppPermissions(ui.permissions);
   return {
     attachmentId,

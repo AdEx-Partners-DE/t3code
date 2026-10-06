@@ -81,7 +81,9 @@ export class McpAppRequestError extends Schema.TaggedError<McpAppRequestError>()
       case "provider-unsupported":
         return "This thread's provider cannot run MCP app requests.";
       case "session-stopped":
-        return "Send a message in this thread to use the app again.";
+        // A forked thread shows its source's apps, so this names the thread
+        // that made the app rather than the one on screen.
+        return "The app's thread is not running. Send a message in the thread that created it to use the app again.";
       case "tool-not-callable":
         return "This app cannot call that tool.";
       case "request-failed":

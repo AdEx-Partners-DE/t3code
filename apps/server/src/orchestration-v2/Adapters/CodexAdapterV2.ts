@@ -82,7 +82,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachmentStore.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -3593,64 +3593,86 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           item: Extract<CodexDynamicToolItem, { readonly type: "mcpToolCall" }>,
           resourceUri: string,
         ) =>
-          Effect.gen(function* () {
-            const reference =
-              item.status === "completed" && item.result != null && item.error == null
-                ? yield* getNativeThreadId(context.providerThread).pipe(
-                    Effect.flatMap((threadId) =>
-                      client.request("mcpServer/resource/read", {
-                        threadId,
-                        server: item.server,
-                        uri: resourceUri,
-                      }),
-                    ),
-                    Effect.timeout(MCP_APP_CAPTURE_TIMEOUT),
-                    Effect.flatMap((response) =>
-                      snapshotMcpApp({
-                        attachmentsDir: serverConfig.attachmentsDir,
-                        threadId: context.projectionThreadId,
-                        server: item.server,
-                        tool: item.tool,
-                        resourceUri,
-                        contents: response.contents,
-                      }),
-                    ),
-                    Effect.provideService(FileSystem.FileSystem, fileSystem),
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("Failed to capture an MCP app; showing a plain tool row.", {
-                        server: item.server,
-                        tool: item.tool,
-                        resourceUri,
-                        cause,
-                      }).pipe(Effect.as(undefined)),
-                    ),
-                  )
-                : undefined;
-            const artifacts = yield* buildDynamicToolArtifacts(context, item);
-            // Cleared before the final emit: ingestion re-checks pending work
-            // after each event, and must see this capture done by then. A turn
-            // that already ended badly took the capture and settled its item.
-            if (!(yield* takePendingMcpAppCapture(nativeTurnId, item.id))) return;
-            const turnItem =
-              reference === undefined || artifacts.turnItem.type !== "dynamic_tool"
-                ? artifacts.turnItem
-                : {
-                    ...artifacts.turnItem,
-                    // The full CallToolResult the app replays, beside the app.
-                    output: { [MCP_APP_OUTPUT_KEY]: reference, result: item.result },
-                  };
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver: CODEX_PROVIDER,
-              node: artifacts.node,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem,
-            });
-            yield* releaseSettledTurnIfIdle(nativeTurnId);
-          });
+          // Only the read can be cancelled. Once a document is stored, the
+          // capture either lands it on the item or, when its turn already
+          // settled the item, removes it, so no stored app goes unreferenced.
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const reference =
+                item.status === "completed" && item.result != null && item.error == null
+                  ? yield* restore(
+                      getNativeThreadId(context.providerThread).pipe(
+                        Effect.flatMap((threadId) =>
+                          client.request("mcpServer/resource/read", {
+                            threadId,
+                            server: item.server,
+                            uri: resourceUri,
+                          }),
+                        ),
+                        Effect.timeout(MCP_APP_CAPTURE_TIMEOUT),
+                      ),
+                    ).pipe(
+                      Effect.flatMap((response) =>
+                        snapshotMcpApp({
+                          attachmentsDir: serverConfig.attachmentsDir,
+                          threadId: context.projectionThreadId,
+                          server: item.server,
+                          tool: item.tool,
+                          resourceUri,
+                          contents: response.contents,
+                        }),
+                      ),
+                      Effect.provideService(FileSystem.FileSystem, fileSystem),
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning(
+                          "Failed to capture an MCP app; showing a plain tool row.",
+                          {
+                            server: item.server,
+                            tool: item.tool,
+                            resourceUri,
+                            cause,
+                          },
+                        ).pipe(Effect.as(undefined)),
+                      ),
+                    )
+                  : undefined;
+              const artifacts = yield* buildDynamicToolArtifacts(context, item);
+              // Cleared before the final emit: ingestion re-checks pending work
+              // after each event, and must see this capture done by then. A turn
+              // that already ended badly took the capture and settled its item.
+              if (!(yield* takePendingMcpAppCapture(nativeTurnId, item.id))) {
+                if (reference !== undefined) {
+                  const filePath = resolveAttachmentPathById({
+                    attachmentsDir: serverConfig.attachmentsDir,
+                    attachmentId: reference.attachmentId,
+                  });
+                  if (filePath !== null) {
+                    yield* fileSystem.remove(filePath, { force: true }).pipe(Effect.ignore);
+                  }
+                }
+                return;
+              }
+              const turnItem =
+                reference === undefined || artifacts.turnItem.type !== "dynamic_tool"
+                  ? artifacts.turnItem
+                  : {
+                      ...artifacts.turnItem,
+                      // The full CallToolResult the app replays, beside the app.
+                      output: { [MCP_APP_OUTPUT_KEY]: reference, result: item.result },
+                    };
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem,
+              });
+              yield* releaseSettledTurnIfIdle(nativeTurnId);
+            }),
+          );
 
         /**
          * Settles the items of app captures still running when their turn is

@@ -212,6 +212,11 @@ export function ThreadMcpApp(props: {
         return result.value;
       },
       openLink: async (url) => {
+        // A WebView cannot tell whether the reader just tapped the app, so it
+        // asks, rather than letting an app leave T3 on a timer.
+        if (!(await confirm(`Open a link from ${app.server}?`, url, "Open"))) {
+          throw new McpAppHostRefusal("Declined by the user.");
+        }
         if (!(await tryOpenExternalUrl(url, "mcp-app"))) {
           throw new McpAppHostRefusal("The link could not be opened.");
         }
