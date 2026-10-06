@@ -309,11 +309,15 @@ export function ThreadMcpApp(props: {
           style={{ flex: 1, backgroundColor: "transparent" }}
           nestedScrollEnabled
           originWhitelist={["*"]}
-          // Only the outer page loads at the top; the app opens links through the bridge.
-          // Android reports every navigation as top-frame, including the
-          // outer page's iframe, so the app document is allowed by URL too.
+          // Only the outer page loads at the top; the app opens links through
+          // the bridge. Android reports every navigation as top-frame, frames
+          // the app nests included, so it has no gate to apply: there the
+          // outer page never navigates, and the app frame's sandbox already
+          // forbids top navigation and popups.
           onShouldStartLoadWithRequest={(request) =>
-            request.isTopFrame === false || request.url === "about:blank" || request.url === uri
+            Platform.OS === "android" ||
+            request.isTopFrame === false ||
+            request.url === "about:blank"
           }
           setSupportMultipleWindows={false}
           onLoadEnd={() => setLoaded(true)}
