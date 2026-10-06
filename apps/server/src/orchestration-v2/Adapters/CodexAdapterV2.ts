@@ -65,6 +65,7 @@ import type {
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -3593,9 +3594,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           item: Extract<CodexDynamicToolItem, { readonly type: "mcpToolCall" }>,
           resourceUri: string,
         ) =>
-          // Only the read can be cancelled. Once a document is stored, the
-          // capture either lands it on the item or, when its turn already
-          // settled the item, removes it, so no stored app goes unreferenced.
+          // Only reading and storing the document can be cancelled; a write
+          // cut short removes its file. Once a document is stored, the capture
+          // either lands it on the item or, when its turn already settled the
+          // item, removes it, so no stored app goes unreferenced.
           Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               const reference =
@@ -3610,29 +3612,30 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                           }),
                         ),
                         Effect.timeout(MCP_APP_CAPTURE_TIMEOUT),
-                      ),
-                    ).pipe(
-                      Effect.flatMap((response) =>
-                        snapshotMcpApp({
-                          attachmentsDir: serverConfig.attachmentsDir,
-                          threadId: context.projectionThreadId,
-                          server: item.server,
-                          tool: item.tool,
-                          resourceUri,
-                          contents: response.contents,
-                        }),
-                      ),
-                      Effect.provideService(FileSystem.FileSystem, fileSystem),
-                      Effect.catchCause((cause) =>
-                        Effect.logWarning(
-                          "Failed to capture an MCP app; showing a plain tool row.",
-                          {
+                        Effect.flatMap((response) =>
+                          snapshotMcpApp({
+                            attachmentsDir: serverConfig.attachmentsDir,
+                            threadId: context.projectionThreadId,
                             server: item.server,
                             tool: item.tool,
                             resourceUri,
-                            cause,
-                          },
-                        ).pipe(Effect.as(undefined)),
+                            contents: response.contents,
+                          }),
+                        ),
+                        Effect.provideService(FileSystem.FileSystem, fileSystem),
+                        // Every failure and defect becomes a plain tool row,
+                        // so a crashed read never holds the turn open; only
+                        // interruption, the turn cancelling the capture, ends
+                        // the fiber here. Nothing typed is left for orDie.
+                        Effect.catchCauseIf(
+                          (cause) => !Cause.hasInterruptsOnly(cause),
+                          (cause) =>
+                            Effect.logWarning(
+                              "Failed to capture an MCP app; showing a plain tool row.",
+                              { server: item.server, tool: item.tool, resourceUri, cause },
+                            ).pipe(Effect.as(undefined)),
+                        ),
+                        Effect.orDie,
                       ),
                     )
                   : undefined;
@@ -3670,7 +3673,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 driver: CODEX_PROVIDER,
                 turnItem,
               });
-              yield* releaseSettledTurnIfIdle(nativeTurnId);
+              // Only a turn that already ended is released; an active one
+              // still needs its final-answer bookkeeping.
+              if ((yield* Ref.get(settledTurns)).has(nativeTurnId)) {
+                yield* releaseSettledTurnIfIdle(nativeTurnId);
+              }
             }),
           );
 

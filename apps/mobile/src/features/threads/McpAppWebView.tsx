@@ -122,6 +122,19 @@ export function ThreadMcpApp(props: {
   if (uri === null && asset._tag === "Success") setUri(asset.url);
   const [loaded, setLoaded] = useState(false);
   const [navigatedAway, setNavigatedAway] = useState(false);
+  // Bumped when the OS reclaims the web process: a fresh view, document and
+  // host, so the reloaded app is initialized and replayed again. Once only, so
+  // an app that keeps crashing its process is not reloaded forever.
+  const [generation, setGeneration] = useState(0);
+  const [crashed, setCrashed] = useState(false);
+  const restart = () => {
+    if (generation > 0) {
+      setCrashed(true);
+      return;
+    }
+    setLoaded(false);
+    setGeneration(1);
+  };
   // Minted per view, so only this view's outer page can speak for its app.
   const [secret] = useState(uuidv4);
 
@@ -245,7 +258,8 @@ export function ThreadMcpApp(props: {
       next.dispose();
       hostRef.current = null;
     };
-  }, [uri, app]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A restarted view needs a new host.
+  }, [uri, app, generation]);
 
   // The host reads the context through `latest`; these only say when to resend.
   useEffect(() => {
@@ -256,7 +270,7 @@ export function ThreadMcpApp(props: {
   useEffect(() => {
     if (toolCall !== undefined) hostRef.current?.setToolCall(toolCall);
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Each new document needs the call.
-  }, [toolCall, uri]);
+  }, [toolCall, uri, generation]);
 
   const source = useMemo(
     () =>
@@ -274,9 +288,12 @@ export function ThreadMcpApp(props: {
             The {app.server} app left its page and was stopped
           </Text>
         </View>
-      ) : uri !== null ? (
+      ) : uri !== null && !crashed ? (
         <WebView<object>
+          key={generation}
           ref={webView}
+          onContentProcessDidTerminate={restart}
+          onRenderProcessGone={restart}
           source={source!}
           accessibilityLabel={`${app.server} app`}
           style={{ flex: 1, backgroundColor: "transparent" }}
@@ -305,7 +322,7 @@ export function ThreadMcpApp(props: {
             hostRef.current?.receive(message);
           }}
         />
-      ) : asset._tag === "Failure" ? (
+      ) : asset._tag === "Failure" || crashed ? (
         <View className="flex-1 items-center justify-center">
           <Text className="text-sm text-foreground-muted">Unable to load the {app.server} app</Text>
         </View>
