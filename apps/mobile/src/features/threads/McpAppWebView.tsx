@@ -133,6 +133,9 @@ export function ThreadMcpApp(props: {
       return;
     }
     setLoaded(false);
+    // The first URL's token may have expired by now; the asset query keeps
+    // a refreshed one, which this new view can load.
+    if (asset._tag === "Success") setUri(asset.url);
     setGeneration(1);
   };
   // Minted per view, so only this view's outer page can speak for its app.
