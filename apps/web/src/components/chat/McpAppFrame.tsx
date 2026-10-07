@@ -347,6 +347,10 @@ export function McpAppFrame(props: {
         if (result._tag !== "Success") throw commandFailure(result);
       },
       requestDisplayMode: async (mode) => {
+        // Full screen would cover the approval or question the agent waits on.
+        if (mode === "fullscreen" && latest.current.props.awaitingUser === true) {
+          return latest.current.displayMode;
+        }
         setDisplayMode(mode);
         return mode;
       },

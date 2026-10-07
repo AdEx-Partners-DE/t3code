@@ -3,14 +3,15 @@ import { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import { mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { orchestrationEnvironment } from "../../state/orchestration";
-import { useThreadShells } from "../../state/entities";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useThreadShell, useThreadShells } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { ThreadMcpApp } from "./McpAppWebView";
 
@@ -52,6 +53,8 @@ function descendsFrom(
   const parents = new Map(
     shells
       .filter((shell) => shell.environmentId === environmentId)
+      // Only forks continue a conversation; a subagent is its own.
+      .filter((shell) => shell.lineage.relationshipToParent === "fork")
       .map((shell) => [shell.id as string, shell.lineage.parentThreadId]),
   );
   let current: string | null | undefined = threadId;
@@ -93,12 +96,19 @@ export function McpAppFullscreenScreen({ route }: McpAppFullscreenScreenProps) {
     }),
   );
   const item = detail.data?.item;
-  // One reference per stored item: a new object each render would rebuild the
-  // app's host on every layout change, such as rotating the device.
-  const app = useMemo(
-    () => (item?.type === "dynamic_tool" ? mcpAppFromToolItem(item) : undefined),
-    [item],
-  );
+  // One reference per app: the item is a new object on every refetch (a
+  // reconnect, for one), and a new reference would rebuild the app's host.
+  const derived = item?.type === "dynamic_tool" ? mcpAppFromToolItem(item) : undefined;
+  const [app, setApp] = useState(derived);
+  if (derived?.attachmentId !== app?.attachmentId) setApp(derived);
+  // The approval or question the agent waits on renders on the thread this
+  // modal covers, so the app steps aside for it.
+  const conversation = useThreadShell(scopeThreadRef(environmentId, conversationThreadId));
+  const awaitingUser =
+    conversation?.hasPendingApprovals === true || conversation?.hasPendingUserInput === true;
+  useEffect(() => {
+    if (awaitingUser) navigation.goBack();
+  }, [awaitingUser, navigation]);
 
   return (
     <View className="flex-1 bg-background" style={{ paddingTop: insets.top }}>

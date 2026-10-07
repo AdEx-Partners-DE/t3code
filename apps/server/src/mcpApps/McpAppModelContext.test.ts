@@ -50,13 +50,15 @@ layer("McpAppModelContext", (it) => {
       yield* set(threadId, "item-kept", "kept");
       yield* set(threadId, "item-rolled-back", "from a rolled-back run");
       yield* set(threadId, "item-deleted", "from an item that is gone");
-      // A fork showing the source thread's app keeps its own context.
+      // A fork showing the source thread's app keeps its own context, even
+      // after the source rolls that app's run back.
       yield* set(forkId, "item-kept", "from the fork");
+      yield* set(forkId, "item-rolled-back", "inherited before the rollback");
 
       const texts = (thread: ThreadId) =>
         store.forThread(thread).pipe(Effect.map((entries) => entries.map((entry) => entry.text)));
       assert.deepEqual(yield* texts(threadId), ["kept"]);
-      assert.deepEqual(yield* texts(forkId), ["from the fork"]);
+      assert.deepEqual(yield* texts(forkId), ["from the fork", "inherited before the rollback"]);
 
       // Clearing removes the app's context.
       yield* set(threadId, "item-kept", "");

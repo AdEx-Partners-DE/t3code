@@ -73,9 +73,10 @@ export const layer = Layer.effect(
 
     const forThread = Effect.fn("McpAppModelContext.forThread")(function* (threadId: ThreadId) {
       // Only apps still in the thread's history count: an app whose item is
-      // gone, or whose run was rolled back, stops informing the agent. The
-      // item can live in a thread this one was forked from, so it is matched
-      // by id alone.
+      // gone, or whose run this thread rolled back, stops informing the agent.
+      // The item can live in a thread this one was forked from, so it is
+      // matched by id alone; that thread rolling the run back later leaves the
+      // fork's copy in place.
       return yield* sql<McpAppModelContextEntry>`
         SELECT context.item_id AS "itemId", context.server, context.tool, context.text
         FROM mcp_app_model_context AS context
@@ -84,7 +85,11 @@ export const layer = Layer.effect(
         LEFT JOIN orchestration_v2_projection_runs AS run
           ON run.run_id = item.run_id
         WHERE context.thread_id = ${threadId}
-          AND (run.status IS NULL OR run.status <> 'rolled_back')
+          AND (
+            run.status IS NULL
+            OR run.status <> 'rolled_back'
+            OR run.thread_id <> context.thread_id
+          )
         ORDER BY context.updated_at, context.item_id
       `.pipe(Effect.mapError(fail));
     });
