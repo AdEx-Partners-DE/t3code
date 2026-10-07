@@ -78,7 +78,6 @@ export function ThreadFileNavigatorPane(props: {
           sharesBackground: false,
           tintColor: foregroundColor,
           type: "button" as const,
-          width: 44,
         },
       ] as ComponentProps<typeof ScreenStackHeaderConfig>["headerRightBarButtonItems"],
     [foregroundColor, toggleAuxiliaryPane],
