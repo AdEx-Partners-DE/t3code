@@ -890,6 +890,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "linked-environments",
+    localEnvironmentOnly: true,
+    title: "Linked environments",
+    to: "/settings/connections",
+    targetId: "linked-environments",
+    searchTerms: ["link peer another machine vps agents work there handoff pairing code"],
+  },
+  {
     id: "remote-environments",
     title: "Environments",
     to: "/settings/connections",

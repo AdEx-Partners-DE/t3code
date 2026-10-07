@@ -248,6 +248,24 @@ itself. Agents refuse to sign in through a plain `http://` LAN or tailnet
 address. The agent appears under **Settings → Connections** like any other
 client; revoke it there. Sign-ins last 30 days.
 
+## Link another environment
+
+Link two machines, such as your laptop and a VPS, and agents on one can launch,
+message, wait on and stop threads on the other. On the machine you will work
+from, open **Settings → Connections → Linked environments**, choose **Link**,
+and enter the other machine's address and a pairing code from it. From a
+terminal, use `t3 environment link <address> --pairing-code <code> --access <mode>`.
+
+- The access you pick is the most agents from this machine may do there. An
+  agent also never gets more there than its own mode here.
+- Threads a link starts are marked **From <machine>** there. They can change
+  only other threads the same link started, not that machine's own threads,
+  projects or settings, and they skip its project setup scripts.
+- The link shows up in that machine's **Settings → Connections** like any
+  outside agent. Revoke it there to end it. **Forget** on this machine only
+  removes it here.
+- Links last 30 days. Link again with a new pairing code to renew one.
+
 ## Manage or revoke access
 
 On the host, **Settings → Connections** lets authorized administrators create
