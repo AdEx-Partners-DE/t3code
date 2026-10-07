@@ -22,6 +22,7 @@ import {
   SourceControlCloneRepositoryResult,
 } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as ServerConfig from "../../../config.ts";
 import * as ThreadImportService from "../../../orchestration-v2/ThreadImportService.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
@@ -34,7 +35,9 @@ import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.t
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
+import * as Settings from "../../../serverSettings.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
+import * as VcsProcess from "../../../vcs/VcsProcess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const shared = {
@@ -176,6 +179,10 @@ const ThreadImportTool = Tool.make("t3_thread_import", {
     ThreadImportService.ThreadImportService,
     GitVcsDriver.GitVcsDriver,
     FileSystem.FileSystem,
+    Path.Path,
+    ServerConfig.ServerConfig,
+    Settings.ServerSettingsService,
+    VcsProcess.VcsProcess,
   ],
 })
   .annotate(Tool.Destructive, true)

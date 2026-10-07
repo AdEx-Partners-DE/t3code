@@ -68,6 +68,10 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.peerLinksList]: AuthAccessReadScope,
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
+  // Moving a thread drives the linked environment through this one's link.
+  [WS_METHODS.threadHandoffOptions]: AuthOrchestrationReadScope,
+  [WS_METHODS.threadHandoffStart]: AuthOrchestrationOperateScope,
+  [WS_METHODS.threadHandoffCancel]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpdateSettings]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverSearchAcpRegistry]: AuthOrchestrationReadScope,
   [WS_METHODS.serverPrepareAcpRegistryAgent]: AuthOrchestrationOperateScope,
