@@ -75,10 +75,14 @@ export function McpAppFullscreenScreen({ route }: McpAppFullscreenScreenProps) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   // A plain goBack pops whatever is on top, so it only runs while this modal
-  // is: an exit that lands late (after a teardown wait) must not pop the thread.
+  // is: an exit that lands while another screen covers it (after a teardown
+  // wait) waits for the modal to be on top again, rather than popping that
+  // screen or being lost.
   const focused = useIsFocused();
+  const [exitRequested, setExitRequested] = useState(false);
   const onClose = useCallback(() => {
     if (navigation.isFocused()) navigation.goBack();
+    else setExitRequested(true);
   }, [navigation]);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const params = route.params;
@@ -112,8 +116,8 @@ export function McpAppFullscreenScreen({ route }: McpAppFullscreenScreenProps) {
   const awaitingUser =
     conversation?.hasPendingApprovals === true || conversation?.hasPendingUserInput === true;
   useEffect(() => {
-    if (awaitingUser && focused) onClose();
-  }, [awaitingUser, focused, onClose]);
+    if ((awaitingUser || exitRequested) && focused) navigation.goBack();
+  }, [awaitingUser, exitRequested, focused, navigation]);
 
   return (
     <View className="flex-1 bg-background" style={{ paddingTop: insets.top }}>

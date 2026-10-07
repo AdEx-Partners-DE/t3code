@@ -390,15 +390,22 @@ export function ThreadMcpApp(props: {
       },
       requestDisplayMode: async (mode) => {
         const current = latest.current.props;
-        if (mode === "fullscreen" && latest.current.awaitingUser)
+        // Full screen would cover the approval or question the agent waits
+        // on, or a screen the user moved to.
+        if (
+          mode === "fullscreen" &&
+          (latest.current.awaitingUser || !latest.current.navigation.isFocused())
+        ) {
           return current.displayMode ?? "inline";
+        }
         if (mode === "fullscreen" && current.displayMode !== "fullscreen") {
           // The inline view is torn down by the switch (this row unmounts
           // while the modal covers it); the modal opens a fresh view.
           // The inline view steps aside for the modal; it gets its teardown first.
           await hostRef.current?.teardown();
-          // The wait may have let an approval arrive; the view reloads inline.
-          if (latest.current.awaitingUser) {
+          // The wait may have let an approval arrive, or the user moved to
+          // another screen; either way the view reloads inline.
+          if (latest.current.awaitingUser || !latest.current.navigation.isFocused()) {
             openNewDocument.current((value) => value + 1);
             return "inline";
           }
