@@ -1,6 +1,7 @@
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
+import * as PeerLinks from "./peer/PeerLinks.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1278,6 +1279,7 @@ const layerWsRpc = (
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const peerLinks = yield* PeerLinks.PeerLinks;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -2565,6 +2567,22 @@ const layerWsRpc = (
             }),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.peerLinksList]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.peerLinksList,
+            peerLinks.list.pipe(Effect.map((links) => ({ links }))),
+            { "rpc.aggregate": "peerLinks" },
+          ),
+        [WS_METHODS.peerLinksLink]: (input) =>
+          observeRpcEffect(WS_METHODS.peerLinksLink, peerLinks.link(input), {
+            "rpc.aggregate": "peerLinks",
+          }),
+        [WS_METHODS.peerLinksUnlink]: ({ environmentId }) =>
+          observeRpcEffect(
+            WS_METHODS.peerLinksUnlink,
+            peerLinks.unlink(environmentId).pipe(Effect.map((removed) => ({ removed }))),
+            { "rpc.aggregate": "peerLinks" },
+          ),
         [WS_METHODS.serverGetSettings]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverGetSettings,
@@ -3802,6 +3820,7 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const peerLinks = yield* PeerLinks.PeerLinks;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3866,6 +3885,7 @@ export const layer = Layer.unwrap(
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              Layer.provide(Layer.succeed(PeerLinks.PeerLinks, peerLinks)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

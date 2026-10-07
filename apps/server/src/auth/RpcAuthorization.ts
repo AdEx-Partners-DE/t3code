@@ -1,6 +1,7 @@
 import {
   type DeviceListInput,
   AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -64,6 +65,9 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverUpsertKeybinding]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverRemoveKeybinding]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
+  [WS_METHODS.peerLinksList]: AuthAccessReadScope,
+  [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
+  [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
   [WS_METHODS.serverUpdateSettings]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverSearchAcpRegistry]: AuthOrchestrationReadScope,
   [WS_METHODS.serverPrepareAcpRegistryAgent]: AuthOrchestrationOperateScope,
