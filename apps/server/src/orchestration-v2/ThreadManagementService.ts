@@ -88,6 +88,8 @@ export function existingThreadIdsForCommand(
     case "delegated_task.wake-policy":
     case "delegated_task.completion-delivery.acknowledge":
     case "delegated_task.completion-delivery.dispose":
+    case "delegated_task.remote.request":
+    case "delegated_task.remote.complete":
       return [command.parentThreadId];
     case "thread.created.record":
       return command.parentThreadId === command.targetThreadId

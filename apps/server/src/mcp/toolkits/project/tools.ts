@@ -26,6 +26,7 @@ import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../../../project/RepositoryIdentityResolver.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
@@ -57,7 +58,11 @@ const ProjectListTool = Tool.make("t3_project_list", {
     projects: Schema.Array(Project),
     nextCursor: Schema.NullOr(NonNegativeInt),
   }),
-  dependencies: [...shared.dependencies, PeerForwarding.PeerForwarding],
+  dependencies: [
+    ...shared.dependencies,
+    PeerForwarding.PeerForwarding,
+    RepositoryIdentityResolver.RepositoryIdentityResolver,
+  ],
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
