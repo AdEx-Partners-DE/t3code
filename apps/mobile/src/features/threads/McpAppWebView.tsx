@@ -128,10 +128,10 @@ export function ThreadMcpApp(props: {
   // (and is torn down) while it is open, and comes back when the thread is
   // shown again.
   const [presentedFullscreen, setPresentedFullscreen] = useState(false);
-  useEffect(() => {
-    if (!presentedFullscreen) return;
-    return navigation.addListener("focus", () => setPresentedFullscreen(false));
-  }, [navigation, presentedFullscreen]);
+  // Counts the documents this row has shown on purpose (back from full screen,
+  // or reopened after closing); each gets its own view and host.
+  const [documentKey, setDocumentKeyState] = useState(0);
+
   const { themeId, themeAppearance, themeVariables, systemColorsActive } =
     useAppearancePreferences();
   const theme = useMemo(
@@ -179,6 +179,22 @@ export function ThreadMcpApp(props: {
   };
   // Minted per view, so only this view's outer page can speak for its app.
   const [secret] = useState(uuidv4);
+  // A new document starts loading and is not yet one that navigated away.
+  const setDocumentKey = (next: (value: number) => number) => {
+    setLoaded(false);
+    setNavigatedAway(false);
+    setDocumentKeyState(next);
+  };
+  // Back from full screen: the thread shows a fresh inline view of the app.
+  useEffect(() => {
+    if (!presentedFullscreen) return;
+    return navigation.addListener("focus", () => {
+      setLoaded(false);
+      setNavigatedAway(false);
+      setDocumentKeyState((value) => value + 1);
+      setPresentedFullscreen(false);
+    });
+  }, [navigation, presentedFullscreen]);
 
   // The feed omits tool input and output; the app needs both.
   const detail = useEnvironmentQuery(
@@ -349,7 +365,11 @@ export function ThreadMcpApp(props: {
         const { environmentId, input } = scope();
         const result = await latest.current.updateModelContext({
           environmentId,
-          input: { ...input, ...context },
+          input: {
+            ...input,
+            ...context,
+            conversationThreadId: latest.current.props.conversationThreadId,
+          },
         });
         if (result._tag !== "Success") throw commandFailure(result);
       },
@@ -358,6 +378,8 @@ export function ThreadMcpApp(props: {
         if (mode === "fullscreen" && current.displayMode !== "fullscreen") {
           // The inline view is torn down by the switch (this row unmounts
           // while the modal covers it); the modal opens a fresh view.
+          // The inline view steps aside for the modal; it gets its teardown first.
+          await hostRef.current?.teardown();
           setPresentedFullscreen(true);
           latest.current.navigation.navigate("ThreadMcpApp", {
             environmentId: String(current.environmentId),
@@ -415,7 +437,7 @@ export function ThreadMcpApp(props: {
         if (current.displayMode === "fullscreen") {
           void hostRef.current?.teardown().then(() => current.onExitFullscreen?.());
         } else {
-          setClosed(true);
+          void hostRef.current?.teardown().then(() => setClosed(true));
         }
       },
       // Both modes are fixed boxes, so the app's own height only decides
@@ -429,7 +451,7 @@ export function ThreadMcpApp(props: {
       hostRef.current = null;
     };
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A restarted view needs a new host.
-  }, [uri, app, generation]);
+  }, [uri, app, generation, documentKey]);
 
   // The host reads the context through `latest`; these only say when to resend.
   useEffect(() => {
@@ -440,7 +462,7 @@ export function ThreadMcpApp(props: {
   useEffect(() => {
     if (toolCall !== undefined) hostRef.current?.setToolCall(toolCall);
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Each new document needs the call.
-  }, [toolCall, uri, generation]);
+  }, [toolCall, uri, generation, documentKey]);
 
   const source = useMemo(
     () =>
@@ -470,7 +492,13 @@ export function ThreadMcpApp(props: {
         className="items-center justify-center gap-2 rounded-lg border border-border"
       >
         <Text className="text-sm text-foreground-muted">The {app.server} app was closed</Text>
-        <Pressable accessibilityRole="button" onPress={() => setClosed(false)}>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => {
+            setDocumentKey((value) => value + 1);
+            setClosed(false);
+          }}
+        >
           <Text className="text-sm text-foreground">Show app</Text>
         </Pressable>
       </View>
@@ -491,7 +519,7 @@ export function ThreadMcpApp(props: {
         </View>
       ) : uri !== null && !crashed ? (
         <WebView<object>
-          key={generation}
+          key={`${documentKey}:${generation}`}
           ref={webView}
           onContentProcessDidTerminate={restart}
           onRenderProcessGone={restart}

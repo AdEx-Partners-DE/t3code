@@ -6,8 +6,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
-/** Longest context one app may keep for the agent. */
-export const MCP_APP_MODEL_CONTEXT_MAX_CHARS = 16 * 1024;
+/** Largest context one app may keep for the agent, in UTF-8 bytes. */
+export const MCP_APP_MODEL_CONTEXT_MAX_BYTES = 16 * 1024;
 
 export class McpAppModelContextError extends Schema.TaggedError<McpAppModelContextError>()(
   "McpAppModelContextError",
@@ -72,11 +72,20 @@ export const layer = Layer.effect(
     });
 
     const forThread = Effect.fn("McpAppModelContext.forThread")(function* (threadId: ThreadId) {
+      // Only apps still in the thread's history count: an app whose item is
+      // gone, or whose run was rolled back, stops informing the agent. The
+      // item can live in a thread this one was forked from, so it is matched
+      // by id alone.
       return yield* sql<McpAppModelContextEntry>`
-        SELECT item_id AS "itemId", server, tool, text
-        FROM mcp_app_model_context
-        WHERE thread_id = ${threadId}
-        ORDER BY updated_at, item_id
+        SELECT context.item_id AS "itemId", context.server, context.tool, context.text
+        FROM mcp_app_model_context AS context
+        JOIN orchestration_v2_projection_turn_items AS item
+          ON item.turn_item_id = context.item_id
+        LEFT JOIN orchestration_v2_projection_runs AS run
+          ON run.run_id = item.run_id
+        WHERE context.thread_id = ${threadId}
+          AND (run.status IS NULL OR run.status <> 'rolled_back')
+        ORDER BY context.updated_at, context.item_id
       `.pipe(Effect.mapError(fail));
     });
 

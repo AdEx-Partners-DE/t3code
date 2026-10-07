@@ -7,6 +7,7 @@ import {
   type McpAppToolInfo,
   type McpAppToolInfoInput,
   type McpAppUpdateModelContextInput,
+  type OrchestrationV2AppThread,
   type ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
@@ -54,6 +55,7 @@ export class McpAppRequests extends Context.Service<
 >()("t3/mcpApps/McpAppRequests") {}
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const utf8 = new TextEncoder();
 
 const readOnlyHint = (tool: ProviderAdapterV2McpTool) =>
   Predicate.isObject(tool.annotations) && tool.annotations.readOnlyHint === true;
@@ -172,10 +174,32 @@ const make = Effect.gen(function* () {
   // Context is state for the agent's next turn, so it needs the app but not a
   // live session. Text blocks are kept as written and structured content as
   // JSON; other content kinds are not declared by the host.
+  /** Whether `threadId` is `ancestorId` or forked from it, however many forks deep. */
+  const descendsFrom = Effect.fn("McpAppRequests.descendsFrom")(function* (
+    threadId: ThreadId,
+    ancestorId: ThreadId,
+  ) {
+    let current: ThreadId | null = threadId;
+    for (let depth = 0; current !== null && depth < 64; depth++) {
+      if (current === ancestorId) return true;
+      const records: { readonly thread: OrchestrationV2AppThread } = yield* threadManagement
+        .getThreadRecords(current, [])
+        .pipe(Effect.mapError((cause) => fail(threadId, "request-failed", cause)));
+      const { lineage } = records.thread;
+      current = lineage.relationshipToParent === "fork" ? lineage.parentThreadId : null;
+    }
+    return false;
+  });
+
   const updateModelContext = Effect.fn("McpAppRequests.updateModelContext")(function* (
     input: McpAppUpdateModelContextInput,
   ) {
     const { app } = yield* resolveApp(input);
+    // Context belongs to the conversation on screen, which only shows this app
+    // when it is the app's own thread or one forked from it.
+    if (!(yield* descendsFrom(input.conversationThreadId, input.threadId))) {
+      return yield* fail(input.threadId, "not-an-app");
+    }
     const texts: Array<string> = [];
     for (const block of input.content ?? []) {
       if (!Predicate.isObject(block) || block.type !== "text" || typeof block.text !== "string") {
@@ -187,7 +211,7 @@ const make = Effect.gen(function* () {
       texts.push(encodeJson(input.structuredContent));
     }
     const text = texts.join("\n").trim();
-    if (text.length > McpAppModelContext.MCP_APP_MODEL_CONTEXT_MAX_CHARS) {
+    if (utf8.encode(text).byteLength > McpAppModelContext.MCP_APP_MODEL_CONTEXT_MAX_BYTES) {
       return yield* fail(
         input.threadId,
         "request-failed",
@@ -196,7 +220,7 @@ const make = Effect.gen(function* () {
     }
     yield* modelContext
       .set({
-        threadId: input.threadId,
+        threadId: input.conversationThreadId,
         itemId: input.itemId,
         server: app.server,
         tool: app.tool,

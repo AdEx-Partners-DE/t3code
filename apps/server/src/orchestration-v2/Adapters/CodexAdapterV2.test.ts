@@ -466,7 +466,7 @@ describe("CodexAdapterV2 runtime policy", () => {
     }),
   );
 
-  it.effect("sends MCP app model context as Codex application context", () =>
+  it.effect("sends MCP app model context as untrusted Codex context", () =>
     Effect.gen(function* () {
       const policy = { runtimeMode: "full-access", interactionMode: "default", cwd: null } as const;
       const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
@@ -479,7 +479,7 @@ describe("CodexAdapterV2 runtime policy", () => {
         appContext,
       });
       assert.deepEqual(alone.additionalContext, {
-        "mcp_app_todos_list_todos_item-1": { kind: "application", value: "Filtered to overdue" },
+        "mcp_app_todos_list_todos_item-1": { kind: "untrusted", value: "Filtered to overdue" },
       });
       // Alongside T3's own context, both are kept.
       const withT3 = yield* CodexAdapterV2.buildCodexTurnStartParams({
@@ -490,10 +490,10 @@ describe("CodexAdapterV2 runtime policy", () => {
         hasT3Mcp: true,
         appContext,
       });
-      assert.equal(
-        withT3.additionalContext?.["mcp_app_todos_list_todos_item-1"]?.value,
-        "Filtered to overdue",
-      );
+      assert.deepEqual(withT3.additionalContext?.["mcp_app_todos_list_todos_item-1"], {
+        kind: "untrusted",
+        value: "Filtered to overdue",
+      });
       assert.isDefined(withT3.additionalContext?.["t3_code_runtime"]);
     }),
   );

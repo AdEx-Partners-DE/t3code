@@ -27,6 +27,8 @@ const threadId = ThreadId.make("thread-app");
 const itemId = TurnItemId.make("item-app");
 const providerThreadId = ProviderThreadId.make("provider-thread-app");
 const providerSessionId = ProviderSessionId.make("provider-session-app");
+const forkId = ThreadId.make("thread-fork");
+const unrelatedId = ThreadId.make("thread-unrelated");
 
 const appItem = (output: unknown): OrchestrationV2TurnItem => ({
   id: itemId,
@@ -70,16 +72,28 @@ function makeLayer(input: {
         Layer.mock(McpAppModelContext.McpAppModelContext)({
           set: (entry) =>
             Effect.sync(() => {
-              if (entry.text.trim() === "") storedContext.delete(entry.itemId);
-              else storedContext.set(entry.itemId, entry.text);
+              const key = `${entry.threadId}/${entry.itemId}`;
+              if (entry.text.trim() === "") storedContext.delete(key);
+              else storedContext.set(key, entry.text);
             }),
         }),
         Layer.mock(Orchestrator.OrchestratorV2)({
           getTurnItem: () => Effect.succeed(input.item),
         }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
-          getThreadRecords: () =>
+          getThreadRecords: (id: ThreadId) =>
             Effect.succeed({
+              // A fork of the app's thread, and an unrelated thread.
+              thread: {
+                lineage:
+                  id === forkId
+                    ? {
+                        parentThreadId: threadId,
+                        relationshipToParent: "fork",
+                        rootThreadId: threadId,
+                      }
+                    : { parentThreadId: null, relationshipToParent: null, rootThreadId: id },
+              },
               providerThreads: [
                 { id: providerThreadId, providerSessionId } as OrchestrationV2ProviderThread,
               ],
@@ -160,31 +174,65 @@ describe("McpAppRequests", () => {
   it.effect("keeps each app's latest model context, without a live session", () =>
     Effect.gen(function* () {
       const requests = yield* McpAppRequests.McpAppRequests;
+      const own = { threadId, itemId, conversationThreadId: threadId };
       yield* requests.updateModelContext({
-        threadId,
-        itemId,
+        ...own,
         content: [{ type: "text", text: "Showing 2 todos" }],
       });
       // An update replaces the app's context rather than adding to it.
       yield* requests.updateModelContext({
-        threadId,
-        itemId,
+        ...own,
         content: [{ type: "text", text: "Filtered to overdue" }],
         structuredContent: { filter: "overdue" },
       });
-      assert.equal(storedContext.get(itemId), 'Filtered to overdue\n{"filter":"overdue"}');
+      assert.equal(
+        storedContext.get(`${threadId}/${itemId}`),
+        'Filtered to overdue\n{"filter":"overdue"}',
+      );
+      assert.equal(
+        yield* reason(
+          requests.updateModelContext({ ...own, content: [{ type: "image", data: "x" }] }),
+        ),
+        "unsupported-content",
+      );
+      // The cap is in UTF-8 bytes: 6,000 three-byte characters exceed 16 KiB.
+      assert.equal(
+        yield* reason(
+          requests.updateModelContext({
+            ...own,
+            content: [{ type: "text", text: "表".repeat(6000) }],
+          }),
+        ),
+        "request-failed",
+      );
+      yield* requests.updateModelContext(own);
+      assert.isFalse(storedContext.has(`${threadId}/${itemId}`));
+    }).pipe(Effect.provide(makeLayer({ item: appItem({ t3McpApp: app }), live: false }))),
+  );
+
+  it.effect("stores a fork's model context under the fork, and refuses unrelated threads", () =>
+    Effect.gen(function* () {
+      const requests = yield* McpAppRequests.McpAppRequests;
+      const content = [{ type: "text", text: "Seen from the fork" }];
+      yield* requests.updateModelContext({
+        threadId,
+        itemId,
+        conversationThreadId: forkId,
+        content,
+      });
+      assert.equal(storedContext.get(`${forkId}/${itemId}`), "Seen from the fork");
+      assert.isFalse(storedContext.has(`${threadId}/${itemId}`));
       assert.equal(
         yield* reason(
           requests.updateModelContext({
             threadId,
             itemId,
-            content: [{ type: "image", data: "x" }],
+            conversationThreadId: unrelatedId,
+            content,
           }),
         ),
-        "unsupported-content",
+        "not-an-app",
       );
-      yield* requests.updateModelContext({ threadId, itemId });
-      assert.isFalse(storedContext.has(itemId));
     }).pipe(Effect.provide(makeLayer({ item: appItem({ t3McpApp: app }), live: false }))),
   );
 

@@ -758,12 +758,13 @@ export function buildCodexTurnStartParams(input: {
       input.hasT3Mcp !== true
         ? undefined
         : buildCodexDeveloperInstructions(input.runtimePolicy.interactionMode);
-    // App context rides Codex's application context, which Codex resends only
-    // when it changes and the adapter restores after compaction.
+    // An app's context is text an MCP server wrote, so it goes in as untrusted
+    // context: Codex renders it as quoted user-side input, never as developer
+    // instructions. Codex resends it only when it changes.
     const appContext = Object.fromEntries(
       (input.appContext ?? []).map((entry) => [
         entry.key,
-        { kind: "application" as const, value: entry.text },
+        { kind: "untrusted" as const, value: entry.text },
       ]),
     );
     const t3Context =
@@ -1726,11 +1727,26 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             if (!context) return;
             yield* client.request("thread/inject_items", {
               threadId,
-              items: Object.entries(context).map(([key, entry]) => ({
-                type: "message",
-                role: "developer",
-                content: [{ type: "input_text", text: `<${key}>${entry.value}</${key}>` }],
-              })),
+              // Restored as Codex sent them: application context as developer
+              // input, untrusted context as quoted user-side input.
+              items: Object.entries(context).map(([key, entry]) =>
+                entry.kind === "untrusted"
+                  ? {
+                      type: "message",
+                      role: "user",
+                      content: [
+                        {
+                          type: "input_text",
+                          text: `<external_${key}>${entry.value}</external_${key}>`,
+                        },
+                      ],
+                    }
+                  : {
+                      type: "message",
+                      role: "developer",
+                      content: [{ type: "input_text", text: `<${key}>${entry.value}</${key}>` }],
+                    },
+              ),
             });
           }).pipe(
             Effect.timeout("10 seconds"),

@@ -20,6 +20,7 @@ import {
 } from "@t3tools/shared/mcpApp";
 import { Minimize2Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { useAssetUrlState } from "~/assets/assetUrls";
 import { APP_VERSION } from "~/branding";
@@ -64,7 +65,10 @@ function saveBlob(blob: Blob, name: string) {
  */
 export function McpAppFrame(props: {
   readonly environmentId: EnvironmentId;
+  /** The thread that produced the app, which its requests run against. */
   readonly threadId: ThreadId;
+  /** The thread on screen, whose next turn the app's model context informs. */
+  readonly conversationThreadId: ThreadId;
   readonly itemId: TurnItemId;
   /** The item's revision, so its stored call is fetched once per version. */
   readonly revision: string;
@@ -81,6 +85,9 @@ export function McpAppFrame(props: {
   const [displayMode, setDisplayMode] = useState<McpAppDisplayMode>("inline");
   // The app asked to be closed; the row falls back to its plain tool call.
   const [closed, setClosed] = useState(false);
+  // Counts the app documents this row has shown. Reopening a closed app loads
+  // a new one, which needs its own host and its own load tracking.
+  const [documentGeneration, setDocumentGeneration] = useState(0);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   useLayoutEffect(() => {
     const box = boxRef.current;
@@ -234,6 +241,12 @@ export function McpAppFrame(props: {
           : { toolInfo: { tool: current.toolDefinition } }),
       };
     };
+    // Approvals render in the page, beneath the top layer a full-screen app
+    // occupies, so the app returns inline before T3 asks.
+    const ask = (message: string) => {
+      flushSync(() => setDisplayMode("inline"));
+      return requestConfirmDialog(message);
+    };
     const target = () => frameRef.current?.contentWindow ?? null;
     const scope = () => {
       const { environmentId, threadId, itemId } = latest.current.props;
@@ -252,7 +265,7 @@ export function McpAppFrame(props: {
         if (info._tag !== "Success") throw commandFailure(info);
         if (!info.value.callable) throw new McpAppHostRefusal("This app cannot call that tool.");
         if (!info.value.readOnly) {
-          const approved = await requestConfirmDialog(
+          const approved = await ask(
             `Allow ${app.server} to run ${info.value.title ?? name}?\n${JSON.stringify(args, null, 2)}`,
           );
           if (approved !== true) throw new McpAppHostRefusal("Declined by the user.");
@@ -283,9 +296,7 @@ export function McpAppFrame(props: {
       sendMessage: async (text) => {
         const send = latest.current.props.onSendMessage;
         if (send === undefined) throw new McpAppHostRefusal("Messages are not available here.");
-        const approved = await requestConfirmDialog(
-          `Send this message from ${app.server}?\n${text}`,
-        );
+        const approved = await ask(`Send this message from ${app.server}?\n${text}`);
         if (approved !== true) throw new McpAppHostRefusal("Declined by the user.");
         await send(text);
       },
@@ -293,7 +304,11 @@ export function McpAppFrame(props: {
         const { environmentId, input } = scope();
         const result = await latest.current.updateModelContext({
           environmentId,
-          input: { ...input, ...context },
+          input: {
+            ...input,
+            ...context,
+            conversationThreadId: latest.current.props.conversationThreadId,
+          },
         });
         if (result._tag !== "Success") throw commandFailure(result);
       },
@@ -303,7 +318,7 @@ export function McpAppFrame(props: {
       },
       downloadFile: async (files) => {
         const names = files.map((file) => file.name).join(", ");
-        const approved = await requestConfirmDialog(`Save ${names} from ${app.server}?`);
+        const approved = await ask(`Save ${names} from ${app.server}?`);
         if (approved !== true) throw new McpAppHostRefusal("Declined by the user.");
         for (const file of files) {
           // A linked file is read from the app's own server, like its other reads.
@@ -332,8 +347,12 @@ export function McpAppFrame(props: {
         }
       },
       onRequestTeardown: () => {
-        if (latest.current.displayMode === "fullscreen") setDisplayMode("inline");
-        else setClosed(true);
+        if (latest.current.displayMode === "fullscreen") {
+          setDisplayMode("inline");
+          return;
+        }
+        // The app asked to go, so it gets its teardown before the frame does.
+        void host.teardown().then(() => setClosed(true));
       },
       onSizeChanged: (size) => {
         // Full screen is a fixed box; what the app reports there would leave
@@ -355,19 +374,20 @@ export function McpAppFrame(props: {
       void host.teardown();
       hostRef.current = null;
     };
-  }, [src, app]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A reopened document needs a new host.
+  }, [src, app, documentGeneration]);
 
   // The host reads the context through `latest`; these only say when to resend.
   useEffect(() => {
     hostRef.current?.updateHostContext();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Context changes trigger a resend.
-  }, [theme, width, displayMode, viewport]);
+  }, [theme, width, displayMode, viewport, toolDefinition]);
 
   // A new document gets a new host, which needs the call again.
   useEffect(() => {
     if (toolCall !== undefined) hostRef.current?.setToolCall(toolCall);
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Each new document needs the call.
-  }, [toolCall, src]);
+  }, [toolCall, src, documentGeneration]);
 
   // An app that asked to close keeps the box an inline row had, so the
   // timeline does not jump, and says how to bring it back.
@@ -375,7 +395,15 @@ export function McpAppFrame(props: {
     return (
       <div className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-muted-foreground text-xs">
         <span>The {app.server} app was closed</span>
-        <Button size="xs" variant="ghost" onClick={() => setClosed(false)}>
+        <Button
+          size="xs"
+          variant="ghost"
+          onClick={() => {
+            loads.current = 0;
+            setDocumentGeneration((value) => value + 1);
+            setClosed(false);
+          }}
+        >
           Show app
         </Button>
       </div>

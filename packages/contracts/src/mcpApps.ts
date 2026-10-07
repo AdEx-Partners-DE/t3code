@@ -65,6 +65,11 @@ export type McpAppReadResourceResult = typeof McpAppReadResourceResult.Type;
  */
 export const McpAppUpdateModelContextInput = Schema.Struct({
   ...McpAppTarget,
+  /**
+   * The thread whose next turn gets the context: the one on screen, which is
+   * the app's own thread or a fork that shows it.
+   */
+  conversationThreadId: ThreadId,
   content: Schema.optional(Schema.Array(Schema.Unknown)),
   structuredContent: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 });
