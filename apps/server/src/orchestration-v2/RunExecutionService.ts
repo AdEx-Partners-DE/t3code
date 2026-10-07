@@ -1366,7 +1366,10 @@ export const layer: Layer.Layer<
                 ),
               ),
             )).map((entry) => ({
-            key: `mcp_app_${entry.server}_${entry.tool}_${entry.itemId}`,
+            // The item id alone is unique and needs no escaping; server and
+            // tool names are free text that would break the tag Codex wraps
+            // the context in.
+            key: `mcp_app_${entry.itemId.replace(/[^\w.-]/g, "_")}`,
             text: entry.text,
           }));
           const turnInput = {

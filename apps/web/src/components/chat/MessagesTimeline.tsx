@@ -315,6 +315,12 @@ interface TimelineRowSharedState {
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   /** Sends text an MCP App asked to post, after the user approved it. */
   onSendAppMessage: ((text: string) => Promise<void>) | undefined;
+  /**
+   * An MCP App row going full screen (its id) or back (null). The row stays
+   * rendered and the list stops following new output meanwhile, so the app
+   * is not virtualized away while the reader is using it.
+   */
+  onAppFullscreenChange: (rowId: string | null) => void;
   onRunShellCommand: ((command: string) => void) | undefined;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   displayThreadKey?: string;
@@ -954,7 +960,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     onManualNavigation,
   });
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
-  const alwaysRender = citationAlwaysRender ?? restoringAlwaysRender;
+  const [fullscreenAppRowId, setFullscreenAppRowId] = useState<string | null>(null);
+  const fullscreenAppIndex =
+    fullscreenAppRowId === null ? -1 : rows.findIndex((row) => row.id === fullscreenAppRowId);
+  const fullscreenAlwaysRender = useMemo(
+    () => (fullscreenAppIndex >= 0 ? { indices: [fullscreenAppIndex] } : undefined),
+    [fullscreenAppIndex],
+  );
+  const alwaysRender = citationAlwaysRender ?? restoringAlwaysRender ?? fullscreenAlwaysRender;
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
   const [minimapCurrentIndex, setMinimapCurrentIndex] = useState<number | null>(null);
   const handleAnchorReady = useCallback(
@@ -1175,6 +1188,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onFileOpen,
       onUseArtifactTemplate,
       onSendAppMessage,
+      onAppFullscreenChange: setFullscreenAppRowId,
       onFileDownload,
       openPullRequest,
       onOpenTurnDiff,
@@ -1366,6 +1380,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
               anchoredEndSpace ||
               !liveFollowEnabled ||
+              fullscreenAppRowId !== null ||
               disclosureToggleSettling
                 ? false
                 : isWorking && !prefersReducedMotion && settlingListIdentity === null
@@ -2744,6 +2759,7 @@ function McpAppTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mcp-app
         revision={row.revision}
         app={row.mcpApp}
         onSendMessage={ctx.onSendAppMessage}
+        onFullscreenChange={(fullscreen) => ctx.onAppFullscreenChange(fullscreen ? row.id : null)}
       />
     </div>
   );

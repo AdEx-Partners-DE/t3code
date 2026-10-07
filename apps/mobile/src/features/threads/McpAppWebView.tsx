@@ -387,7 +387,6 @@ export function ThreadMcpApp(props: {
             conversationThreadId: String(current.conversationThreadId),
             itemId: String(current.itemId),
             revision: current.revision,
-            app: JSON.stringify(app),
           });
           return "fullscreen";
         }
@@ -425,11 +424,12 @@ export function ThreadMcpApp(props: {
           if (bytes.byteLength > MAX_DOWNLOAD_BYTES) {
             throw new McpAppHostRefusal(`${file.name} is too large to save.`);
           }
-          await shareGeneratedAttachment({
+          const shared = await shareGeneratedAttachment({
             bytes,
             attachment: { name: file.name, mimeType },
             signal: new AbortController().signal,
           });
+          if (!shared) throw new McpAppHostRefusal("Sharing is not available on this device.");
         }
       },
       onRequestTeardown: () => {

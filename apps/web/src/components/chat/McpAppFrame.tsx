@@ -42,6 +42,10 @@ const commandFailure = (result: {
   );
 };
 
+/** Full screen shows the box in the top layer, which needs the Popover API. */
+const fullscreenSupported =
+  typeof HTMLElement !== "undefined" && "popover" in HTMLElement.prototype;
+
 /** Largest file an app may hand the user through `ui/download-file`. */
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -52,8 +56,9 @@ function saveBlob(blob: Blob, name: string) {
   link.href = url;
   link.download = name;
   link.click();
-  // After the click has started the download.
-  queueMicrotask(() => URL.revokeObjectURL(url));
+  // Long after the browser has read it: some start the download a task or
+  // more after the click, and a revoked URL saves nothing.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 /**
@@ -74,6 +79,8 @@ export function McpAppFrame(props: {
   readonly revision: string;
   readonly app: McpAppReference;
   readonly onSendMessage: ((text: string) => Promise<void>) | undefined;
+  /** Told when the app enters or leaves full screen. */
+  readonly onFullscreenChange?: (fullscreen: boolean) => void;
 }) {
   const { app } = props;
   const theme = useHtmlRenderTheme();
@@ -88,7 +95,6 @@ export function McpAppFrame(props: {
   // Counts the app documents this row has shown. Reopening a closed app loads
   // a new one, which needs its own host and its own load tracking.
   const [documentGeneration, setDocumentGeneration] = useState(0);
-  const [viewport, setViewport] = useState({ width: 0, height: 0 });
   useLayoutEffect(() => {
     const box = boxRef.current;
     if (!box) return;
@@ -150,34 +156,45 @@ export function McpAppFrame(props: {
     readResource,
     updateModelContext,
     displayMode,
-    viewport,
     toolDefinition,
   };
+  const hostRef = useRef<McpAppHost | null>(null);
   const latest = useRef(live);
   useEffect(() => {
     latest.current = live;
   });
 
-  // Full screen follows the window's size, and Escape returns the app inline.
   useEffect(() => {
     const box = boxRef.current;
-    if (box === null) return;
+    if (box === null || !fullscreenSupported) return;
     const shown = box.matches(":popover-open");
     if (displayMode === "fullscreen" && !shown) box.showPopover();
     if (displayMode !== "fullscreen" && shown) box.hidePopover();
+    latest.current.props.onFullscreenChange?.(displayMode === "fullscreen");
   }, [displayMode]);
+  // A row leaving the list while full screen frees its pin.
+  useEffect(() => () => latest.current.props.onFullscreenChange?.(false), []);
+  // Full screen sits above everything else in the page. Anything that takes
+  // focus outside it (an approval, the command palette, a dialog) returns the
+  // app inline so it can be seen; so does Escape pressed outside the app.
+  // Keys pressed inside the app stay with the app.
   useEffect(() => {
     if (displayMode !== "fullscreen") return;
-    const measure = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
-    measure();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDisplayMode("inline");
+    const leave = () => setDisplayMode("inline");
+    const onFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && !boxRef.current?.contains(event.target)) leave();
     };
-    window.addEventListener("resize", measure);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") leave();
+    };
+    const onResize = () => hostRef.current?.updateHostContext();
+    document.addEventListener("focusin", onFocus);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
     return () => {
-      window.removeEventListener("resize", measure);
+      document.removeEventListener("focusin", onFocus);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResize);
     };
   }, [displayMode]);
 
@@ -199,16 +216,19 @@ export function McpAppFrame(props: {
       cancelled = true;
     };
   }, [props.environmentId, props.threadId, props.itemId, app.tool]);
-  const hostRef = useRef<McpAppHost | null>(null);
   // The bridge belongs to the captured document. A frame that navigates keeps
   // its window, so a second load stops the app rather than letting a page T3
   // never served pose as it. This is not a confidentiality boundary: a frame
   // can always navigate itself, so the app could carry anything it read out
   // in a URL either way.
-  const loads = useRef(0);
+  // Counted per document: a reopened app is a new document, not a navigation.
+  const loads = useRef({ generation: 0, count: 0 });
   const onFrameLoad = () => {
-    loads.current += 1;
-    if (loads.current > 1) {
+    if (loads.current.generation !== documentGeneration) {
+      loads.current = { generation: documentGeneration, count: 0 };
+    }
+    loads.current.count += 1;
+    if (loads.current.count > 1) {
       hostRef.current?.dispose();
       setNavigatedAway(true);
     }
@@ -222,10 +242,10 @@ export function McpAppFrame(props: {
         theme: current.theme.appearance,
         styles: { variables: mcpAppStyleVariables(current.theme.variables) },
         displayMode: current.displayMode,
-        availableDisplayModes: ["inline", "fullscreen"],
+        availableDisplayModes: fullscreenSupported ? ["inline", "fullscreen"] : ["inline"],
         containerDimensions:
           current.displayMode === "fullscreen"
-            ? { width: current.viewport.width, height: current.viewport.height }
+            ? { width: window.innerWidth, height: window.innerHeight }
             : { width: current.width, maxHeight: MCP_APP_MAX_HEIGHT },
         platform: isElectron ? "desktop" : "web",
         locale: navigator.language,
@@ -381,7 +401,7 @@ export function McpAppFrame(props: {
   useEffect(() => {
     hostRef.current?.updateHostContext();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Context changes trigger a resend.
-  }, [theme, width, displayMode, viewport, toolDefinition]);
+  }, [theme, width, displayMode, toolDefinition]);
 
   // A new document gets a new host, which needs the call again.
   useEffect(() => {
@@ -399,7 +419,6 @@ export function McpAppFrame(props: {
           size="xs"
           variant="ghost"
           onClick={() => {
-            loads.current = 0;
             setDocumentGeneration((value) => value + 1);
             setClosed(false);
           }}
@@ -420,7 +439,7 @@ export function McpAppFrame(props: {
         // Full screen is the same box shown in the browser's top layer: moving
         // the frame to another parent would reload the app, and the timeline's
         // rows contain fixed positioning, which the top layer escapes.
-        popover="manual"
+        {...(fullscreenSupported ? { popover: "manual" as const } : {})}
         className={cn(
           "relative size-full overflow-hidden",
           app.prefersBorder === true && !fullscreen && "rounded-lg border border-border",
