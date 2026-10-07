@@ -1,4 +1,4 @@
-import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
@@ -74,7 +74,12 @@ function descendsFrom(
 export function McpAppFullscreenScreen({ route }: McpAppFullscreenScreenProps) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const onClose = useCallback(() => navigation.goBack(), [navigation]);
+  // A plain goBack pops whatever is on top, so it only runs while this modal
+  // is: an exit that lands late (after a teardown wait) must not pop the thread.
+  const focused = useIsFocused();
+  const onClose = useCallback(() => {
+    if (navigation.isFocused()) navigation.goBack();
+  }, [navigation]);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const params = route.params;
   const environmentId = EnvironmentId.make(params.environmentId);
@@ -107,8 +112,8 @@ export function McpAppFullscreenScreen({ route }: McpAppFullscreenScreenProps) {
   const awaitingUser =
     conversation?.hasPendingApprovals === true || conversation?.hasPendingUserInput === true;
   useEffect(() => {
-    if (awaitingUser) navigation.goBack();
-  }, [awaitingUser, navigation]);
+    if (awaitingUser && focused) onClose();
+  }, [awaitingUser, focused, onClose]);
 
   return (
     <View className="flex-1 bg-background" style={{ paddingTop: insets.top }}>

@@ -24,7 +24,7 @@ import { flushSync } from "react-dom";
 
 import { useAssetUrlState } from "~/assets/assetUrls";
 import { APP_VERSION } from "~/branding";
-import { requestConfirmDialog } from "~/confirmDialog";
+import { isConfirmDialogActive, requestConfirmDialog } from "~/confirmDialog";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { Button } from "~/components/ui/button";
 import { isElectron } from "~/env";
@@ -182,9 +182,11 @@ export function McpAppFrame(props: {
   }, [displayMode]);
   // The approval or question the agent waits on renders in the page, so a
   // full-screen app steps aside for it.
-  useEffect(() => {
+  const [stepAsideFor, setStepAsideFor] = useState(props.awaitingUser);
+  if (stepAsideFor !== props.awaitingUser) {
+    setStepAsideFor(props.awaitingUser);
     if (props.awaitingUser === true) setDisplayMode("inline");
-  }, [props.awaitingUser]);
+  }
   // Full screen sits above everything else in the page. Anything that takes
   // focus outside it (an approval, the command palette, a dialog) returns the
   // app inline so it can be seen; so does Escape pressed outside the app.
@@ -347,8 +349,12 @@ export function McpAppFrame(props: {
         if (result._tag !== "Success") throw commandFailure(result);
       },
       requestDisplayMode: async (mode) => {
-        // Full screen would cover the approval or question the agent waits on.
-        if (mode === "fullscreen" && latest.current.props.awaitingUser === true) {
+        // Full screen would cover the approval or question the agent waits
+        // on, or a confirmation any app is waiting on.
+        if (
+          mode === "fullscreen" &&
+          (latest.current.props.awaitingUser === true || isConfirmDialogActive())
+        ) {
           return latest.current.displayMode;
         }
         setDisplayMode(mode);

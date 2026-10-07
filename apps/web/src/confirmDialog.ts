@@ -101,6 +101,11 @@ export function requestConfirmDialog(
   return confirmation;
 }
 
+/** True while a confirmation is shown or waiting to be. */
+export function isConfirmDialogActive(): boolean {
+  return activeConfirmation !== null || queuedConfirmations.length > 0;
+}
+
 export function respondToConfirmDialog(confirmed: boolean): void {
   if (state.status !== "confirming" || !activeConfirmation) return;
 

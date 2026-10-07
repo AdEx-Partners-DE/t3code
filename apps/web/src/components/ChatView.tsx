@@ -11109,7 +11109,10 @@ export default function ChatView(props: ChatViewProps) {
                 isCompacting={!paintOnlyDisplayedTimeline && isCompacting}
                 awaitingUser={
                   !paintOnlyDisplayedTimeline &&
-                  (activePendingApproval !== null || activePendingUserInput !== null)
+                  (activePendingApproval !== null ||
+                    activePendingUserInput !== null ||
+                    // A secret request has no runtime request; the shell carries it.
+                    activeThreadShell?.hasPendingUserInput === true)
                 }
                 activeTurnStartedAt={paintOnlyDisplayedTimeline ? null : activeWorkStartedAt}
                 worktreeSetup={paintOnlyDisplayedTimeline ? null : worktreeSetup}

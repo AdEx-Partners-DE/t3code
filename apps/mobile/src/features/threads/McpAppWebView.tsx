@@ -8,6 +8,7 @@ import {
   type McpAppHost,
   type McpAppHostContext,
 } from "@t3tools/client-runtime/mcp-apps";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { CommandId, MessageId } from "@t3tools/contracts";
 import { mcpAppAllowAttribute, mcpAppFileName, type McpAppReference } from "@t3tools/shared/mcpApp";
@@ -25,6 +26,7 @@ import { mobileHtmlRenderTheme } from "../../lib/htmlRenderTheme";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { uuidv4 } from "../../lib/uuid";
 import { useAssetUrlState } from "../../state/assets";
+import { useThreadShell } from "../../state/entities";
 import { mcpAppEnvironment } from "../../state/mcpApps";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useEnvironmentQuery } from "../../state/query";
@@ -228,7 +230,15 @@ export function ThreadMcpApp(props: {
   const [toolDefinition, setToolDefinition] = useState<unknown>(undefined);
   // Read by the host on every message, so it always sees current values
   // without being rebuilt (which would drop the app's session).
+  // The approval or question the agent waits on renders on this thread, and a
+  // full-screen app would cover it.
+  const conversation = useThreadShell(
+    scopeThreadRef(props.environmentId, props.conversationThreadId),
+  );
+  const awaitingUser =
+    conversation?.hasPendingApprovals === true || conversation?.hasPendingUserInput === true;
   const live = {
+    awaitingUser,
     theme,
     props,
     callTool,
@@ -380,11 +390,18 @@ export function ThreadMcpApp(props: {
       },
       requestDisplayMode: async (mode) => {
         const current = latest.current.props;
+        if (mode === "fullscreen" && latest.current.awaitingUser)
+          return current.displayMode ?? "inline";
         if (mode === "fullscreen" && current.displayMode !== "fullscreen") {
           // The inline view is torn down by the switch (this row unmounts
           // while the modal covers it); the modal opens a fresh view.
           // The inline view steps aside for the modal; it gets its teardown first.
           await hostRef.current?.teardown();
+          // The wait may have let an approval arrive; the view reloads inline.
+          if (latest.current.awaitingUser) {
+            openNewDocument.current((value) => value + 1);
+            return "inline";
+          }
           setPresentedFullscreen(true);
           latest.current.navigation.navigate("ThreadMcpApp", {
             environmentId: String(current.environmentId),
