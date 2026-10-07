@@ -124,6 +124,14 @@ export function ThreadMcpApp(props: {
   const insets = useSafeAreaInsets();
   // The app asked to be closed; the row falls back to a note that brings it back.
   const [closed, setClosed] = useState(false);
+  // Full screen is a separate view of the app, so the inline one steps aside
+  // (and is torn down) while it is open, and comes back when the thread is
+  // shown again.
+  const [presentedFullscreen, setPresentedFullscreen] = useState(false);
+  useEffect(() => {
+    if (!presentedFullscreen) return;
+    return navigation.addListener("focus", () => setPresentedFullscreen(false));
+  }, [navigation, presentedFullscreen]);
   const { themeId, themeAppearance, themeVariables, systemColorsActive } =
     useAppearancePreferences();
   const theme = useMemo(
@@ -350,6 +358,7 @@ export function ThreadMcpApp(props: {
         if (mode === "fullscreen" && current.displayMode !== "fullscreen") {
           // The inline view is torn down by the switch (this row unmounts
           // while the modal covers it); the modal opens a fresh view.
+          setPresentedFullscreen(true);
           latest.current.navigation.navigate("ThreadMcpApp", {
             environmentId: String(current.environmentId),
             threadId: String(current.threadId),
@@ -440,6 +449,19 @@ export function ThreadMcpApp(props: {
         : { html: outerDocument(uri, mcpAppAllowAttribute(app.permissions), secret) },
     [uri, app.permissions, secret],
   );
+
+  if (presentedFullscreen) {
+    return (
+      <View
+        style={{ height: MCP_APP_ROW_HEIGHT, marginBottom: ROW_BOTTOM_MARGIN }}
+        className="items-center justify-center rounded-lg border border-border"
+      >
+        <Text className="text-sm text-foreground-muted">
+          The {app.server} app is open full screen
+        </Text>
+      </View>
+    );
+  }
 
   if (closed) {
     return (
