@@ -113,7 +113,15 @@ export const make = Effect.fn("MobileEnvironmentCacheStore.make")(function* () {
         decode: decodeStoredShellSnapshot,
         select: (stored) =>
           stored.environmentId === environmentId ? Option.some(stored.snapshot) : Option.none(),
-      }).pipe(Effect.tap(() => Effect.promise(() => projectFaviconDatabaseCache.hydrate()))),
+      }).pipe(
+        // Read cached project icons in parallel with the shell so the first rows can show
+        // them, instead of making the thread list wait for the icon read after the decode.
+        Effect.zipWith(
+          Effect.promise(() => projectFaviconDatabaseCache.hydrate()),
+          (snapshot) => snapshot,
+          { concurrent: true },
+        ),
+      ),
     ),
     saveShell: Effect.fn("MobileEnvironmentCache.saveShell")(function* (environmentId, snapshot) {
       const payload = yield* encodeStoredShellSnapshot({
