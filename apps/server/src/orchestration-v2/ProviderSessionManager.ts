@@ -1849,7 +1849,7 @@ export const layerWithOptions = (
               // earlier open has already finished.
               const outdated =
                 live !== undefined &&
-                live.busyCount === 0 &&
+                live.busyTurns.size === 0 &&
                 [...live.attachedThreadIds].every((threadId) => threadId === input.threadId) &&
                 (yield* registry.get(live.runtime.instanceId).pipe(
                   Effect.map((current) => current !== live.adapter),
