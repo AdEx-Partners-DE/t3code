@@ -96,4 +96,36 @@ describe("renderCliShim", () => {
       "",
     ]);
   });
+
+  it("tells a person whose app moved to reopen it", () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cli-shim-"));
+    directories.push(root);
+    const shim = NodePath.join(root, "t3");
+    writeExecutable(
+      shim,
+      renderCliShim({
+        kind: "direct",
+        executable: NodePath.join(root, "Gone.app/Contents/MacOS/T3 Code"),
+        entry: "/bin.mjs",
+      }),
+    );
+    const result = NodeChildProcess.spawnSync(shim, ["--version"], { encoding: "utf8" });
+    expect(result.status).toBe(127);
+    expect(result.stderr).toContain("Open the app once to update this command.");
+  });
+
+  it("writes a Windows launcher that survives parentheses and percent signs in paths", () => {
+    const script = renderCliShim({
+      kind: "windows",
+      executable: "C:\\Program Files (x86)\\T3 100%\\T3 Code.exe",
+      entry:
+        "C:\\Program Files (x86)\\T3 100%\\resources\\server.asar\\apps\\server\\dist\\bin.mjs",
+    });
+    const lines = script.split("\r\n");
+    expect(lines).toContain('if exist "C:\\Program Files (x86)\\T3 100%%\\T3 Code.exe" goto run');
+    expect(lines).toContain(
+      '"C:\\Program Files (x86)\\T3 100%%\\T3 Code.exe" "C:\\Program Files (x86)\\T3 100%%\\resources\\server.asar\\apps\\server\\dist\\bin.mjs" %*',
+    );
+    expect(lines).toContain('set "T3CODE_CLI_PATH=%~f0"');
+  });
 });
