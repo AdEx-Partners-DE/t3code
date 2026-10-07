@@ -101,6 +101,8 @@ export interface EnvironmentThreadShell {
   readonly forkedFrom: OrchestrationV2ThreadShell["forkedFrom"];
   /** The linked environment that started this thread here, when one did. */
   readonly linkOrigin: OrchestrationV2ThreadShell["linkOrigin"] | null;
+  /** A move to a linked environment: waiting, under way, done, or failed. */
+  readonly handoff: NonNullable<OrchestrationV2ThreadShell["handoff"]> | null;
   readonly activeProviderThreadId: OrchestrationV2ThreadShell["activeProviderThreadId"];
   readonly latestRun: ThreadRunSummary | null;
   readonly runtime: ThreadRuntimeSummary | null;
@@ -248,6 +250,7 @@ export function presentThreadShell(
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,
     linkOrigin: thread.linkOrigin ?? null,
+    handoff: thread.handoff ?? null,
     activeProviderThreadId: thread.activeProviderThreadId,
     latestRun,
     runtime: shellRuntime(thread),

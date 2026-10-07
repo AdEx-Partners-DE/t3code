@@ -90,6 +90,8 @@ export type ThreadGitMenuProps = {
   readonly onOpenGitInspector?: () => void;
   /** Present only on a thread whose work can be merged into the one it came from. */
   readonly onMergeBack?: () => void;
+  /** Present only when the thread can move to a linked environment. */
+  readonly onContinueOn?: () => void;
   readonly onPull: () => Promise<void>;
   readonly onRunAction: (input: GitActionRequestInput) => Promise<GitRunStackedActionResult | null>;
 };
@@ -367,6 +369,17 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
                   },
                 ]
               : []),
+            ...(props.onContinueOn
+              ? [
+                  {
+                    description: "Move this thread and its work to a linked environment",
+                    icon: { name: "arrow.up.right", type: "sfSymbol" as const },
+                    label: "Continue on…",
+                    onPress: props.onContinueOn,
+                    type: "action" as const,
+                  },
+                ]
+              : []),
             {
               description: "Commit, files, branches",
               icon: { name: "ellipsis", type: "sfSymbol" },
@@ -396,6 +409,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
       props.canOpenFiles,
       props.canOpenTerminal,
       props.gitStatus,
+      props.onContinueOn,
       props.onMergeBack,
       props.onOpenNewTerminal,
       props.onOpenTerminal,
