@@ -9,7 +9,7 @@ Each archive includes compiled JavaScript, declarations, native source and
 To reproduce the current archive with Node 24 and the repository's pinned Yarn:
 
 ```sh
-git clone --branch t3-v5.0.0-t3.2 https://github.com/juliusmarminge/react-native-screens.git /tmp/t3-screens-fork
+git clone --branch t3-v5.0.0-t3.3 https://github.com/juliusmarminge/react-native-screens.git /tmp/t3-screens-fork
 yarn --cwd /tmp/t3-screens-fork pack:t3 /absolute/path/to/t3code/apps/mobile/deps
 ```
 
