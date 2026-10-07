@@ -277,6 +277,7 @@ import {
   V2LifecycleRow,
   type HandoffTimelineRun,
 } from "./V2LifecycleRow";
+import { SecretRequestCard } from "./SecretRequestCard";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 
 import { SkillChipIcon, SkillInlineText } from "./SkillInlineText";
@@ -2836,6 +2837,15 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
   if (item.type === "subagent" && (row.subagents?.length ?? 1) > 1) {
     return <V2SubagentGroup key={row.id} row={row} />;
   }
+  if (item.type === "secret_request") {
+    return (
+      <SecretRequestCard
+        environmentId={ctx.activeThreadEnvironmentId}
+        item={item}
+        visibility={visibility}
+      />
+    );
+  }
   if (isV2LifecycleItem(item)) {
     return (
       <V2LifecycleRow
@@ -3572,7 +3582,7 @@ function LiveActivityRow({
   const showShimmer = animated && shimmer;
   return (
     <div
-      ref={showShimmer ? observeVisibleAnimation : undefined}
+      ref={animated ? observeVisibleAnimation : undefined}
       className="relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed"
     >
       <LiveActivityContent
@@ -3638,7 +3648,13 @@ function LiveActivityContent({
         ) : null
       }
       label={
-        <span className={cn("block truncate", (highlighted || active) && "text-foreground")}>
+        <span
+          className={cn(
+            "block truncate",
+            highlighted && "text-foreground",
+            active && "live-tool-shine",
+          )}
+        >
           {label}
         </span>
       }
@@ -3774,6 +3790,7 @@ function WorkGroupHeader(props: {
 }) {
   return (
     <WorkLogButton
+      ref={props.active && !props.failed ? observeVisibleAnimation : undefined}
       aria-label={props.failed ? `${props.label}, tool call failed` : props.label}
       aria-expanded={props.expanded}
       onClick={props.onToggle}
@@ -3786,7 +3803,7 @@ function WorkGroupHeader(props: {
         />
       }
       label={
-        <span className={cn("block truncate", props.active && !props.failed && "text-foreground")}>
+        <span className={cn("block truncate", props.active && !props.failed && "live-tool-shine")}>
           {props.label}
         </span>
       }

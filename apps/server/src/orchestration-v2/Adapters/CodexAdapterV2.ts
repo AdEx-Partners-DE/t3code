@@ -12,15 +12,15 @@ import {
   completeCodexTurnTokenUsage,
   type CodexTurnTokenUsageState,
 } from "../../provider/CodexTurnTokenUsage.ts";
-import type { ServerProviderShape } from "../../provider/Services/ServerProvider.ts";
+import type { ServerProviderShape } from "../../provider/ServerProvider.ts";
 import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
-import { buildCodexInitializeParams } from "../../provider/Layers/CodexProvider.ts";
+import { buildCodexInitializeParams } from "../../provider/CodexProvider.ts";
 import {
   codexRateLimitsToUpdate,
   mergeCodexRateLimits,
   codexUsageLimitResetAt,
   type CodexRateLimitSnapshot,
-} from "../../provider/Layers/codexUsageLimits.ts";
+} from "../../provider/codexUsageLimits.ts";
 import {
   CodexSettings,
   defaultInstanceIdForDriver,
@@ -67,6 +67,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -103,12 +104,9 @@ import {
   boundProviderEventForLogging,
   type EventNdjsonLogger,
   shouldPersistProviderEvent,
-} from "../../provider/Layers/EventNdjsonLogger.ts";
-import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
-import {
-  codexAppServerArgs,
-  resolveCodexLaunchArgs,
-} from "../../provider/Layers/codexLaunchArgs.ts";
+} from "../../provider/EventNdjsonLogger.ts";
+import { ProviderEventLoggers } from "../../provider/ProviderEventLoggers.ts";
+import { codexAppServerArgs, resolveCodexLaunchArgs } from "../../provider/codexLaunchArgs.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
@@ -506,26 +504,29 @@ function codexDynamicToolOutput(
   return item.success === false ? { success: false } : undefined;
 }
 
-export function projectCodexDynamicToolItem(
-  item: CodexDynamicToolItem,
-): CodexDynamicToolProjection {
-  const output =
-    item.type === "mcpToolCall" ? codexMcpToolOutput(item) : codexDynamicToolOutput(item);
-  const toolName =
-    item.type === "mcpToolCall"
-      ? `${item.server}.${item.tool}`
-      : [trimText(item.namespace), item.tool].filter(Boolean).join(".");
-  const presentation = item.type === "mcpToolCall" ? mcpToolPresentation(item) : {};
-  const title = dynamicToolTitle(toolName, item.arguments) ?? presentation.title;
-  const projection: CodexDynamicToolProjection = {
-    ...presentation,
-    toolName,
-    ...(title ? { title } : {}),
-    input: item.arguments,
-    status: codexItemStatus(item.status).turnItem,
-  };
-  return output === undefined ? projection : { ...projection, output };
-}
+export const projectCodexDynamicToolItem = Effect.fn("CodexAdapterV2.projectDynamicToolItem")(
+  function* (
+    item: CodexDynamicToolItem,
+  ): Effect.fn.Return<CodexDynamicToolProjection, never, Crypto.Crypto> {
+    const output =
+      item.type === "mcpToolCall" ? codexMcpToolOutput(item) : codexDynamicToolOutput(item);
+    const toolName =
+      item.type === "mcpToolCall"
+        ? `${item.server}.${item.tool}`
+        : [trimText(item.namespace), item.tool].filter(Boolean).join(".");
+    const presentation: McpToolPresentation =
+      item.type === "mcpToolCall" ? yield* mcpToolPresentation(item) : {};
+    const title = dynamicToolTitle(toolName, item.arguments) ?? presentation.title;
+    const projection: CodexDynamicToolProjection = {
+      ...presentation,
+      toolName,
+      ...(title ? { title } : {}),
+      input: item.arguments,
+      status: codexItemStatus(item.status).turnItem,
+    };
+    return output === undefined ? projection : { ...projection, output };
+  },
+);
 
 function codexNativeItemRef(nativeItemId: string) {
   return {
@@ -1343,6 +1344,15 @@ const decodeCodexChildModel = Schema.decodeUnknownEffect(
   }),
 );
 
+const decodeCodexChildThread = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    thread: Schema.Struct({
+      id: Schema.String,
+      model: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  }),
+);
+
 export const makeCodexAppServerSpawnCommand = Effect.fn(
   "CodexAdapterV2.makeCodexAppServerSpawnCommand",
 )(function* (input: {
@@ -1364,7 +1374,7 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   });
 });
 
-const makeCodexAppServerClientFactoryCommandLayer = (
+const layerCodexAppServerClientFactoryCommand = (
   options: CodexClient.CodexAppServerClientOptions & {
     readonly command: string;
     readonly args?: ReadonlyArray<string>;
@@ -1480,7 +1490,7 @@ function isSensitiveCodexProtocolKey(key: string): boolean {
   );
 }
 
-export const codexAppServerClientFactoryFromSettingsLayer: Layer.Layer<
+export const layerAppServerClientFactory: Layer.Layer<
   CodexAppServerClientFactory,
   never,
   ChildProcessSpawner.ChildProcessSpawner | ProviderEventLoggers
@@ -1540,6 +1550,7 @@ export const codexAppServerClientFactoryFromSettingsLayer: Layer.Layer<
 
 export type CodexAdapterV2DriverEnv =
   | CodexAppServerClientFactory
+  | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocatorV2
   | Path.Path
@@ -1552,6 +1563,7 @@ export const createCodexAdapterV2 = (
   Effect.gen(function* () {
     const clientFactory = yield* CodexAppServerClientFactory;
     const continuationRequests = yield* ProviderContinuationRequests;
+    const crypto = yield* Crypto.Crypto;
     const fileSystem = yield* FileSystem.FileSystem;
     const hostEnvironment = yield* HostProcessEnvironment;
     const idAllocator = yield* IdAllocatorV2;
@@ -1582,6 +1594,7 @@ export const createCodexAdapterV2 = (
       settings,
       environment: mergeProviderInstanceEnvironment(environment, hostEnvironment),
       clientFactory,
+      crypto,
       fileSystem,
       idAllocator,
       serverConfig,
@@ -1600,12 +1613,13 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
 const layer: Layer.Layer<
   ProviderAdapterV2,
   never,
-  CodexAppServerClientFactory | FileSystem.FileSystem | IdAllocatorV2 | ServerConfig
+  CodexAppServerClientFactory | Crypto.Crypto | FileSystem.FileSystem | IdAllocatorV2 | ServerConfig
 > = Layer.effect(
   ProviderAdapterV2,
   Effect.gen(function* () {
     const clientFactory = yield* CodexAppServerClientFactory;
     const continuationRequests = yield* ProviderContinuationRequests;
+    const crypto = yield* Crypto.Crypto;
     const fileSystem = yield* FileSystem.FileSystem;
     const hostEnvironment = yield* HostProcessEnvironment;
     const idAllocator = yield* IdAllocatorV2;
@@ -1616,6 +1630,7 @@ const layer: Layer.Layer<
       settings: DEFAULT_CODEX_SETTINGS,
       environment: hostEnvironment,
       clientFactory,
+      crypto,
       fileSystem,
       idAllocator,
       serverConfig,
@@ -1636,6 +1651,7 @@ export interface CodexAdapterV2Options {
    * Codex with a current access token.
    */
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
+  readonly crypto: Crypto.Crypto;
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocatorV2Shape;
   readonly serverConfig: ServerConfig["Service"];
@@ -1650,7 +1666,7 @@ export interface CodexAdapterV2Options {
 }
 
 export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): ProviderAdapterV2Shape {
-  const { clientFactory, fileSystem, idAllocator, serverConfig } = adapterOptions;
+  const { clientFactory, crypto, fileSystem, idAllocator, serverConfig } = adapterOptions;
   const continuationRequests = adapterOptions.continuationRequests;
 
   return ProviderAdapterV2.of({
@@ -1711,21 +1727,39 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             ),
           );
         const initialized = yield* Ref.make(false);
-        const ensureInitialized = Effect.gen(function* () {
-          const alreadyInitialized = yield* Ref.get(initialized);
-          if (alreadyInitialized) {
-            return;
-          }
+        // Threads share this app-server, and Codex rejects a second
+        // `initialize`. Callers wait for an in-flight handshake instead of
+        // starting their own; a failed handshake leaves the flag unset so the
+        // next caller retries.
+        const initializePermit = yield* Semaphore.make(1);
+        const ensureInitialized = initializePermit.withPermit(
+          Effect.gen(function* () {
+            const alreadyInitialized = yield* Ref.get(initialized);
+            if (alreadyInitialized) {
+              return;
+            }
 
-          yield* client.request("initialize", {
-            // Codex uses the client name as the request originator, so sessions
-            // identify themselves exactly like the provider probe.
-            clientInfo: buildCodexInitializeParams().clientInfo,
-            capabilities: CODEX_CLIENT_CAPABILITIES,
-          });
-          yield* client.notify("initialized", undefined);
-          yield* Ref.set(initialized, true);
-        });
+            yield* client
+              .request("initialize", {
+                // Codex uses the client name as the request originator, so sessions
+                // identify themselves exactly like the provider probe.
+                clientInfo: buildCodexInitializeParams().clientInfo,
+                capabilities: CODEX_CLIENT_CAPABILITIES,
+              })
+              .pipe(
+                Effect.catchTags({
+                  // A caller interrupted after its `initialize` reached Codex
+                  // leaves the app-server initialized but the flag unset.
+                  CodexAppServerRequestError: (error) =>
+                    error.code === -32600 && error.errorMessage === "Already initialized"
+                      ? Effect.void
+                      : Effect.fail(error),
+                }),
+              );
+            yield* client.notify("initialized", undefined);
+            yield* Ref.set(initialized, true);
+          }),
+        );
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,
@@ -2846,9 +2880,25 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
             if (task.model === null) {
               yield* client.raw
-                .request("thread/resume", { threadId: input.nativeThreadId, excludeTurns: true })
+                .request("thread/read", { threadId: input.nativeThreadId, includeTurns: false })
                 .pipe(
-                  Effect.flatMap(decodeCodexChildModel),
+                  Effect.flatMap(decodeCodexChildThread),
+                  Effect.map((response) =>
+                    response.thread.id === input.nativeThreadId && response.thread.model?.trim()
+                      ? { thread: response.thread, model: response.thread.model }
+                      : null,
+                  ),
+                  Effect.catch(() => Effect.succeed(null)),
+                  Effect.flatMap((response) =>
+                    response === null
+                      ? client.raw
+                          .request("thread/resume", {
+                            threadId: input.nativeThreadId,
+                            excludeTurns: true,
+                          })
+                          .pipe(Effect.flatMap(decodeCodexChildModel))
+                      : Effect.succeed(response),
+                  ),
                   Effect.timeout("5 seconds"),
                   Effect.flatMap((response) =>
                     response.thread.id === input.nativeThreadId &&
@@ -3519,7 +3569,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeItemId: item.id,
             });
             const { ordinal, startedAt } = yield* resolveItemPosition(context, item.id);
-            const projection = projectCodexDynamicToolItem(item);
+            const projection = yield* projectCodexDynamicToolItem(item).pipe(
+              Effect.provideService(Crypto.Crypto, crypto),
+            );
             const node: OrchestrationV2ExecutionNode = {
               id: nodeId,
               threadId: context.projectionThreadId,
@@ -6398,8 +6450,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               yield* Ref.update(pendingRootTurns, (current) =>
                 new Map(current).set(threadId, turnInput),
               );
+              // Cleared on interrupt too, as startTurn does: an interrupted start
+              // must not adopt the native turn that a late turn/started reports.
               yield* client.request("thread/compact/start", { threadId }).pipe(
-                Effect.tapError(() =>
+                Effect.onError(() =>
                   Ref.update(pendingRootTurns, (current) => {
                     const next = new Map(current);
                     next.delete(threadId);
