@@ -1,7 +1,7 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
 import { mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -41,7 +41,12 @@ export function McpAppFullscreenScreen({ route }: McpAppFullscreenScreenProps) {
     }),
   );
   const item = detail.data?.item;
-  const app = item?.type === "dynamic_tool" ? mcpAppFromToolItem(item) : undefined;
+  // One reference per stored item: a new object each render would rebuild the
+  // app's host on every layout change, such as rotating the device.
+  const app = useMemo(
+    () => (item?.type === "dynamic_tool" ? mcpAppFromToolItem(item) : undefined),
+    [item],
+  );
 
   return (
     <View className="flex-1 bg-background" style={{ paddingTop: insets.top }}>

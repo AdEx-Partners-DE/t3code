@@ -316,11 +316,11 @@ interface TimelineRowSharedState {
   /** Sends text an MCP App asked to post, after the user approved it. */
   onSendAppMessage: ((text: string) => Promise<void>) | undefined;
   /**
-   * An MCP App row going full screen (its id) or back (null). The row stays
-   * rendered and the list stops following new output meanwhile, so the app
-   * is not virtualized away while the reader is using it.
+   * An MCP App row entering or leaving full screen. The row stays rendered
+   * and the list stops following new output meanwhile, so the app is not
+   * virtualized away while the reader is using it.
    */
-  onAppFullscreenChange: (rowId: string | null) => void;
+  onAppFullscreenChange: (rowId: string, fullscreen: boolean) => void;
   onRunShellCommand: ((command: string) => void) | undefined;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   displayThreadKey?: string;
@@ -961,13 +961,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   });
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
   const [fullscreenAppRowId, setFullscreenAppRowId] = useState<string | null>(null);
-  const fullscreenAppIndex =
-    fullscreenAppRowId === null ? -1 : rows.findIndex((row) => row.id === fullscreenAppRowId);
-  const fullscreenAlwaysRender = useMemo(
-    () => (fullscreenAppIndex >= 0 ? { indices: [fullscreenAppIndex] } : undefined),
-    [fullscreenAppIndex],
-  );
-  const alwaysRender = citationAlwaysRender ?? restoringAlwaysRender ?? fullscreenAlwaysRender;
+  // Only the row that holds the pin can release it.
+  const onAppFullscreenChange = useCallback((rowId: string, fullscreen: boolean) => {
+    setFullscreenAppRowId((current) => (fullscreen ? rowId : current === rowId ? null : current));
+  }, []);
+  // Every pin holds at once, so navigating to a citation or restoring a
+  // position never drops a full-screen app's row. The app is pinned by key,
+  // which stays right as earlier rows load in.
+  const alwaysRender = useMemo(() => {
+    const indices = restoringAlwaysRender?.indices ?? [];
+    const keys = [
+      ...(citationAlwaysRender?.keys ?? []),
+      ...(fullscreenAppRowId === null ? [] : [fullscreenAppRowId]),
+    ];
+    if (indices.length === 0 && keys.length === 0) return undefined;
+    return {
+      ...(indices.length === 0 ? {} : { indices }),
+      ...(keys.length === 0 ? {} : { keys }),
+    };
+  }, [citationAlwaysRender, restoringAlwaysRender, fullscreenAppRowId]);
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
   const [minimapCurrentIndex, setMinimapCurrentIndex] = useState<number | null>(null);
   const handleAnchorReady = useCallback(
@@ -1188,7 +1200,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onFileOpen,
       onUseArtifactTemplate,
       onSendAppMessage,
-      onAppFullscreenChange: setFullscreenAppRowId,
+      onAppFullscreenChange,
       onFileDownload,
       openPullRequest,
       onOpenTurnDiff,
@@ -1225,6 +1237,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onFileOpen,
       onUseArtifactTemplate,
       onSendAppMessage,
+      onAppFullscreenChange,
       onFileDownload,
       openPullRequest,
       onOpenTurnDiff,
@@ -2759,7 +2772,7 @@ function McpAppTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mcp-app
         revision={row.revision}
         app={row.mcpApp}
         onSendMessage={ctx.onSendAppMessage}
-        onFullscreenChange={(fullscreen) => ctx.onAppFullscreenChange(fullscreen ? row.id : null)}
+        onFullscreenChange={(fullscreen) => ctx.onAppFullscreenChange(row.id, fullscreen)}
       />
     </div>
   );

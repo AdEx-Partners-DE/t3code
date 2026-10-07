@@ -104,7 +104,8 @@ export function McpAppFrame(props: {
     });
     observer.observe(box);
     return () => observer.disconnect();
-  }, []);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Closing and reopening replaces the box.
+  }, [closed]);
 
   const resource = useMemo(
     () => ({
@@ -170,10 +171,13 @@ export function McpAppFrame(props: {
     const shown = box.matches(":popover-open");
     if (displayMode === "fullscreen" && !shown) box.showPopover();
     if (displayMode !== "fullscreen" && shown) box.hidePopover();
-    latest.current.props.onFullscreenChange?.(displayMode === "fullscreen");
+    // Reported only on a change, so an inline row never touches another
+    // row's pin.
+    if (displayMode === "fullscreen") {
+      latest.current.props.onFullscreenChange?.(true);
+      return () => latest.current.props.onFullscreenChange?.(false);
+    }
   }, [displayMode]);
-  // A row leaving the list while full screen frees its pin.
-  useEffect(() => () => latest.current.props.onFullscreenChange?.(false), []);
   // Full screen sits above everything else in the page. Anything that takes
   // focus outside it (an approval, the command palette, a dialog) returns the
   // app inline so it can be seen; so does Escape pressed outside the app.
@@ -419,6 +423,9 @@ export function McpAppFrame(props: {
           size="xs"
           variant="ghost"
           onClick={() => {
+            // The first URL's token may have expired; the asset query keeps
+            // a refreshed one for the new document.
+            if (asset._tag === "Success") setSrc(asset.url);
             setDocumentGeneration((value) => value + 1);
             setClosed(false);
           }}

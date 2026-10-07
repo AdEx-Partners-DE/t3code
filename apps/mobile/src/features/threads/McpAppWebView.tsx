@@ -179,19 +179,24 @@ export function ThreadMcpApp(props: {
   };
   // Minted per view, so only this view's outer page can speak for its app.
   const [secret] = useState(uuidv4);
-  // A new document starts loading and is not yet one that navigated away.
+  // A new document starts loading, is not yet one that navigated away, and
+  // loads the asset query's current URL: the first one's token may be gone.
   const setDocumentKey = (next: (value: number) => number) => {
     setLoaded(false);
     setNavigatedAway(false);
+    if (asset._tag === "Success") setUri(asset.url);
     setDocumentKeyState(next);
   };
   // Back from full screen: the thread shows a fresh inline view of the app.
+  // The listener reads the latest helper, whose URL comes from this render.
+  const openNewDocument = useRef(setDocumentKey);
+  useEffect(() => {
+    openNewDocument.current = setDocumentKey;
+  });
   useEffect(() => {
     if (!presentedFullscreen) return;
     return navigation.addListener("focus", () => {
-      setLoaded(false);
-      setNavigatedAway(false);
-      setDocumentKeyState((value) => value + 1);
+      openNewDocument.current((value) => value + 1);
       setPresentedFullscreen(false);
     });
   }, [navigation, presentedFullscreen]);
