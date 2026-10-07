@@ -1303,7 +1303,7 @@ export function shouldRefocusComposerOnWindowFocus(
   }
   return (
     activeElement.closest(
-      '[role="dialog"], [role="alertdialog"], [data-slot$="-popup"], [data-terminal-owner]',
+      '[role="dialog"], [role="alertdialog"], [data-slot$="-popup"], [data-terminal-owner], [data-mcp-app-fullscreen]',
     ) === null
   );
 }

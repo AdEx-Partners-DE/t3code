@@ -284,7 +284,9 @@ export async function shareGeneratedAttachment(input: {
   readonly attachment: AttachmentFileMetadata;
   readonly signal: AbortSignal;
 }): Promise<boolean> {
-  if ((await availableSharing(input.signal)) === null) return false;
+  // An unavailable share sheet is a refusal for the caller, not a failure.
+  const sharing = await availableSharing(input.signal).catch(() => null);
+  if (sharing === null) return false;
   const cached = await createCachedAttachmentFile(input.attachment);
   try {
     if (input.signal.aborted) return false;

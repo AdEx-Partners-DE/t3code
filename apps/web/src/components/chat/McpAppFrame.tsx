@@ -79,6 +79,8 @@ export function McpAppFrame(props: {
   readonly revision: string;
   readonly app: McpAppReference;
   readonly onSendMessage: ((text: string) => Promise<void>) | undefined;
+  /** The agent waits on the user, in a panel a full-screen app would cover. */
+  readonly awaitingUser?: boolean;
   /** Told when the app enters or leaves full screen. */
   readonly onFullscreenChange?: (fullscreen: boolean) => void;
 }) {
@@ -178,6 +180,11 @@ export function McpAppFrame(props: {
       return () => latest.current.props.onFullscreenChange?.(false);
     }
   }, [displayMode]);
+  // The approval or question the agent waits on renders in the page, so a
+  // full-screen app steps aside for it.
+  useEffect(() => {
+    if (props.awaitingUser === true) setDisplayMode("inline");
+  }, [props.awaitingUser]);
   // Full screen sits above everything else in the page. Anything that takes
   // focus outside it (an approval, the command palette, a dialog) returns the
   // app inline so it can be seen; so does Escape pressed outside the app.
@@ -249,7 +256,10 @@ export function McpAppFrame(props: {
         availableDisplayModes: fullscreenSupported ? ["inline", "fullscreen"] : ["inline"],
         containerDimensions:
           current.displayMode === "fullscreen"
-            ? { width: window.innerWidth, height: window.innerHeight }
+            ? {
+                width: frameRef.current?.clientWidth || window.innerWidth,
+                height: frameRef.current?.clientHeight || window.innerHeight,
+              }
             : { width: current.width, maxHeight: MCP_APP_MAX_HEIGHT },
         platform: isElectron ? "desktop" : "web",
         locale: navigator.language,
@@ -447,6 +457,7 @@ export function McpAppFrame(props: {
         // the frame to another parent would reload the app, and the timeline's
         // rows contain fixed positioning, which the top layer escapes.
         {...(fullscreenSupported ? { popover: "manual" as const } : {})}
+        data-mcp-app-fullscreen={fullscreen ? "" : undefined}
         className={cn(
           "relative size-full overflow-hidden",
           app.prefersBorder === true && !fullscreen && "rounded-lg border border-border",
