@@ -274,3 +274,20 @@ export async function shareLocalAttachment(input: {
     cached.preview.dispose();
   }
 }
+
+/** Shares bytes made on this device (an MCP App's download) through the same cache and share sheet. */
+export async function shareGeneratedAttachment(input: {
+  readonly bytes: Uint8Array;
+  readonly attachment: AttachmentFileMetadata;
+  readonly signal: AbortSignal;
+}): Promise<void> {
+  if ((await availableSharing(input.signal)) === null) return;
+  const cached = await createCachedAttachmentFile(input.attachment);
+  try {
+    if (input.signal.aborted) return;
+    cached.file.write(input.bytes);
+    await cached.preview.share(input.signal);
+  } finally {
+    cached.preview.dispose();
+  }
+}

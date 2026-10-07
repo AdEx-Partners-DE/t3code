@@ -42,6 +42,8 @@ export const McpAppToolInfo = Schema.Struct({
   callable: Schema.Boolean,
   readOnly: Schema.Boolean,
   title: Schema.optional(Schema.String),
+  /** The server's MCP `Tool` definition, which the host passes to the app as `toolInfo`. */
+  tool: Schema.optional(Schema.Unknown),
 });
 export type McpAppToolInfo = typeof McpAppToolInfo.Type;
 
@@ -57,11 +59,23 @@ export const McpAppReadResourceResult = Schema.Struct({
 });
 export type McpAppReadResourceResult = typeof McpAppReadResourceResult.Type;
 
+/**
+ * What an app wants the agent to know on its next turn (`ui/update-model-context`).
+ * Each update replaces the app's previous one; no content clears it.
+ */
+export const McpAppUpdateModelContextInput = Schema.Struct({
+  ...McpAppTarget,
+  content: Schema.optional(Schema.Array(Schema.Unknown)),
+  structuredContent: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+});
+export type McpAppUpdateModelContextInput = typeof McpAppUpdateModelContextInput.Type;
+
 export const McpAppRequestErrorReason = Schema.Literals([
   "not-an-app",
   "provider-unsupported",
   "session-stopped",
   "tool-not-callable",
+  "unsupported-content",
   "request-failed",
 ]);
 export type McpAppRequestErrorReason = typeof McpAppRequestErrorReason.Type;
@@ -86,6 +100,8 @@ export class McpAppRequestError extends Schema.TaggedError<McpAppRequestError>()
         return "The app's thread is not running. Send a message in the thread that created it to use the app again.";
       case "tool-not-callable":
         return "This app cannot call that tool.";
+      case "unsupported-content":
+        return "Only text and structured content are supported.";
       case "request-failed":
         return "The app's MCP server request failed.";
     }

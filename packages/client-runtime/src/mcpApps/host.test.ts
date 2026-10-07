@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { makeMcpAppHost, McpAppHostRefusal, type McpAppHostContext } from "./host.ts";
 
@@ -10,11 +10,14 @@ const app = {
   csp: { connectDomains: ["https://api.weather.test"] },
 };
 
-const context = (theme: "light" | "dark" = "dark"): McpAppHostContext => ({
+const context = (
+  theme: "light" | "dark" = "dark",
+  displayMode: "inline" | "fullscreen" = "inline",
+): McpAppHostContext => ({
   theme,
   styles: { variables: { "--color-background-primary": theme === "dark" ? "#000" : "#fff" } },
-  displayMode: "inline",
-  availableDisplayModes: ["inline"],
+  displayMode,
+  availableDisplayModes: ["inline", "fullscreen"],
   containerDimensions: { width: 600, maxHeight: 2000 },
   platform: "web",
 });
@@ -22,18 +25,39 @@ const context = (theme: "light" | "dark" = "dark"): McpAppHostContext => ({
 // Lets the host settle the promises its callbacks return.
 const flush = () => new Promise<void>((resolve) => queueMicrotask(resolve)).then(() => undefined);
 
+const initialize = (
+  host: ReturnType<typeof makeMcpAppHost>,
+  appCapabilities: Record<string, unknown> = {},
+) => {
+  host.receive({
+    jsonrpc: "2.0",
+    id: "init",
+    method: "ui/initialize",
+    params: { appCapabilities },
+  });
+  host.receive({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+};
+
 function setup(overrides: Partial<Parameters<typeof makeMcpAppHost>[0]> = {}) {
   const sent: Array<Record<string, unknown>> = [];
   let theme: "light" | "dark" = "dark";
+  let mode: "inline" | "fullscreen" = "inline";
   const host = makeMcpAppHost({
     app,
     hostVersion: "1.0.0",
     post: (message) => sent.push(message as Record<string, unknown>),
-    hostContext: () => context(theme),
+    hostContext: () => context(theme, mode),
     callTool: async (input) => ({ content: [{ type: "text", text: `called ${input.name}` }] }),
     readResource: async () => ({ contents: [] }),
     openLink: async () => undefined,
     sendMessage: async () => undefined,
+    updateModelContext: async () => undefined,
+    requestDisplayMode: async (next) => {
+      mode = next === "fullscreen" ? "fullscreen" : "inline";
+      return mode;
+    },
+    downloadFile: async () => undefined,
+    onRequestTeardown: () => undefined,
     onSizeChanged: () => undefined,
     ...overrides,
   });
@@ -207,11 +231,10 @@ describe("makeMcpAppHost", () => {
       method: "ui/open-link",
       params: { url: "javascript:x" },
     });
-    host.receive({ jsonrpc: "2.0", id: 2, method: "ui/update-model-context", params: {} });
     host.receive({ jsonrpc: "2.0", id: 3, method: "sampling/createMessage", params: {} });
     host.receive({ jsonrpc: "2.0", id: 4, method: "ui/message", params: { role: "assistant" } });
     expect(sent.map((message) => (message.error as { code: number }).code)).toEqual([
-      -32602, -32601, -32601, -32602,
+      -32602, -32601, -32602,
     ]);
   });
 
@@ -236,5 +259,141 @@ describe("makeMcpAppHost", () => {
     release();
     await flush();
     expect(sent).toHaveLength(1);
+  });
+
+  it("switches display mode only to one both sides offer, and tells the app", async () => {
+    const { host, sent } = setup();
+    initialize(host, { availableDisplayModes: ["inline", "fullscreen"] });
+    sent.length = 0;
+    host.receive({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "ui/request-display-mode",
+      params: { mode: "pip" },
+    });
+    host.receive({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "ui/request-display-mode",
+      params: { mode: "fullscreen" },
+    });
+    await flush();
+    host.updateHostContext();
+    expect(sent.find((m) => m.id === 1)?.result).toEqual({ mode: "inline" });
+    expect(sent.find((m) => m.id === 2)?.result).toEqual({ mode: "fullscreen" });
+    expect(sent.find((m) => m.method === "ui/notifications/host-context-changed")?.params).toEqual({
+      displayMode: "fullscreen",
+    });
+
+    // An app that declared only inline stays inline.
+    const declined = setup();
+    initialize(declined.host, { availableDisplayModes: ["inline"] });
+    declined.host.receive({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "ui/request-display-mode",
+      params: { mode: "fullscreen" },
+    });
+    await flush();
+    expect(declined.sent.find((m) => m.id === 3)?.result).toEqual({ mode: "inline" });
+  });
+
+  it("forwards model context and download requests, and declares both", async () => {
+    const contexts: Array<unknown> = [];
+    const downloads: Array<unknown> = [];
+    const { host, sent } = setup({
+      updateModelContext: async (update) => void contexts.push(update),
+      downloadFile: async (files) => {
+        downloads.push(files);
+        if (files.length > 1) throw new McpAppHostRefusal("Declined by the user.");
+      },
+    });
+    initialize(host);
+    const capabilities = (
+      sent[0]?.result as { hostCapabilities: Record<string, unknown> } | undefined
+    )?.hostCapabilities;
+    expect(capabilities?.updateModelContext).toEqual({ text: {}, structuredContent: {} });
+    expect(capabilities?.downloadFile).toEqual({});
+
+    host.receive({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "ui/update-model-context",
+      params: { content: [{ type: "text", text: "2 overdue" }], structuredContent: { overdue: 2 } },
+    });
+    const embedded = {
+      type: "resource",
+      resource: { uri: "file:///report.csv", mimeType: "text/csv", text: "a,b" },
+    };
+    host.receive({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "ui/download-file",
+      params: { contents: [embedded] },
+    });
+    host.receive({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "ui/download-file",
+      params: {
+        contents: [embedded, { type: "resource_link", uri: "ui://todos/export", name: "x" }],
+      },
+    });
+    host.receive({ jsonrpc: "2.0", id: 4, method: "ui/download-file", params: { contents: [{}] } });
+    await flush();
+    expect(contexts).toEqual([
+      { content: [{ type: "text", text: "2 overdue" }], structuredContent: { overdue: 2 } },
+    ]);
+    expect(downloads[0]).toEqual([
+      {
+        _tag: "embedded",
+        name: "report.csv",
+        mimeType: "text/csv",
+        bytes: new TextEncoder().encode("a,b"),
+      },
+    ]);
+    expect(sent.find((m) => m.id === 2)?.result).toEqual({});
+    // A refused download is reported in the result, as the draft defines.
+    expect(sent.find((m) => m.id === 3)?.result).toEqual({ isError: true });
+    expect(sent.find((m) => m.id === 4)?.error).toMatchObject({ code: -32602 });
+  });
+
+  it("tears down after the app answers, or after the timeout, and passes on its own request", async () => {
+    vi.useFakeTimers();
+    try {
+      let closeRequested = false;
+      const { host, sent } = setup({ onRequestTeardown: () => (closeRequested = true) });
+      host.receive({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" });
+      expect(closeRequested).toBe(true);
+
+      // Before initialization there is nothing to ask.
+      await host.teardown();
+      expect(sent.some((m) => m.method === "ui/resource-teardown")).toBe(false);
+
+      const answered = setup();
+      initialize(answered.host);
+      let done = false;
+      void answered.host.teardown().then(() => (done = true));
+      const request = answered.sent.find((m) => m.method === "ui/resource-teardown");
+      expect(request).toBeDefined();
+      answered.host.receive({ jsonrpc: "2.0", id: request?.id, result: {} });
+      await vi.runAllTimersAsync();
+      expect(done).toBe(true);
+
+      const silent = setup();
+      initialize(silent.host);
+      let timedOut = false;
+      void silent.host.teardown().then(() => (timedOut = true));
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(timedOut).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(timedOut).toBe(true);
+      // A torn-down host posts nothing more.
+      const before = silent.sent.length;
+      silent.host.updateHostContext();
+      expect(silent.sent).toHaveLength(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

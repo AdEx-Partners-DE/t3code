@@ -408,6 +408,12 @@ export interface ProviderAdapterV2TurnInput {
   readonly message: ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+  /**
+   * What the thread's MCP Apps want the agent to know (`ui/update-model-context`),
+   * latest per app, keyed stably per app. Adapters that host apps deliver it as
+   * application context; others never receive any.
+   */
+  readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
 }
 
 export interface ProviderAdapterV2SteerInput {

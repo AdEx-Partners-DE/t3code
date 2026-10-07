@@ -20,6 +20,7 @@ import type {
 } from "../orchestration-v2/ProviderAdapter.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as McpAppModelContext from "./McpAppModelContext.ts";
 import * as McpAppRequests from "./McpAppRequests.ts";
 
 const threadId = ThreadId.make("thread-app");
@@ -55,6 +56,9 @@ const app = {
   resourceUri: "ui://weather/dashboard",
 };
 
+/** Each app's stored context, keyed by item, as the real store keeps it. */
+const storedContext = new Map<string, string>();
+
 function makeLayer(input: {
   readonly item: OrchestrationV2TurnItem | null;
   readonly mcpApps?: ProviderAdapterV2McpApps;
@@ -63,6 +67,13 @@ function makeLayer(input: {
   return McpAppRequests.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(McpAppModelContext.McpAppModelContext)({
+          set: (entry) =>
+            Effect.sync(() => {
+              if (entry.text.trim() === "") storedContext.delete(entry.itemId);
+              else storedContext.set(entry.itemId, entry.text);
+            }),
+        }),
         Layer.mock(Orchestrator.OrchestratorV2)({
           getTurnItem: () => Effect.succeed(input.item),
         }),
@@ -127,6 +138,7 @@ describe("McpAppRequests", () => {
       assert.deepEqual(yield* requests.toolInfo({ threadId, itemId, name: "refresh" }), {
         callable: true,
         readOnly: true,
+        tool: { name: "refresh", annotations: { readOnlyHint: true } },
       });
     }).pipe(Effect.provide(makeLayer({ item: appItem({ t3McpApp: app }), mcpApps }))),
   );
@@ -143,6 +155,37 @@ describe("McpAppRequests", () => {
       }
       assert.equal(calls.length, before);
     }).pipe(Effect.provide(makeLayer({ item: appItem({ t3McpApp: app }), mcpApps }))),
+  );
+
+  it.effect("keeps each app's latest model context, without a live session", () =>
+    Effect.gen(function* () {
+      const requests = yield* McpAppRequests.McpAppRequests;
+      yield* requests.updateModelContext({
+        threadId,
+        itemId,
+        content: [{ type: "text", text: "Showing 2 todos" }],
+      });
+      // An update replaces the app's context rather than adding to it.
+      yield* requests.updateModelContext({
+        threadId,
+        itemId,
+        content: [{ type: "text", text: "Filtered to overdue" }],
+        structuredContent: { filter: "overdue" },
+      });
+      assert.equal(storedContext.get(itemId), 'Filtered to overdue\n{"filter":"overdue"}');
+      assert.equal(
+        yield* reason(
+          requests.updateModelContext({
+            threadId,
+            itemId,
+            content: [{ type: "image", data: "x" }],
+          }),
+        ),
+        "unsupported-content",
+      );
+      yield* requests.updateModelContext({ threadId, itemId });
+      assert.isFalse(storedContext.has(itemId));
+    }).pipe(Effect.provide(makeLayer({ item: appItem({ t3McpApp: app }), live: false }))),
   );
 
   it.effect("reports why a request cannot run", () =>

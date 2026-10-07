@@ -25,5 +25,9 @@ export function createMcpAppEnvironmentAtoms<R, E>(
       label: "environment-command:mcp-apps:read-resource",
       tag: WS_METHODS.mcpAppsReadResource,
     }),
+    updateModelContext: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:mcp-apps:update-model-context",
+      tag: WS_METHODS.mcpAppsUpdateModelContext,
+    }),
   };
 }

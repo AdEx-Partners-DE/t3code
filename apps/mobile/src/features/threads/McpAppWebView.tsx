@@ -3,6 +3,7 @@ import {
   makeMcpAppHost,
   McpAppHostRefusal,
   mcpAppStyleVariables,
+  mcpResourceBytes,
   type McpAppCallToolResult,
   type McpAppHost,
   type McpAppHostContext,
@@ -12,11 +13,14 @@ import { CommandId, MessageId } from "@t3tools/contracts";
 import { mcpAppAllowAttribute, mcpAppFileName, type McpAppReference } from "@t3tools/shared/mcpApp";
 import * as Predicate from "effect/Predicate";
 import Constants from "expo-constants";
+import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Platform, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
 import { AppText as Text } from "../../components/AppText";
+import { shareGeneratedAttachment } from "../../lib/attachmentDownload";
 import { mobileHtmlRenderTheme } from "../../lib/htmlRenderTheme";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { uuidv4 } from "../../lib/uuid";
@@ -87,7 +91,16 @@ const confirm = (title: string, message: string, action: string) =>
     );
   });
 
-/** A captured MCP App in the thread feed, hosted in a WebView over the MCP Apps bridge. */
+/** Largest file an app may hand the user through `ui/download-file`. */
+const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+
+/**
+ * A captured MCP App, hosted in a WebView over the MCP Apps bridge: inline as
+ * a fixed row of the thread feed, or full screen in its own modal screen. A
+ * WebView cannot move between the two without reloading, so each is its own
+ * view of the app: the inline one is torn down before full screen opens, and
+ * comes back when it closes.
+ */
 export function ThreadMcpApp(props: {
   readonly environmentId: EnvironmentId;
   /** The thread that produced the app, which its requests run against. */
@@ -98,8 +111,19 @@ export function ThreadMcpApp(props: {
   readonly revision: string;
   readonly app: McpAppReference;
   readonly width: number;
+  /** Full screen fills its screen; inline is the feed's fixed row. */
+  readonly displayMode?: "inline" | "fullscreen";
+  /** Full screen only: leaves it, back to the inline row. */
+  readonly onExitFullscreen?: () => void;
+  /** Full screen only: the screen's height, which the app is told it fills. */
+  readonly height?: number;
 }) {
   const { app } = props;
+  const fullscreen = props.displayMode === "fullscreen";
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  // The app asked to be closed; the row falls back to a note that brings it back.
+  const [closed, setClosed] = useState(false);
   const { themeId, themeAppearance, themeVariables, systemColorsActive } =
     useAppearancePreferences();
   const theme = useMemo(
@@ -168,12 +192,44 @@ export function ThreadMcpApp(props: {
   const callTool = useAtomCommand(mcpAppEnvironment.callTool, { reportFailure: false });
   const toolInfo = useAtomCommand(mcpAppEnvironment.toolInfo, { reportFailure: false });
   const readResource = useAtomCommand(mcpAppEnvironment.readResource, { reportFailure: false });
+  const updateModelContext = useAtomCommand(mcpAppEnvironment.updateModelContext, {
+    reportFailure: false,
+  });
+  // The tool's definition, which the app receives as `toolInfo` at initialize.
+  const [toolDefinition, setToolDefinition] = useState<unknown>(undefined);
   // Read by the host on every message, so it always sees current values
   // without being rebuilt (which would drop the app's session).
-  const latest = useRef({ theme, props, callTool, toolInfo, readResource });
+  const live = {
+    theme,
+    props,
+    callTool,
+    toolInfo,
+    readResource,
+    updateModelContext,
+    insets,
+    toolDefinition,
+    navigation,
+  };
+  const latest = useRef(live);
   useEffect(() => {
-    latest.current = { theme, props, callTool, toolInfo, readResource };
+    latest.current = live;
   });
+  useEffect(() => {
+    let cancelled = false;
+    void latest.current
+      .toolInfo({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId, itemId: props.itemId, name: app.tool },
+      })
+      .then((info) => {
+        if (!cancelled && info._tag === "Success" && info.value.tool !== undefined) {
+          setToolDefinition(info.value.tool);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.environmentId, props.threadId, props.itemId, app.tool]);
   const webView = useRef<WebView<object>>(null);
   const hostRef = useRef<McpAppHost | null>(null);
 
@@ -184,15 +240,37 @@ export function ThreadMcpApp(props: {
       const { environmentId, threadId, itemId } = latest.current.props;
       return { environmentId, input: { threadId, itemId } };
     };
-    const hostContext = (): McpAppHostContext => ({
-      theme: latest.current.theme.appearance,
-      styles: { variables: mcpAppStyleVariables(latest.current.theme.variables) },
-      displayMode: "inline",
-      availableDisplayModes: ["inline"],
-      // The feed row is a fixed box, so the app is told its exact height.
-      containerDimensions: { width: latest.current.props.width, height: MCP_APP_ROW_HEIGHT },
-      platform: "mobile",
-    });
+    const hostContext = (): McpAppHostContext => {
+      const current = latest.current;
+      const isFullscreen = current.props.displayMode === "fullscreen";
+      return {
+        theme: current.theme.appearance,
+        styles: { variables: mcpAppStyleVariables(current.theme.variables) },
+        displayMode: isFullscreen ? "fullscreen" : "inline",
+        availableDisplayModes: ["inline", "fullscreen"],
+        // Both are fixed boxes, so the app is told its exact size.
+        containerDimensions: {
+          width: current.props.width,
+          height: isFullscreen ? (current.props.height ?? MCP_APP_ROW_HEIGHT) : MCP_APP_ROW_HEIGHT,
+        },
+        platform: "mobile",
+        locale: Intl.DateTimeFormat().resolvedOptions().locale,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        userAgent: `t3-code/${Constants.expoConfig?.version ?? "0.0.0"}`,
+        deviceCapabilities: { touch: true, hover: false },
+        safeAreaInsets: isFullscreen
+          ? {
+              top: current.insets.top,
+              right: current.insets.right,
+              bottom: current.insets.bottom,
+              left: current.insets.left,
+            }
+          : { top: 0, right: 0, bottom: 0, left: 0 },
+        ...(current.toolDefinition === undefined
+          ? {}
+          : { toolInfo: { tool: current.toolDefinition } }),
+      };
+    };
     const next = makeMcpAppHost({
       app,
       hostVersion: Constants.expoConfig?.version ?? "0.0.0",
@@ -259,13 +337,86 @@ export function ThreadMcpApp(props: {
           createdAt: new Date().toISOString(),
         });
       },
-      // The feed row is a fixed box, so the app's own height only decides
-      // whether it scrolls inside it.
+      updateModelContext: async (context) => {
+        const { environmentId, input } = scope();
+        const result = await latest.current.updateModelContext({
+          environmentId,
+          input: { ...input, ...context },
+        });
+        if (result._tag !== "Success") throw commandFailure(result);
+      },
+      requestDisplayMode: async (mode) => {
+        const current = latest.current.props;
+        if (mode === "fullscreen" && current.displayMode !== "fullscreen") {
+          // The inline view is torn down by the switch (this row unmounts
+          // while the modal covers it); the modal opens a fresh view.
+          latest.current.navigation.navigate("ThreadMcpApp", {
+            environmentId: String(current.environmentId),
+            threadId: String(current.threadId),
+            conversationThreadId: String(current.conversationThreadId),
+            itemId: String(current.itemId),
+            revision: current.revision,
+            app: JSON.stringify(app),
+          });
+          return "fullscreen";
+        }
+        if (mode === "inline" && current.displayMode === "fullscreen") {
+          await hostRef.current?.teardown();
+          current.onExitFullscreen?.();
+          return "inline";
+        }
+        return current.displayMode ?? "inline";
+      },
+      downloadFile: async (files) => {
+        const names = files.map((file) => file.name).join(", ");
+        if (!(await confirm(`Save a file from ${app.server}?`, names, "Save"))) {
+          throw new McpAppHostRefusal("Declined by the user.");
+        }
+        for (const file of files) {
+          // A linked file is read from the app's own server, like its other reads.
+          let bytes: Uint8Array | undefined;
+          let mimeType = file.mimeType ?? "application/octet-stream";
+          if (file._tag === "embedded") {
+            bytes = file.bytes;
+          } else {
+            const { environmentId, input } = scope();
+            const read = await latest.current.readResource({
+              environmentId,
+              input: { ...input, uri: file.uri },
+            });
+            if (read._tag !== "Success") throw commandFailure(read);
+            const content = read.value.contents[0];
+            bytes = mcpResourceBytes(content);
+            const declared = (content as { readonly mimeType?: unknown } | undefined)?.mimeType;
+            if (typeof declared === "string") mimeType = declared;
+          }
+          if (bytes === undefined) throw new McpAppHostRefusal(`${file.name} has no contents.`);
+          if (bytes.byteLength > MAX_DOWNLOAD_BYTES) {
+            throw new McpAppHostRefusal(`${file.name} is too large to save.`);
+          }
+          await shareGeneratedAttachment({
+            bytes,
+            attachment: { name: file.name, mimeType },
+            signal: new AbortController().signal,
+          });
+        }
+      },
+      onRequestTeardown: () => {
+        const current = latest.current.props;
+        if (current.displayMode === "fullscreen") {
+          void hostRef.current?.teardown().then(() => current.onExitFullscreen?.());
+        } else {
+          setClosed(true);
+        }
+      },
+      // Both modes are fixed boxes, so the app's own height only decides
+      // whether it scrolls inside one.
       onSizeChanged: () => undefined,
     });
     hostRef.current = next;
     return () => {
-      next.dispose();
+      // An unmount cannot wait: the request goes out before the view does.
+      void next.teardown();
       hostRef.current = null;
     };
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A restarted view needs a new host.
@@ -275,7 +426,7 @@ export function ThreadMcpApp(props: {
   useEffect(() => {
     hostRef.current?.updateHostContext();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Context changes trigger a resend.
-  }, [theme, props.width]);
+  }, [theme, props.width, props.height, insets, toolDefinition]);
   // A new document gets a new host, which needs the call again.
   useEffect(() => {
     if (toolCall !== undefined) hostRef.current?.setToolCall(toolCall);
@@ -290,8 +441,26 @@ export function ThreadMcpApp(props: {
     [uri, app.permissions, secret],
   );
 
+  if (closed) {
+    return (
+      <View
+        style={{ height: MCP_APP_ROW_HEIGHT, marginBottom: ROW_BOTTOM_MARGIN }}
+        className="items-center justify-center gap-2 rounded-lg border border-border"
+      >
+        <Text className="text-sm text-foreground-muted">The {app.server} app was closed</Text>
+        <Pressable accessibilityRole="button" onPress={() => setClosed(false)}>
+          <Text className="text-sm text-foreground">Show app</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
-    <View style={{ height: MCP_APP_ROW_HEIGHT, marginBottom: ROW_BOTTOM_MARGIN }}>
+    <View
+      style={
+        fullscreen ? { flex: 1 } : { height: MCP_APP_ROW_HEIGHT, marginBottom: ROW_BOTTOM_MARGIN }
+      }
+    >
       {navigatedAway ? (
         <View className="flex-1 items-center justify-center">
           <Text className="text-sm text-foreground-muted">

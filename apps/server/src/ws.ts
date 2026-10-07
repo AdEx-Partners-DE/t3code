@@ -2356,6 +2356,12 @@ const layerWsRpc = (
           observeRpcEffect(WS_METHODS.mcpAppsToolInfo, mcpAppRequests.toolInfo(input), {
             "rpc.aggregate": "provider",
           }),
+        [WS_METHODS.mcpAppsUpdateModelContext]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.mcpAppsUpdateModelContext,
+            mcpAppRequests.updateModelContext(input),
+            { "rpc.aggregate": "provider" },
+          ),
         [WS_METHODS.mcpAppsReadResource]: (input) =>
           observeRpcEffect(WS_METHODS.mcpAppsReadResource, mcpAppRequests.readResource(input), {
             "rpc.aggregate": "provider",

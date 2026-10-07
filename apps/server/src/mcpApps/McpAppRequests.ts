@@ -6,6 +6,7 @@ import {
   type McpAppReadResourceResult,
   type McpAppToolInfo,
   type McpAppToolInfoInput,
+  type McpAppUpdateModelContextInput,
   type ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
@@ -16,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import type {
@@ -24,6 +26,7 @@ import type {
 } from "../orchestration-v2/ProviderAdapter.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as McpAppModelContext from "./McpAppModelContext.ts";
 
 /**
  * Requests an MCP App makes of its own MCP server. The app is resolved from the
@@ -44,8 +47,13 @@ export class McpAppRequests extends Context.Service<
     readonly readResource: (
       input: McpAppReadResourceInput,
     ) => Effect.Effect<McpAppReadResourceResult, McpAppRequestError>;
+    readonly updateModelContext: (
+      input: McpAppUpdateModelContextInput,
+    ) => Effect.Effect<void, McpAppRequestError>;
   }
 >()("t3/mcpApps/McpAppRequests") {}
+
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const readOnlyHint = (tool: ProviderAdapterV2McpTool) =>
   Predicate.isObject(tool.annotations) && tool.annotations.readOnlyHint === true;
@@ -59,12 +67,13 @@ const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const modelContext = yield* McpAppModelContext.McpAppModelContext;
 
   const fail = (threadId: ThreadId, reason: McpAppRequestError["reason"], cause?: unknown) =>
     new McpAppRequestError({ threadId, reason, ...(cause === undefined ? {} : { cause }) });
 
-  /** The app, its provider thread, and the live session's MCP Apps operations. */
-  const resolve = Effect.fn("McpAppRequests.resolve")(function* (input: {
+  /** The app a tool call produced, read from the stored item. */
+  const resolveApp = Effect.fn("McpAppRequests.resolveApp")(function* (input: {
     readonly threadId: ThreadId;
     readonly itemId: TurnItemId;
   }) {
@@ -77,11 +86,20 @@ const make = Effect.gen(function* () {
     if (item === null || app === undefined || item.providerThreadId === null) {
       return yield* fail(input.threadId, "not-an-app");
     }
+    return { app, providerThreadId: item.providerThreadId };
+  });
+
+  /** The app, its provider thread, and the live session's MCP Apps operations. */
+  const resolve = Effect.fn("McpAppRequests.resolve")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly itemId: TurnItemId;
+  }) {
+    const { app, providerThreadId } = yield* resolveApp(input);
     const projection = yield* threadManagement
       .getThreadRecords(input.threadId, ["providerThreads"])
       .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
     const providerThread = projection.providerThreads.find(
-      (candidate) => candidate.id === item.providerThreadId,
+      (candidate) => candidate.id === providerThreadId,
     );
     if (providerThread?.providerSessionId == null) {
       return yield* fail(input.threadId, "session-stopped");
@@ -116,6 +134,7 @@ const make = Effect.gen(function* () {
       callable: tool !== undefined && mcpAppToolCallableByApp(tool._meta),
       readOnly: tool !== undefined && readOnlyHint(tool),
       ...(title === undefined ? {} : { title }),
+      ...(tool === undefined ? {} : { tool }),
     } satisfies McpAppToolInfo;
   });
 
@@ -150,7 +169,43 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
   });
 
-  return McpAppRequests.of({ callTool, toolInfo, readResource });
+  // Context is state for the agent's next turn, so it needs the app but not a
+  // live session. Text blocks are kept as written and structured content as
+  // JSON; other content kinds are not declared by the host.
+  const updateModelContext = Effect.fn("McpAppRequests.updateModelContext")(function* (
+    input: McpAppUpdateModelContextInput,
+  ) {
+    const { app } = yield* resolveApp(input);
+    const texts: Array<string> = [];
+    for (const block of input.content ?? []) {
+      if (!Predicate.isObject(block) || block.type !== "text" || typeof block.text !== "string") {
+        return yield* fail(input.threadId, "unsupported-content");
+      }
+      texts.push(block.text);
+    }
+    if (input.structuredContent !== undefined) {
+      texts.push(encodeJson(input.structuredContent));
+    }
+    const text = texts.join("\n").trim();
+    if (text.length > McpAppModelContext.MCP_APP_MODEL_CONTEXT_MAX_CHARS) {
+      return yield* fail(
+        input.threadId,
+        "request-failed",
+        new Error("Model context is too large."),
+      );
+    }
+    yield* modelContext
+      .set({
+        threadId: input.threadId,
+        itemId: input.itemId,
+        server: app.server,
+        tool: app.tool,
+        text,
+      })
+      .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
+  });
+
+  return McpAppRequests.of({ callTool, toolInfo, readResource, updateModelContext });
 });
 
 export const layer = Layer.effect(McpAppRequests, make);

@@ -3,7 +3,9 @@ import {
   makeMcpAppHost,
   McpAppHostRefusal,
   mcpAppStyleVariables,
+  mcpResourceBytes,
   type McpAppCallToolResult,
+  type McpAppDisplayMode,
   type McpAppHost,
   type McpAppHostContext,
 } from "@t3tools/client-runtime/mcp-apps";
@@ -16,12 +18,15 @@ import {
   mcpAppFileName,
   type McpAppReference,
 } from "@t3tools/shared/mcpApp";
+import { Minimize2Icon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useAssetUrlState } from "~/assets/assetUrls";
 import { APP_VERSION } from "~/branding";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
+import { Button } from "~/components/ui/button";
+import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
 import { useTurnItemDetail } from "~/state/queries";
 import { mcpAppEnvironment } from "~/state/mcpApps";
@@ -36,11 +41,26 @@ const commandFailure = (result: {
   );
 };
 
+/** Largest file an app may hand the user through `ui/download-file`. */
+const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+
+/** Saves a file through the browser's own download, which asks where when it is set to. */
+function saveBlob(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  // After the click has started the download.
+  queueMicrotask(() => URL.revokeObjectURL(url));
+}
+
 /**
  * An MCP App inline in the thread: the captured document in an opaque-origin
  * frame, speaking the MCP Apps bridge. Its tool calls and resource reads reach
  * its own MCP server through the environment; calls to tools the server does
- * not mark read-only, and chat messages, ask first.
+ * not mark read-only, chat messages, and downloads ask first. Full screen keeps
+ * the same frame (and the app's state) and only restyles its box.
  */
 export function McpAppFrame(props: {
   readonly environmentId: EnvironmentId;
@@ -58,6 +78,10 @@ export function McpAppFrame(props: {
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(MCP_APP_DEFAULT_HEIGHT);
   const [navigatedAway, setNavigatedAway] = useState(false);
+  const [displayMode, setDisplayMode] = useState<McpAppDisplayMode>("inline");
+  // The app asked to be closed; the row falls back to its plain tool call.
+  const [closed, setClosed] = useState(false);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
   useLayoutEffect(() => {
     const box = boxRef.current;
     if (!box) return;
@@ -102,13 +126,72 @@ export function McpAppFrame(props: {
   const callTool = useAtomCommand(mcpAppEnvironment.callTool, { reportFailure: false });
   const toolInfo = useAtomCommand(mcpAppEnvironment.toolInfo, { reportFailure: false });
   const readResource = useAtomCommand(mcpAppEnvironment.readResource, { reportFailure: false });
+  const updateModelContext = useAtomCommand(mcpAppEnvironment.updateModelContext, {
+    reportFailure: false,
+  });
+  // The tool's definition, which the app receives as `toolInfo` at initialize.
+  const [toolDefinition, setToolDefinition] = useState<unknown>(undefined);
 
   // Read by the host on every message, so it always sees current values
   // without being rebuilt (which would drop the app's session).
-  const latest = useRef({ theme, width, props, callTool, toolInfo, readResource });
+  const live = {
+    theme,
+    width,
+    props,
+    callTool,
+    toolInfo,
+    readResource,
+    updateModelContext,
+    displayMode,
+    viewport,
+    toolDefinition,
+  };
+  const latest = useRef(live);
   useEffect(() => {
-    latest.current = { theme, width, props, callTool, toolInfo, readResource };
+    latest.current = live;
   });
+
+  // Full screen follows the window's size, and Escape returns the app inline.
+  useEffect(() => {
+    const box = boxRef.current;
+    if (box === null) return;
+    const shown = box.matches(":popover-open");
+    if (displayMode === "fullscreen" && !shown) box.showPopover();
+    if (displayMode !== "fullscreen" && shown) box.hidePopover();
+  }, [displayMode]);
+  useEffect(() => {
+    if (displayMode !== "fullscreen") return;
+    const measure = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    measure();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDisplayMode("inline");
+    };
+    window.addEventListener("resize", measure);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [displayMode]);
+
+  // The definition is read once per app, before the host is built, so the
+  // initialize response can carry it; a failure only leaves it out.
+  useEffect(() => {
+    let cancelled = false;
+    void latest.current
+      .toolInfo({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId, itemId: props.itemId, name: app.tool },
+      })
+      .then((info) => {
+        if (!cancelled && info._tag === "Success" && info.value.tool !== undefined) {
+          setToolDefinition(info.value.tool);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.environmentId, props.threadId, props.itemId, app.tool]);
   const hostRef = useRef<McpAppHost | null>(null);
   // The bridge belongs to the captured document. A frame that navigates keeps
   // its window, so a second load stops the app rather than letting a page T3
@@ -126,16 +209,31 @@ export function McpAppFrame(props: {
 
   useEffect(() => {
     if (src === null) return;
-    const hostContext = (): McpAppHostContext => ({
-      theme: latest.current.theme.appearance,
-      styles: { variables: mcpAppStyleVariables(latest.current.theme.variables) },
-      displayMode: "inline",
-      availableDisplayModes: ["inline"],
-      containerDimensions: { width: latest.current.width, maxHeight: MCP_APP_MAX_HEIGHT },
-      platform: "web",
-      locale: navigator.language,
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    });
+    const hostContext = (): McpAppHostContext => {
+      const current = latest.current;
+      return {
+        theme: current.theme.appearance,
+        styles: { variables: mcpAppStyleVariables(current.theme.variables) },
+        displayMode: current.displayMode,
+        availableDisplayModes: ["inline", "fullscreen"],
+        containerDimensions:
+          current.displayMode === "fullscreen"
+            ? { width: current.viewport.width, height: current.viewport.height }
+            : { width: current.width, maxHeight: MCP_APP_MAX_HEIGHT },
+        platform: isElectron ? "desktop" : "web",
+        locale: navigator.language,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        userAgent: `t3-code/${APP_VERSION}`,
+        deviceCapabilities: {
+          touch: window.matchMedia("(pointer: coarse)").matches,
+          hover: window.matchMedia("(hover: hover)").matches,
+        },
+        safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
+        ...(current.toolDefinition === undefined
+          ? {}
+          : { toolInfo: { tool: current.toolDefinition } }),
+      };
+    };
     const target = () => frameRef.current?.contentWindow ?? null;
     const scope = () => {
       const { environmentId, threadId, itemId } = latest.current.props;
@@ -191,7 +289,56 @@ export function McpAppFrame(props: {
         if (approved !== true) throw new McpAppHostRefusal("Declined by the user.");
         await send(text);
       },
+      updateModelContext: async (context) => {
+        const { environmentId, input } = scope();
+        const result = await latest.current.updateModelContext({
+          environmentId,
+          input: { ...input, ...context },
+        });
+        if (result._tag !== "Success") throw commandFailure(result);
+      },
+      requestDisplayMode: async (mode) => {
+        setDisplayMode(mode);
+        return mode;
+      },
+      downloadFile: async (files) => {
+        const names = files.map((file) => file.name).join(", ");
+        const approved = await requestConfirmDialog(`Save ${names} from ${app.server}?`);
+        if (approved !== true) throw new McpAppHostRefusal("Declined by the user.");
+        for (const file of files) {
+          // A linked file is read from the app's own server, like its other reads.
+          let bytes: Uint8Array | undefined;
+          let mimeType = file.mimeType ?? "application/octet-stream";
+          if (file._tag === "embedded") {
+            bytes = file.bytes;
+          } else {
+            const { environmentId, input } = scope();
+            const read = await latest.current.readResource({
+              environmentId,
+              input: { ...input, uri: file.uri },
+            });
+            if (read._tag !== "Success") throw commandFailure(read);
+            const content = read.value.contents[0];
+            bytes = mcpResourceBytes(content);
+            const declared = (content as { readonly mimeType?: unknown } | undefined)?.mimeType;
+            if (typeof declared === "string") mimeType = declared;
+          }
+          if (bytes === undefined) throw new McpAppHostRefusal(`${file.name} has no contents.`);
+          if (bytes.byteLength > MAX_DOWNLOAD_BYTES) {
+            throw new McpAppHostRefusal(`${file.name} is too large to save.`);
+          }
+          // A copy backed by a plain ArrayBuffer, which Blob requires.
+          saveBlob(new Blob([bytes.slice()], { type: mimeType }), file.name);
+        }
+      },
+      onRequestTeardown: () => {
+        if (latest.current.displayMode === "fullscreen") setDisplayMode("inline");
+        else setClosed(true);
+      },
       onSizeChanged: (size) => {
+        // Full screen is a fixed box; what the app reports there would leave
+        // the inline row its full-screen height on the way back.
+        if (latest.current.displayMode === "fullscreen") return;
         if (size.height !== undefined) setHeight(clampMcpAppHeight(size.height));
       },
     });
@@ -203,7 +350,9 @@ export function McpAppFrame(props: {
     window.addEventListener("message", receive);
     return () => {
       window.removeEventListener("message", receive);
-      host.dispose();
+      // An unmount cannot wait: the request goes out before the frame does,
+      // which is all a list that recycles rows can offer the app.
+      void host.teardown();
       hostRef.current = null;
     };
   }, [src, app]);
@@ -212,7 +361,7 @@ export function McpAppFrame(props: {
   useEffect(() => {
     hostRef.current?.updateHostContext();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Context changes trigger a resend.
-  }, [theme, width]);
+  }, [theme, width, displayMode, viewport]);
 
   // A new document gets a new host, which needs the call again.
   useEffect(() => {
@@ -220,36 +369,74 @@ export function McpAppFrame(props: {
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Each new document needs the call.
   }, [toolCall, src]);
 
+  // An app that asked to close keeps the box an inline row had, so the
+  // timeline does not jump, and says how to bring it back.
+  if (closed) {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-muted-foreground text-xs">
+        <span>The {app.server} app was closed</span>
+        <Button size="xs" variant="ghost" onClick={() => setClosed(false)}>
+          Show app
+        </Button>
+      </div>
+    );
+  }
+
+  const fullscreen = displayMode === "fullscreen";
   return (
-    <div
-      ref={boxRef}
-      className={cn(
-        "relative overflow-hidden",
-        app.prefersBorder === true && "rounded-lg border border-border",
-      )}
-      style={{ height }}
-    >
-      {navigatedAway ? (
-        <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
-          The {app.server} app left its page and was stopped
-        </p>
-      ) : src !== null ? (
-        <iframe
-          ref={frameRef}
-          src={src}
-          title={`${app.server} app`}
-          // Never allow-same-origin: the opaque origin keeps the app out of the session.
-          sandbox="allow-scripts allow-forms"
-          allow={mcpAppAllowAttribute(app.permissions)}
-          onLoad={onFrameLoad}
-          className="block size-full border-0"
-          style={{ colorScheme: theme.appearance }}
-        />
-      ) : asset._tag === "Failure" ? (
-        <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
-          Unable to load the {app.server} app
-        </p>
-      ) : null}
+    // The row keeps its inline height while the app is full screen, so the
+    // timeline does not jump; the box itself is what goes full screen.
+    <div style={{ height }}>
+      <div
+        ref={boxRef}
+        // Full screen is the same box shown in the browser's top layer: moving
+        // the frame to another parent would reload the app, and the timeline's
+        // rows contain fixed positioning, which the top layer escapes.
+        popover="manual"
+        className={cn(
+          "relative size-full overflow-hidden",
+          app.prefersBorder === true && !fullscreen && "rounded-lg border border-border",
+          fullscreen
+            ? "fixed inset-0 m-0 flex h-dvh max-h-none w-dvw max-w-none flex-col border-0 bg-background p-0"
+            : // A closed popover is hidden; inline, the box is a plain block.
+              "block! static! m-0 border-0 bg-transparent p-0 text-inherit",
+        )}
+      >
+        {fullscreen ? (
+          <div className="flex h-10 shrink-0 items-center justify-between border-border border-b px-3 text-sm">
+            <span className="truncate">{app.server}</span>
+            <Button
+              aria-label="Exit full screen"
+              size="icon-sm"
+              variant="ghost"
+              onClick={() => setDisplayMode("inline")}
+            >
+              <Minimize2Icon className="size-4" />
+            </Button>
+          </div>
+        ) : null}
+        {navigatedAway ? (
+          <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
+            The {app.server} app left its page and was stopped
+          </p>
+        ) : src !== null ? (
+          <iframe
+            ref={frameRef}
+            src={src}
+            title={`${app.server} app`}
+            // Never allow-same-origin: the opaque origin keeps the app out of the session.
+            sandbox="allow-scripts allow-forms"
+            allow={mcpAppAllowAttribute(app.permissions)}
+            onLoad={onFrameLoad}
+            className={cn("block w-full border-0", fullscreen ? "min-h-0 flex-1" : "h-full")}
+            style={{ colorScheme: theme.appearance }}
+          />
+        ) : asset._tag === "Failure" ? (
+          <p className="flex size-full items-center justify-center text-muted-foreground text-xs">
+            Unable to load the {app.server} app
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }
