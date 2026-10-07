@@ -1,6 +1,5 @@
 import {
   ORCHESTRATION_CACHE_SCHEMA_VERSION,
-  StoredOrchestrationShellSnapshot,
   StoredOrchestrationThreadSnapshot,
   Persistence,
 } from "@t3tools/client-runtime/platform";
@@ -11,7 +10,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as MobileDatabase from "../persistence/mobile-database";
-import { encodeStoredShellSnapshot } from "./shell-cache-encoding";
+import { decodeStoredShellSnapshot, encodeStoredShellSnapshot } from "./shell-cache-encoding";
 import {
   attachProjectFaviconDatabase,
   projectFaviconDatabaseCache,
@@ -32,9 +31,6 @@ const StoredVcsRefs = Schema.Struct({
   refs: VcsListRefsResult,
 });
 
-const decodeStoredShellSnapshot = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(StoredOrchestrationShellSnapshot),
-);
 const decodeStoredThreadSnapshot = Schema.decodeUnknownEffect(
   Schema.fromJsonString(StoredOrchestrationThreadSnapshot),
 );

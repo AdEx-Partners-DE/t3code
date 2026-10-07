@@ -1,6 +1,10 @@
-import { StoredOrchestrationShellSnapshot } from "@t3tools/client-runtime/platform";
-import { OrchestrationV2ThreadShellJson } from "@t3tools/contracts";
+import {
+  type Persistence,
+  StoredOrchestrationShellSnapshot,
+} from "@t3tools/client-runtime/platform";
+import { OrchestrationV2ThreadShellJson, ThreadPullRequestLink } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 const ROWS_PER_CHUNK = 32;
@@ -59,4 +63,64 @@ export const encodeStoredShellSnapshot = Effect.fnUntraced(function* (
   const archivedThreads = yield* encodeRows(snapshot.archivedThreads);
   yield* yieldBetweenChunks;
   return yield* encodeEnvelope({ ...stored, snapshot: { ...snapshot, threads, archivedThreads } });
+});
+
+const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeStoredShell = Schema.decodeUnknownEffect(StoredOrchestrationShellSnapshot);
+const decodePullRequestLinks = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.UndefinedOr(Schema.Array(ThreadPullRequestLink))),
+);
+
+/** Removes each parsed thread row's pull request links and returns them in row order. */
+function detachPullRequests(parsed: unknown): ReadonlyArray<unknown> {
+  if (!Predicate.isObject(parsed) || !Predicate.isObject(parsed.snapshot)) return [];
+  const rows: unknown = parsed.snapshot.threads;
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row: unknown) => {
+    if (!Predicate.isObject(row)) return undefined;
+    const links = row.pullRequests;
+    delete row.pullRequests;
+    return links;
+  });
+}
+
+/**
+ * Decode the shell cache payload with each thread's pull request links left out. Those links
+ * are most of a large cache's decode cost and only feed PR badges, so the thread list can
+ * paint first; `loadPullRequests` decodes them after yielding to the host.
+ */
+export const decodeStoredShellSnapshot = Effect.fnUntraced(function* (
+  raw: string,
+): Effect.fn.Return<
+  Omit<typeof StoredOrchestrationShellSnapshot.Type, "snapshot"> & {
+    readonly snapshot: Persistence.CachedShellSnapshot;
+  },
+  Schema.SchemaError
+> {
+  const parsed = yield* decodeJson(raw);
+  const rawLinks = detachPullRequests(parsed);
+  const stored = yield* decodeStoredShell(parsed);
+  const threadIds = stored.snapshot.threads.map((thread) => thread.id);
+  const loadPullRequests = yieldToHost.pipe(
+    // Schema decoding runs when called, so build the decode only after the yield.
+    Effect.andThen(Effect.suspend(() => decodePullRequestLinks(rawLinks))),
+    Effect.map(
+      (links) =>
+        new Map(
+          threadIds.flatMap((threadId, index) => {
+            const threadLinks = links[index];
+            return threadLinks === undefined ? [] : [[threadId, threadLinks] as const];
+          }),
+        ),
+    ),
+    // The rows stay usable without links; the next server snapshot replaces them.
+    Effect.catch((cause) =>
+      Effect.logWarning("Discarding unreadable cached pull request links.", {
+        environmentId: stored.environmentId,
+        cause: String(cause),
+      }).pipe(Effect.as(new Map())),
+    ),
+  );
+  const snapshot: Persistence.CachedShellSnapshot = { ...stored.snapshot, loadPullRequests };
+  return { ...stored, snapshot };
 });

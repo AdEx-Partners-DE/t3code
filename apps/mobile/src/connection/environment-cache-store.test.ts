@@ -10,12 +10,14 @@ import {
   ThreadId,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadDetailSnapshot,
+  type ThreadPullRequestLink,
   type VcsListRefsResult,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import { vi } from "vite-plus/test";
 import * as Deferred from "effect/Deferred";
@@ -253,6 +255,60 @@ describe("mobile SQLite environment cache store", () => {
       );
     }),
   );
+
+  it.effect("returns cached threads before their pull request links, which load after", () =>
+    Effect.gen(function* () {
+      const memory = makeDatabase();
+      const store = yield* make().pipe(
+        Effect.provideService(MobileDatabase.MobileDatabase, memory.database),
+      );
+      const link: ThreadPullRequestLink = {
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 42,
+        url: "https://github.com/pingdotgg/t3code/pull/42",
+        source: "agent",
+        linkedAt: "2026-07-29T12:00:00.000Z",
+        snapshot: null,
+        stack: null,
+      };
+      const linked = { ...SHELL_SNAPSHOT.threads[0]!, pullRequests: [link] };
+      const unlinked = { ...SHELL_SNAPSHOT.threads[0]!, id: ThreadId.make("thread-2") };
+      yield* store.saveShell(ENVIRONMENT_ID, {
+        ...SHELL_SNAPSHOT,
+        threads: [linked, unlinked],
+      });
+
+      const shell = Option.getOrThrow(yield* store.loadShell(ENVIRONMENT_ID));
+      expect(shell.threads.map((thread) => thread.pullRequests)).toEqual([undefined, undefined]);
+      const links = yield* shell.loadPullRequests!;
+      expect([...links]).toEqual([[THREAD_ID, [link]]]);
+    }),
+  );
+
+  it.effect("keeps cached threads when their pull request links cannot be read", () => {
+    const messages: Array<unknown> = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    return Effect.gen(function* () {
+      const memory = makeDatabase();
+      const store = yield* make().pipe(
+        Effect.provideService(MobileDatabase.MobileDatabase, memory.database),
+      );
+      yield* store.saveShell(ENVIRONMENT_ID, SHELL_SNAPSHOT);
+      const id = cacheId(ENVIRONMENT_ID, "shell", "snapshot");
+      const payload = JSON.parse(memory.values.get(id)!);
+      payload.snapshot.threads[0].pullRequests = [{ number: -1 }];
+      memory.values.set(id, JSON.stringify(payload));
+
+      const shell = Option.getOrThrow(yield* store.loadShell(ENVIRONMENT_ID));
+      expect(shell.threads.map((thread) => thread.id)).toEqual([THREAD_ID]);
+      expect((yield* shell.loadPullRequests!).size).toBe(0);
+      expect(messages).toHaveLength(1);
+      expect(memory.removed).toEqual([]);
+    }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+  });
 
   it.effect("round-trips schema-validated VCS refs", () =>
     Effect.gen(function* () {

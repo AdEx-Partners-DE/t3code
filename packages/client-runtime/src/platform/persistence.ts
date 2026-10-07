@@ -4,6 +4,7 @@ import {
   type OrchestrationV2ThreadDetailSnapshot,
   type ServerConfig,
   type ThreadId,
+  type ThreadPullRequestLink,
   type VcsListRefsResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -77,12 +78,23 @@ export class ConnectionRegistrationStore extends Context.Service<
   }
 >()("@t3tools/client-runtime/platform/persistence/ConnectionRegistrationStore") {}
 
+/**
+ * A cached shell may arrive before its threads' pull request links are decoded, so the thread
+ * list can paint first. `loadPullRequests` then decodes those links by thread id; until it
+ * runs, those threads carry no `pullRequests`.
+ */
+export interface CachedShellSnapshot extends OrchestrationV2ShellSnapshot {
+  readonly loadPullRequests?: Effect.Effect<
+    ReadonlyMap<ThreadId, ReadonlyArray<ThreadPullRequestLink>>
+  >;
+}
+
 export class EnvironmentCacheStore extends Context.Service<
   EnvironmentCacheStore,
   {
     readonly loadShell: (
       environmentId: EnvironmentId,
-    ) => Effect.Effect<Option.Option<OrchestrationV2ShellSnapshot>, ConnectionPersistenceError>;
+    ) => Effect.Effect<Option.Option<CachedShellSnapshot>, ConnectionPersistenceError>;
     readonly saveShell: (
       environmentId: EnvironmentId,
       snapshot: OrchestrationV2ShellSnapshot,

@@ -57,17 +57,21 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const snapshotLoader = yield* ShellSnapshotLoader.ShellSnapshotLoader;
   const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
   const environmentId = supervisor.target.environmentId;
-  const cachedSnapshot = yield* cache.loadShell(environmentId).pipe(
+  const cached = yield* cache.loadShell(environmentId).pipe(
     Effect.catch((error) =>
       Effect.logWarning("Could not load cached environment shell.").pipe(
         Effect.annotateLogs({
           environmentId,
           ...safeErrorLogAttributes(error),
         }),
-        Effect.as(Option.none<OrchestrationV2ShellSnapshot>()),
+        Effect.as(Option.none<Persistence.CachedShellSnapshot>()),
       ),
     ),
   );
+  const cachedSnapshot = Option.map(cached, (value): OrchestrationV2ShellSnapshot => {
+    const { loadPullRequests, ...snapshot } = value;
+    return loadPullRequests === undefined ? value : snapshot;
+  });
   const state = yield* SubscriptionRef.make<EnvironmentShellState>({
     snapshot: cachedSnapshot,
     status: shellStatusForSnapshot(cachedSnapshot),
@@ -215,6 +219,36 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       yield* Queue.offer(persistence, next.snapshot.value);
     }
   });
+
+  // The cached rows are already visible; their pull request links fill in once decoded.
+  // Only rows still holding the cached object take links, because a row the server has sent
+  // since carries its own. A new session's full snapshot replaces every cached row before
+  // anything is persisted, so a row still waiting for its links is never saved.
+  const deferredPullRequests = Option.flatMap(cached, (value) =>
+    Option.fromUndefinedOr(value.loadPullRequests),
+  );
+  if (Option.isSome(deferredPullRequests) && Option.isSome(cachedSnapshot)) {
+    const cachedThreads = new Set(cachedSnapshot.value.threads);
+    yield* deferredPullRequests.value.pipe(
+      Effect.flatMap((linksByThreadId) =>
+        SubscriptionRef.updateSome(state, (current) =>
+          Option.flatMap(current.snapshot, (snapshot) => {
+            let changed = false;
+            const threads = snapshot.threads.map((thread) => {
+              const links = linksByThreadId.get(thread.id);
+              if (links === undefined || !cachedThreads.has(thread)) return thread;
+              changed = true;
+              return { ...thread, pullRequests: links };
+            });
+            return changed
+              ? Option.some({ ...current, snapshot: Option.some({ ...snapshot, threads }) })
+              : Option.none();
+          }),
+        ),
+      ),
+      Effect.forkScoped,
+    );
+  }
 
   const foregroundResubscriptions = Option.match(wakeups, {
     onNone: () => Stream.never,

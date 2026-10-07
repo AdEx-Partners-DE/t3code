@@ -3,6 +3,8 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ShellStreamItem,
+  ThreadId,
+  type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -29,7 +31,7 @@ import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { makeEnvironmentShellState } from "./shell.ts";
 import * as ShellSnapshotLoader from "./shellSnapshotHttp.ts";
-import { v2Project, v2ShellSnapshot } from "./orchestrationV2TestFixtures.ts";
+import { v2Project, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -951,6 +953,103 @@ describe("environment shell synchronization", () => {
       const state = yield* SubscriptionRef.get(shellState);
       expect(Option.getOrThrow(state.snapshot).snapshotSequence).toBe(4);
       expect(Option.getOrThrow(state.snapshot).projects[0]?.title).toBe("Server reset");
+    }),
+  );
+
+  it.effect("fills deferred cached pull request links without overwriting newer rows", () =>
+    Effect.gen(function* () {
+      const link = (number: number): ThreadPullRequestLink => ({
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number,
+        url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+        source: "agent",
+        linkedAt: "2026-06-20T00:00:00.000Z",
+        snapshot: null,
+        stack: null,
+      });
+      const otherThreadId = ThreadId.make("thread-other");
+      const cachedSnapshot: OrchestrationV2ShellSnapshot = {
+        ...v2ShellSnapshot,
+        snapshotSequence: 5,
+        threads: [v2ThreadShell, { ...v2ThreadShell, id: otherThreadId }],
+      };
+      const linksReady = yield* Deferred.make<void>();
+      const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
+      const client = {
+        [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: () => Stream.fromQueue(events),
+      } as unknown as WsRpcProtocolClient;
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make(Option.some(session(client))),
+        prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () =>
+          Effect.succeedSome({
+            ...cachedSnapshot,
+            loadPullRequests: Deferred.await(linksReady).pipe(
+              Effect.as(
+                new Map([
+                  [v2ThreadShell.id, [link(1)]],
+                  [otherThreadId, [link(2)]],
+                ]),
+              ),
+            ),
+          }),
+        saveShell: () => Effect.void,
+        loadThread: () => Effect.succeedNone,
+        saveThread: () => Effect.void,
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeedNone,
+        saveServerConfig: () => Effect.void,
+        loadVcsRefs: () => Effect.succeedNone,
+        saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+      // No HTTP snapshot, so the cached rows stay until the socket sends deltas.
+      const snapshotLoader = ShellSnapshotLoader.ShellSnapshotLoader.of({
+        load: () => Effect.succeedNone,
+      });
+      const shellState = yield* makeEnvironmentShellState().pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+        Effect.provideService(ShellSnapshotLoader.ShellSnapshotLoader, snapshotLoader),
+      );
+
+      const threadsOf = (state: {
+        readonly snapshot: Option.Option<OrchestrationV2ShellSnapshot>;
+      }) => Option.getOrThrow(state.snapshot).threads;
+      expect(threadsOf(yield* SubscriptionRef.get(shellState))).toEqual(cachedSnapshot.threads);
+
+      // The server updates one row before the cached links finish decoding.
+      const serverRow = { ...v2ThreadShell, title: "From server", pullRequests: [link(9)] };
+      yield* Queue.offer(events, {
+        kind: "thread.updated",
+        sequence: 6,
+        location: "active",
+        thread: serverRow,
+      });
+      yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter((state) => threadsOf(state)[0]?.title === "From server"),
+        Stream.runHead,
+      );
+
+      yield* Deferred.succeed(linksReady, undefined);
+      const filled = yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.map(threadsOf),
+        Stream.filter((threads) => threads[1]?.pullRequests !== undefined),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      expect(filled[0]).toBe(serverRow);
+      expect(filled[1]?.pullRequests).toEqual([link(2)]);
     }),
   );
 });
