@@ -297,13 +297,10 @@ export function ThreadMcpApp(props: {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         userAgent: `t3-code/${Constants.expoConfig?.version ?? "0.0.0"}`,
         deviceCapabilities: { touch: true, hover: false },
+        // The full-screen modal keeps the top and bottom insets for its
+        // header and the home indicator; only the sides reach the app.
         safeAreaInsets: isFullscreen
-          ? {
-              top: current.insets.top,
-              right: current.insets.right,
-              bottom: current.insets.bottom,
-              left: current.insets.left,
-            }
+          ? { top: 0, right: current.insets.right, bottom: 0, left: current.insets.left }
           : { top: 0, right: 0, bottom: 0, left: 0 },
         ...(current.toolDefinition === undefined
           ? {}
