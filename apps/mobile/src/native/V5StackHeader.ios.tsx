@@ -80,7 +80,9 @@ function convertMenu(menu: MenuInput, id: string): StackHeaderMenuIOS {
         keepsMenuPresented: item.keepsMenuPresented,
         disabled: item.disabled,
         destructive: item.destructive,
-        subtitle: "subtitle" in item ? item.subtitle : undefined,
+        subtitle:
+          ("subtitle" in item ? item.subtitle : undefined) ??
+          ("description" in item ? item.description : undefined),
         state: item.state,
       },
     ];
