@@ -76,6 +76,11 @@ The `.deb` updates itself like the other desktop builds. It asks for your
 password to install each update. If your desktop has no password prompt, the
 update fails. Download the new `.deb` and install it the same way.
 
+On Linux, the desktop app installs a `t3` command at `~/.local/bin/t3` that runs
+its bundled server, unless you already have one there. Add `~/.local/bin` to
+your `PATH` to run `t3` directly. An AppImage you move needs to be opened once
+from its new place before `t3` works again.
+
 ### Windows Subsystem for Linux
 
 Choose a WSL distro in **Settings → Connections** to run agents and projects
