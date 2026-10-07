@@ -355,7 +355,7 @@ distinguishable from human-authored messages.
 List, read, and launch results include `link`, a Markdown link of the form
 `[title](t3-thread://v1/<environmentId>/<threadId>)` that clients open as the
 thread. List and read results also report `snoozed` and `snoozedUntil`, and
-`t3_thread_list` filters on `snoozed`. The server's `isSnoozed` must match the
+`t3_thread_list` filters on `snoozed`. The server's `isSnoozed` follows the
 client's `effectiveSnoozed`, so agents and the sidebar agree: a snoozed thread
 wakes early when it has a pending request, fails, or completes after the snooze.
 

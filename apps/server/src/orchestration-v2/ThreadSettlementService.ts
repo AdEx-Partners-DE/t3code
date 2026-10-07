@@ -167,7 +167,10 @@ export function isAutoSettlementCandidate(
  * Whether a thread is parked on its snooze: its wake time is in the future and
  * it has not raised its hand with a pending request, a fresh failure, or work
  * that completed after the snooze. Server twin of the client's
- * `effectiveSnoozed`, so agents and the sidebar agree on what is snoozed.
+ * `effectiveSnoozed`, so agents and the sidebar agree on what is snoozed. One
+ * difference: a failure counts as fresh when its run completed after the
+ * snooze, like `isAutoSettlementCandidate`. The client compares the shell's
+ * update time, so a rename can wake a failed thread there but not here.
  */
 export function isSnoozed(
   thread: Pick<
