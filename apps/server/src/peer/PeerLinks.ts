@@ -2,6 +2,7 @@ import {
   AuthMcpClientAccess,
   EnvironmentHttpApi,
   EnvironmentId,
+  MCP_PEER_LINK_SOFTWARE_ID,
   type PeerLink,
   type PeerLinkCreateInput,
   PeerLinkError,
@@ -159,7 +160,13 @@ const make = Effect.gen(function* () {
       const rejected = (message: string) =>
         new PeerLinkError({ reason: "pairing_rejected", message });
       const registered = yield* client.mcpOAuth
-        .register({ payload: { client_name: clientName, redirect_uris: [LINK_REDIRECT_URI] } })
+        .register({
+          payload: {
+            client_name: clientName,
+            redirect_uris: [LINK_REDIRECT_URI],
+            software_id: MCP_PEER_LINK_SOFTWARE_ID,
+          },
+        })
         .pipe(
           Effect.mapError((error) =>
             rejected(`The peer refused to register this environment: ${error.message}`),

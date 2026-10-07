@@ -48,20 +48,33 @@ interface Seen {
 }
 const nothingSeen: Seen = { sends: [], waits: [], launches: [] };
 
+/** The box user's own thread, which no link started. */
+const usersThread = ThreadId.make("thread:box-users-own");
+
 /**
- * B's threads: one `auto` thread in `boxProject`, whose run finishes on the
- * third wait. Every send and wait is recorded.
+ * B's threads: one `auto` thread in `boxProject` that the laptop's link
+ * started, whose run finishes on the third wait, and the box user's own.
+ * Every send and wait is recorded.
  */
-const boxThreads = (seen: Ref.Ref<Seen>) => {
-  const shell = { ...liveThreadShell(boxThread, { runtimeMode: "auto" }), projectId: boxProject };
+const boxThreads = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>) => {
+  const base = { ...liveThreadShell(boxThread, { runtimeMode: "auto" }), projectId: boxProject };
+  const linked = Ref.get(linkSession).pipe(
+    Effect.map((sessionId) => ({ ...base, linkOrigin: { sessionId, label: "T3 Code · Laptop" } })),
+  );
+  const users = { ...liveThreadShell(usersThread, { runtimeMode: "auto" }), projectId: boxProject };
   const run = (status: OrchestrationV2Run["status"]) =>
     ({ id: boxRun, status }) as unknown as OrchestrationV2Run;
-  const projection = { thread: shell, runs: [run("running")], runtimeRequests: [] } as never;
+  const shellOf = (threadId: ThreadId) =>
+    threadId === boxThread ? linked : Effect.succeed(threadId === usersThread ? users : null);
+  const projectionOf = (threadId: ThreadId) =>
+    shellOf(threadId).pipe(
+      Effect.map((thread) => ({ thread, runs: [run("running")], runtimeRequests: [] }) as never),
+    );
   return Layer.mock(ThreadManagement.ThreadManagementService)({
-    getThreadShell: (threadId) => Effect.succeed(threadId === boxThread ? shell : null),
-    getProjectThreadRecords: () => Effect.succeed(projection),
-    getThreadRecords: () => Effect.succeed(projection),
-    listProjectThreads: () => Effect.succeed([shell] as never),
+    getThreadShell: shellOf,
+    getProjectThreadRecords: (input) => projectionOf(input.threadId),
+    getThreadRecords: (threadId) => projectionOf(threadId),
+    listProjectThreads: () => linked.pipe(Effect.map((shell) => [shell] as never)),
     sendToThread: (input) =>
       Ref.update(seen, (current) => ({ ...current, sends: [...current.sends, input] })).pipe(
         Effect.as({ run: run("running"), delivery: "started" } as never),
@@ -97,8 +110,12 @@ const boxLaunches = (seen: Ref.Ref<Seen>) =>
       ),
   });
 
-/** The orchestrator and project toolkits on B's real `/mcp`, behind its real OAuth. */
-const serveBox = (seen: Ref.Ref<Seen>) =>
+/**
+ * The orchestrator and project toolkits on B's real `/mcp`, behind its real
+ * OAuth. `linkSession` is filled in once A links, so B's fixture thread reads
+ * as one that link started.
+ */
+const serveBox = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>) =>
   servePeer(
     box,
     Layer.merge(
@@ -106,7 +123,7 @@ const serveBox = (seen: Ref.Ref<Seen>) =>
       McpHttpServer.layerProjectRegistration,
     ).pipe(
       Layer.provide(NodeCrypto.layer),
-      Layer.provide(boxThreads(seen)),
+      Layer.provide(boxThreads(seen, linkSession)),
       Layer.provide(boxLaunches(seen)),
       Layer.provide(
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
@@ -219,9 +236,11 @@ it.effect("an agent here works on a linked environment's threads within its own 
   Effect.scoped(
     Effect.gen(function* () {
       const seen = yield* Ref.make<Seen>(nothingSeen);
-      const b = yield* serveBox(seen);
+      const linkSession = yield* Ref.make("");
+      const b = yield* serveBox(seen, linkSession);
       const a = yield* makeLaptop;
       yield* linkTo(a.links, b, "auto");
+      yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
 
       const listed = yield* a.call("thread:laptop-full", "t3_environment_links", {});
       expect(listed.structuredContent).toMatchObject({
@@ -269,9 +288,11 @@ it.effect("keeps a forwarded wait short and its retries scoped to the caller", (
   Effect.scoped(
     Effect.gen(function* () {
       const seen = yield* Ref.make<Seen>(nothingSeen);
-      const b = yield* serveBox(seen);
+      const linkSession = yield* Ref.make("");
+      const b = yield* serveBox(seen, linkSession);
       const a = yield* makeLaptop;
       yield* linkTo(a.links, b, "auto");
+      yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
 
       const waited = yield* a.call("thread:laptop-full", "t3_thread_wait", {
         environmentId: box.environmentId,
@@ -319,9 +340,11 @@ it.effect("launches in a linked environment with the caller's modes, retry-safe"
   Effect.scoped(
     Effect.gen(function* () {
       const seen = yield* Ref.make<Seen>(nothingSeen);
-      const b = yield* serveBox(seen);
+      const linkSession = yield* Ref.make("");
+      const b = yield* serveBox(seen, linkSession);
       const a = yield* makeLaptop;
       yield* linkTo(a.links, b, "full-access");
+      yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
       const codex = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
       const launch = (caller: string, args: Record<string, unknown> = {}) =>
         a.call(caller, "t3_thread_launch", {
@@ -370,9 +393,11 @@ it.effect("refuses what a linked environment cannot take before anything leaves"
   Effect.scoped(
     Effect.gen(function* () {
       const seen = yield* Ref.make<Seen>(nothingSeen);
-      const b = yield* serveBox(seen);
+      const linkSession = yield* Ref.make("");
+      const b = yield* serveBox(seen, linkSession);
       const a = yield* makeLaptop;
       yield* linkTo(a.links, b, "auto");
+      yield* Ref.set(linkSession, (yield* b.linkedSessions)[0]!.sessionId);
       yield* Ref.set(b.bearers, []);
 
       const unknown = yield* a.call("thread:laptop-full", "t3_thread_read", {

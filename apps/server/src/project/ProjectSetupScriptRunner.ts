@@ -1,4 +1,4 @@
-import { ProjectId, type ProjectScript } from "@t3tools/contracts";
+import { ProjectId, type ProjectScript, ThreadId } from "@t3tools/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   projectScriptRuntimeEnv,
@@ -15,6 +15,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectService from "./ProjectService.ts";
@@ -50,8 +51,18 @@ export interface ProjectSetupScriptOutputLine {
   readonly line: string;
 }
 
+/**
+ * A thread a linked environment started does not run this project's setup
+ * script: the script is the user's own code, and the link only grants T3's
+ * tools (see `mcp/linkOrigin.ts`).
+ */
+export interface ProjectSetupScriptRunnerResultSkippedForLink {
+  readonly status: "skipped-for-link";
+}
+
 export type ProjectSetupScriptRunnerResult =
   | ProjectSetupScriptRunnerResultNoScript
+  | ProjectSetupScriptRunnerResultSkippedForLink
   | ProjectSetupScriptRunnerResultStarted;
 
 export interface ProjectSetupScriptRunnerInput {
@@ -199,6 +210,7 @@ function wrapCommandForCompletion(
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
+  const threads = yield* ProjectionStore.ProjectionStoreV2;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
@@ -295,6 +307,10 @@ export const make = Effect.gen(function* () {
   const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
     "ProjectSetupScriptRunner.runForThread",
   )(function* (input) {
+    const thread = yield* threads
+      .getThreadShell(ThreadId.make(input.threadId))
+      .pipe(Effect.orElseSucceed(() => null));
+    if (thread?.linkOrigin !== undefined) return { status: "skipped-for-link" } as const;
     const errorContext = {
       threadId: input.threadId,
       worktreePath: input.worktreePath,
