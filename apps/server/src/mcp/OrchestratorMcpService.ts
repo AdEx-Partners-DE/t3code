@@ -673,13 +673,11 @@ function listItemFromShell(
 function threadDetail(
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "runtimeRequests">,
   itemCount: number,
+  shell: OrchestrationV2ThreadShell,
   context: ThreadViewContext,
 ): OrchestratorMcpThreadDetail {
   const latest = ThreadManagementService.latestRun(projection);
   const active = ThreadManagementService.latestActiveRun(projection);
-  const status = active?.status ?? latest?.status ?? "idle";
-  const pendingRequest =
-    projection.runtimeRequests.find((request) => request.status === "pending") ?? null;
   return {
     threadId: projection.thread.id,
     link: formatThreadLink({
@@ -691,7 +689,7 @@ function threadDetail(
     title: projection.thread.title,
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
-    status,
+    status: active?.status ?? latest?.status ?? "idle",
     latestRunId: latest?.id ?? null,
     activeRunId: active?.id ?? null,
     providerInstanceId: projection.thread.modelSelection.instanceId,
@@ -718,16 +716,8 @@ function threadDetail(
     ).length,
     archived: projection.thread.archivedAt !== null,
     ...threadSettlement(projection.thread),
-    ...threadSnooze(
-      {
-        snoozedUntil: projection.thread.snoozedUntil,
-        snoozedAt: projection.thread.snoozedAt,
-        latestRunCompletedAt: latest?.completedAt ?? null,
-        status,
-        pendingRuntimeRequest: pendingRequest,
-      },
-      context.nowMs,
-    ),
+    // From the shell, like the list, so read and list agree on snooze state.
+    ...threadSnooze(shell, context.nowMs),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.thread.updatedAt),
   };
@@ -1074,7 +1064,7 @@ const make = Effect.gen(function* () {
           "contextTransfers",
         ])
         .pipe(Effect.mapError(threadManagementFailure));
-      return { parent, target } as const;
+      return { parent, target, shell } as const;
     });
 
   const loadProviders = providerRegistry.getProviders;
@@ -2312,7 +2302,7 @@ const make = Effect.gen(function* () {
       }),
     readThread: (scope, input) =>
       Effect.gen(function* () {
-        const { parent, target } = yield* loadReadableThread(scope, input.threadId);
+        const { parent, target, shell } = yield* loadReadableThread(scope, input.threadId);
         const view = input.view ?? "messages";
         const afterPosition = input.afterPosition ?? -1;
         const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
@@ -2385,7 +2375,7 @@ const make = Effect.gen(function* () {
           }
         }
         return {
-          thread: threadDetail(target, timeline.totalItems, {
+          thread: threadDetail(target, timeline.totalItems, shell, {
             environmentId: scope.environmentId,
             nowMs: yield* Clock.currentTimeMillis,
           }),

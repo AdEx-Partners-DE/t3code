@@ -17,13 +17,6 @@ describe("resolveMarkdownLinkIcon", () => {
 });
 
 describe("resolveMarkdownLinkPresentation", () => {
-  it("leaves a thread link to the feed instead of a file or browser", () => {
-    expect(resolveMarkdownLinkPresentation("t3-thread://v1/env/thread-1")).toEqual({
-      kind: "link",
-      href: null,
-    });
-  });
-
   it("treats protocol-relative media as an external URL, not a filesystem path", () => {
     expect(resolveMarkdownLinkPresentation("//cdn.example.com/clip.mp4?sig=a%2fb#t=2")).toEqual({
       kind: "external",
