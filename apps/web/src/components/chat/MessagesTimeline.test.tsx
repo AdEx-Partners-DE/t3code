@@ -2906,6 +2906,8 @@ describe("thread entry with the real virtualizer", () => {
     // jsdom supplies no layout. Give the real virtualizer a 600px viewport
     // and 180px message rows, twice its 90px estimate.
     let lastRowHeight = 180;
+    let pendingScrollHeight: number | undefined;
+    let pendingViewportHeight: number | undefined;
     const rectSpy = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
       .mockImplementation(function (this: HTMLElement) {
@@ -2934,12 +2936,20 @@ describe("thread entry with the real virtualizer", () => {
     const heightSpy = vi
       .spyOn(HTMLElement.prototype, "clientHeight", "get")
       .mockImplementation(function (this: HTMLElement) {
-        return this.classList.contains("messages-timeline-scroll") ? 600 : 0;
+        return this.classList.contains("messages-timeline-scroll")
+          ? (pendingViewportHeight ?? 600)
+          : 0;
       });
     const widthSpy = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
     const scrollHeightSpy = vi
       .spyOn(HTMLElement.prototype, "scrollHeight", "get")
       .mockImplementation(function (this: HTMLElement) {
+        if (
+          pendingScrollHeight !== undefined &&
+          this.classList.contains("messages-timeline-scroll")
+        ) {
+          return pendingScrollHeight;
+        }
         return Math.max(
           600,
           ...Array.from(this.querySelectorAll<HTMLElement>("div")).map((node) =>
@@ -3135,35 +3145,44 @@ describe("thread entry with the real virtualizer", () => {
           />
         );
       }
-      lastRowHeight = 180;
-      await act(async () => root.render(<UnsignaledNavigationTimeline />));
-      await flushLayout();
-      expect(unsignaledNavigation).not.toHaveBeenCalled();
-      const readingViewport = props.listRef.current!.getScrollableNode();
-      lastRowHeight = 4000;
-      await flushLayout();
-      lastRowHeight = 180;
-      await flushLayout();
-      expect(unsignaledNavigation).not.toHaveBeenCalled();
-      expect(
-        Math.abs(
-          readingViewport.scrollHeight - readingViewport.clientHeight - readingViewport.scrollTop,
-        ),
-      ).toBeLessThanOrEqual(1);
-      await act(async () => {
-        // Accessibility and external scrolling need not dispatch an input gesture.
-        readingViewport.scrollTop = 100;
-        readingViewport.dispatchEvent(new Event("scroll"));
-      });
-      await flushLayout();
-      expect(unsignaledNavigation).toHaveBeenCalledTimes(1);
-      // Newly visible rows replace their estimates before subsequent streaming.
-      const readingOffset = readingViewport.scrollTop;
-      expect(readingOffset).toBeLessThan(300);
-      await act(async () => appendMessage());
-      lastRowHeight = 4000;
-      await flushLayout();
-      expect(readingViewport.scrollTop).toBe(readingOffset);
+      for (const geometryChange of ["none", "shrink", "resize"] as const) {
+        unsignaledNavigation.mockClear();
+        lastRowHeight = 180;
+        await act(async () => root.render(<UnsignaledNavigationTimeline key={geometryChange} />));
+        await flushLayout();
+        expect(unsignaledNavigation).not.toHaveBeenCalled();
+        const readingViewport = props.listRef.current!.getScrollableNode();
+        lastRowHeight = 4000;
+        await flushLayout();
+        lastRowHeight = 180;
+        await flushLayout();
+        expect(unsignaledNavigation).not.toHaveBeenCalled();
+        expect(
+          Math.abs(
+            readingViewport.scrollHeight - readingViewport.clientHeight - readingViewport.scrollTop,
+          ),
+        ).toBeLessThanOrEqual(1);
+        await act(async () => {
+          // A shrink and external navigation can coalesce into one scroll event.
+          // The browser first clamps the old offset, then the reader moves farther up.
+          if (geometryChange === "shrink") pendingScrollHeight = readingViewport.scrollHeight - 100;
+          if (geometryChange === "resize") pendingViewportHeight = 700;
+          readingViewport.scrollTop = readingViewport.scrollHeight - readingViewport.clientHeight;
+          readingViewport.scrollTop = 100;
+          readingViewport.dispatchEvent(new Event("scroll"));
+        });
+        pendingScrollHeight = undefined;
+        pendingViewportHeight = undefined;
+        await flushLayout();
+        // Newly visible rows replace their estimates before subsequent streaming.
+        const readingOffset = readingViewport.scrollTop;
+        expect(readingOffset).toBeLessThan(300);
+        expect(unsignaledNavigation).toHaveBeenCalledTimes(1);
+        await act(async () => appendMessage());
+        lastRowHeight = 4000;
+        await flushLayout();
+        expect(readingViewport.scrollTop).toBe(readingOffset);
+      }
 
       // Interrupt a native entry target before its completion frames, then measure a tall tail.
       await act(async () => root.unmount());

@@ -192,20 +192,14 @@ export function observeTimelineScrollNavigation(
   onManualNavigation: () => void,
 ): () => void {
   let previousOffset = node.scrollTop;
-  let previousHeight = node.scrollHeight;
-  let previousViewport = node.clientHeight;
   const handleScroll = () => {
     const offset = node.scrollTop;
     const height = node.scrollHeight;
     const viewport = node.clientHeight;
-    const movedAway =
-      offset < previousOffset - 1 &&
-      height >= previousHeight &&
-      viewport === previousViewport &&
-      height - viewport - offset > 40;
+    // Layout changes may clamp the old offset; only movement beyond that is navigation.
+    const clampedPreviousOffset = Math.min(previousOffset, Math.max(0, height - viewport));
+    const movedAway = offset < clampedPreviousOffset - 1 && height - viewport - offset > 40;
     previousOffset = offset;
-    previousHeight = height;
-    previousViewport = viewport;
     if (movedAway && isFollowingEnd()) onManualNavigation();
   };
   // Observe navigation before the virtualizer handles the event and schedules follow.
