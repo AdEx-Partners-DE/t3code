@@ -557,6 +557,11 @@ export function MessagesTimeline(props: MessagesTimelineProps) {
   }, [findOpen, onManualNavigation]);
   return (
     <ConversationTimeline
+      // Navigation readiness belongs to the same mount as the virtualized list.
+      key={JSON.stringify([
+        props.entryThreadKey ?? props.routeThreadKey,
+        props.displayThreadKey ?? props.routeThreadKey,
+      ])}
       {...props}
       {...find}
       liveFollowEnabled={!findOpen && props.liveFollowEnabled}
@@ -595,7 +600,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   turnDiffSummaries,
   routeThreadKey,
   displayThreadKey,
-  entryThreadKey = routeThreadKey,
   onOpenTurnDiff,
   onOpenThread,
   parentThreadLink = null,
@@ -647,24 +651,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     () => rememberedDisclosures?.attempts ?? new Set(),
   );
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  const listIdentityRef = useRef(listIdentityKey);
   const previousLatestRunRef = useRef(latestRun);
   // The new thread must open with an instant end pin, even mid-turn.
-  const [settlingListIdentity, setSettlingListIdentity] = useState<string | null>(null);
-  let paintedExpandedRunIds = expandedRunIds;
-  let paintedExpandedWorkGroupIds = expandedWorkGroupIds;
-  let paintedExpandedAttemptIds = expandedAttemptIds;
-  if (listIdentityRef.current !== listIdentityKey) {
-    listIdentityRef.current = listIdentityKey;
-    previousLatestRunRef.current = latestRun;
-    setSettlingListIdentity(listIdentityKey);
-    paintedExpandedRunIds = rememberedDisclosures?.runs ?? new Set();
-    paintedExpandedWorkGroupIds = rememberedDisclosures?.workGroups ?? new Set();
-    paintedExpandedAttemptIds = rememberedDisclosures?.attempts ?? new Set();
-    setExpandedRunIds(paintedExpandedRunIds);
-    setExpandedWorkGroupIds(paintedExpandedWorkGroupIds);
-    setExpandedAttemptIds(paintedExpandedAttemptIds);
-  }
+  const [settlingListIdentity, setSettlingListIdentity] = useState<string | null>(listIdentityKey);
   const citationThreadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
   const openPullRequest = useOpenPrLink(citationThreadRef ?? undefined);
   const expandCitedRun = useCallback((runId: RunId) => {
@@ -845,11 +834,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
     );
   }, [activeFindRunId]);
   const visibleExpandedRunIds = useMemo(() => {
-    if (!activeFindRunId || paintedExpandedRunIds.has(activeFindRunId)) {
-      return paintedExpandedRunIds;
+    if (!activeFindRunId || expandedRunIds.has(activeFindRunId)) {
+      return expandedRunIds;
     }
-    return new Set(paintedExpandedRunIds).add(activeFindRunId);
-  }, [activeFindRunId, paintedExpandedRunIds]);
+    return new Set(expandedRunIds).add(activeFindRunId);
+  }, [activeFindRunId, expandedRunIds]);
 
   const activeFindAttemptId = activeFindMatch
     ? timelineEntries.find((entry) => entry.id === activeFindMatch.entryId)?.attempt?.id
@@ -862,10 +851,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }, [activeFindAttemptId]);
   const visibleExpandedAttemptIds = useMemo(
     () =>
-      activeFindAttemptId && !paintedExpandedAttemptIds.has(activeFindAttemptId)
-        ? new Set(paintedExpandedAttemptIds).add(activeFindAttemptId)
-        : paintedExpandedAttemptIds,
-    [activeFindAttemptId, paintedExpandedAttemptIds],
+      activeFindAttemptId && !expandedAttemptIds.has(activeFindAttemptId)
+        ? new Set(expandedAttemptIds).add(activeFindAttemptId)
+        : expandedAttemptIds,
+    [activeFindAttemptId, expandedAttemptIds],
   );
 
   const rowsProjectionRef = useRef<{
@@ -1099,9 +1088,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
 
   useEffect(() => {
     rememberTimelineDisclosures(listIdentityKey, {
-      runs: paintedExpandedRunIds,
-      workGroups: paintedExpandedWorkGroupIds,
-      attempts: paintedExpandedAttemptIds,
+      runs: expandedRunIds,
+      workGroups: expandedWorkGroupIds,
+      attempts: expandedAttemptIds,
       workGroupState: workGroupViewState,
     });
     const frame = requestAnimationFrame(handleScroll);
@@ -1109,9 +1098,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }, [
     handleScroll,
     listIdentityKey,
-    paintedExpandedRunIds,
-    paintedExpandedWorkGroupIds,
-    paintedExpandedAttemptIds,
+    expandedRunIds,
+    expandedWorkGroupIds,
+    expandedAttemptIds,
     workGroupViewState,
     rows.length,
   ]);
@@ -1439,8 +1428,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
               />
             ) : null}
             <LegendList<MessagesTimelineRow>
-              // Loading can retain the previous timeline after the requested thread changes.
-              key={JSON.stringify([entryThreadKey, listIdentityKey])}
               ref={setTimelineList}
               data={rows}
               extraData={`${listIdentityKey}:${rows.length}`}
@@ -1448,9 +1435,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
               getItemType={getItemType}
               renderItem={renderItem}
               estimatedItemSize={90}
-              initialScrollAtEnd={
-                !findActive && citationRequest === null
-              }
+              initialScrollAtEnd={!findActive && citationRequest === null}
               // Legend needs a data refresh to mount new pins without a scroll event.
               dataVersion={readyCitationRequest?.key ?? listIdentityKey}
               {...(alwaysRender ? { alwaysRender } : {})}
@@ -1469,10 +1454,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
                     : TIMELINE_MAINTAIN_SCROLL_AT_END
               }
               maintainVisibleContentPosition={
-                findActive ||
-                citationPositioning
-                  ? false
-                  : maintainVisibleContentPosition
+                findActive || citationPositioning ? false : maintainVisibleContentPosition
               }
               maintainScrollAtEndThreshold={1}
               onScroll={handleScroll}

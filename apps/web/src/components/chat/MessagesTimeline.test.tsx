@@ -30,6 +30,7 @@ const activityTestState = vi.hoisted(() => ({
   expandedRuns: false,
   subagentTooltips: false,
   nativeList: false,
+  onListLoad: null as (() => void) | null,
 }));
 
 // Expose tooltip contents in the renderer without requiring a browser portal.
@@ -84,6 +85,7 @@ vi.mock("./MessagesTimeline.logic", async (importOriginal) => {
 
 beforeEach(() => {
   activityTestState.nativeList = false;
+  activityTestState.onListLoad = null;
   activityTestState.subagentTooltips = false;
   activityTestState.expanded = false;
   activityTestState.expandedRuns = false;
@@ -120,8 +122,10 @@ vi.mock("@legendapp/list/react", async (importOriginal) => {
     className?: string;
     contentInsetEndAdjustment?: number;
     ref?: Ref<LegendListRef>;
+    onLoad?: () => void;
   }) => {
     if (activityTestState.nativeList) return <actual.LegendList {...props} />;
+    activityTestState.onListLoad = props.onLoad ?? null;
     if (props.anchoredEndSpace) {
       props.anchoredEndSpace.onSizeChanged?.(240);
       props.anchoredEndSpace.onReady?.({ anchorIndex: props.anchoredEndSpace.anchorIndex });
@@ -2771,6 +2775,85 @@ describe("disclosure state across thread switches", () => {
       await act(async () => root.unmount());
       container.remove();
       vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("thread search across list remounts", () => {
+  type Event = "load" | "switch";
+  async function checkSequence(events: readonly Event[], sequenceId: string) {
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const onLoadEarlier = vi.fn();
+    const props = buildProps();
+    const renderThread = async (key: string) => {
+      await act(async () => {
+        root.render(
+          <MessagesTimeline
+            {...props}
+            routeThreadKey={key}
+            timelineEntries={[buildUserTimelineEntry("recent message")]}
+            findExpanded
+            findQuery="needle"
+            activeFindMatch={{ entryId: `older-match-${key}`, runId: null, occurrence: 0 }}
+            historyControls={{ hasMoreHistory: true, loading: false, error: null, onLoadEarlier }}
+          />,
+        );
+      });
+    };
+    let threadIndex = 0;
+    let listLoaded = false;
+    try {
+      await renderThread(`search-load:${sequenceId}:${threadIndex}`);
+      expect(onLoadEarlier).not.toHaveBeenCalled();
+      for (const event of events) {
+        onLoadEarlier.mockClear();
+        if (event === "switch") {
+          threadIndex += 1;
+          listLoaded = false;
+          await renderThread(`search-load:${sequenceId}:${threadIndex}`);
+          expect(onLoadEarlier, events.join(" → ")).not.toHaveBeenCalled();
+        } else {
+          await act(async () => activityTestState.onListLoad!());
+          expect(onLoadEarlier, events.join(" → ")).toHaveBeenCalledTimes(listLoaded ? 0 : 1);
+          listLoaded = true;
+        }
+      }
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  }
+
+  it("waits for each new list to load before paging toward a search result", async () => {
+    await checkSequence(["load", "switch", "load"], "regression");
+    await checkSequence(["load", "load", "switch"], "repeated-load-regression");
+  });
+
+  it("never pages before the current list loads across all three-event orderings", async () => {
+    // Repeated load callbacks and switches exercise the two independent actors.
+    const events: readonly Event[] = ["load", "switch"];
+    for (const first of events) {
+      for (const second of events) {
+        for (const third of events) {
+          const sequence = [first, second, third];
+          await checkSequence(sequence, sequence.join("-"));
+        }
+      }
     }
   });
 });
