@@ -726,6 +726,9 @@ const TYPE_TO_FOCUS_INTERACTIVE_SELECTOR = [
   '[role="switch"]',
   '[role="tab"]',
 ].join(",");
+const TIMELINE_SPACE_ACTIVATION_SELECTOR = TYPE_TO_FOCUS_INTERACTIVE_SELECTOR.split(",")
+  .filter((selector) => selector !== "a[href]")
+  .join(",");
 // Popups match only while open or closing: some stay mounted when closed,
 // such as the chat header actions menu.
 const TYPE_TO_FOCUS_FLOATING_LAYER_SELECTOR = [
@@ -6537,6 +6540,11 @@ export default function ChatView(props: ChatViewProps) {
     // (reading or selecting up there must hold position); clicking near
     // the live edge keeps following.
     const handlePointerDown = (event: PointerEvent) => {
+      if (
+        event.button === 1 &&
+        eventPathContainsSelector(event, `a[href],${TYPE_TO_FOCUS_EDITABLE_SELECTOR}`)
+      )
+        return;
       if (event.target === scrollNode || event.button === 1) {
         if (contentScrollsUp()) {
           handleManualNavigation();
@@ -6568,6 +6576,8 @@ export default function ChatView(props: ChatViewProps) {
       ) {
         return;
       }
+      if (event.key === " " && eventPathContainsSelector(event, TIMELINE_SPACE_ACTIVATION_SELECTOR))
+        return;
       const scrollKey = event.key === " " ? (event.shiftKey ? "PageUp" : "PageDown") : event.key;
       if (!["PageUp", "Home", "ArrowUp", "PageDown", "End", "ArrowDown"].includes(scrollKey))
         return;
@@ -6799,8 +6809,8 @@ export default function ChatView(props: ChatViewProps) {
     activeTimelineAnchorIndexRef.current = null;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    // Environment identity is part of the scroll session too.
-  }, [routeThreadKey]);
+    // Readiness starts a fresh scroll session after an outgoing thread was held.
+  }, [timelineFollowEntryKey]);
 
   useEffect(() => {
     if (!activeThread?.id || terminalUiState.terminalOpen) return;
