@@ -2779,8 +2779,8 @@ describe("disclosure state across thread switches", () => {
   });
 });
 
-describe("thread search across list remounts", () => {
-  type Event = "load" | "switch";
+describe("thread search across retained list updates", () => {
+  type Event = "load" | "switch" | "empty";
   async function checkSequence(events: readonly Event[], sequenceId: string) {
     vi.unstubAllGlobals();
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -2821,12 +2821,16 @@ describe("thread search across list remounts", () => {
       expect(onLoadEarlier).not.toHaveBeenCalled();
       for (const event of events) {
         onLoadEarlier.mockClear();
-        if (event === "switch") {
-          threadIndex += 1;
+        if (event === "empty") {
           listLoaded = false;
-          await renderThread(`search-load:${sequenceId}:${threadIndex}`);
+          await act(async () => root.render(<MessagesTimeline {...props} timelineEntries={[]} />));
           expect(onLoadEarlier, events.join(" → ")).not.toHaveBeenCalled();
+        } else if (event === "switch") {
+          threadIndex += 1;
+          await renderThread(`search-load:${sequenceId}:${threadIndex}`);
+          expect(onLoadEarlier, events.join(" → ")).toHaveBeenCalledTimes(listLoaded ? 1 : 0);
         } else {
+          if (container.querySelector('[data-testid="legend-list"]') === null) continue;
           await act(async () => activityTestState.onListLoad!());
           expect(onLoadEarlier, events.join(" → ")).toHaveBeenCalledTimes(listLoaded ? 0 : 1);
           listLoaded = true;
@@ -2839,14 +2843,15 @@ describe("thread search across list remounts", () => {
     }
   }
 
-  it("waits for each new list to load before paging toward a search result", async () => {
+  it("waits for the list to load and reuses readiness when switching threads", async () => {
     await checkSequence(["load", "switch", "load"], "regression");
     await checkSequence(["load", "load", "switch"], "repeated-load-regression");
+    await checkSequence(["load", "empty", "switch", "load"], "actual-remount-regression");
   });
 
-  it("never pages before the current list loads across all three-event orderings", async () => {
+  it("never pages before the retained list loads across all three-event orderings", async () => {
     // Repeated load callbacks and switches exercise the two independent actors.
-    const events: readonly Event[] = ["load", "switch"];
+    const events: readonly Event[] = ["load", "switch", "empty"];
     for (const first of events) {
       for (const second of events) {
         for (const third of events) {
@@ -2940,8 +2945,24 @@ describe("thread entry with the real virtualizer", () => {
       options?: ScrollToOptions | number,
       y?: number,
     ) {
-      this.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? this.scrollTop);
+      this.scrollTop = Math.max(
+        0,
+        Math.min(
+          this.scrollHeight - this.clientHeight,
+          typeof options === "number" ? (y ?? 0) : (options?.top ?? this.scrollTop),
+        ),
+      );
       this.dispatchEvent(new Event("scroll"));
+    };
+    const originalScrollBy = HTMLElement.prototype.scrollBy;
+    HTMLElement.prototype.scrollBy = function (
+      this: HTMLElement,
+      options?: ScrollToOptions | number,
+      y?: number,
+    ) {
+      this.scrollTo({
+        top: this.scrollTop + (typeof options === "number" ? (y ?? 0) : (options?.top ?? 0)),
+      });
     };
     const flushLayout = async () => {
       for (let i = 0; i < 12; i++) {
@@ -2979,7 +3000,17 @@ describe("thread entry with the real virtualizer", () => {
         message: { ...entry.message, id: MessageId.make(`message-${index}`) },
       };
     });
+    const entriesB = entries.slice(0, 24).map((entry, index) => ({
+      ...entry,
+      id: `thread-b-entry-${index}`,
+      message: {
+        ...entry.message,
+        id: MessageId.make(`thread-b-message-${index}`),
+        text: `Thread B message ${index}`,
+      },
+    }));
     const renderThread = async (key: string, displayThreadKey = key) => {
+      const previousViewport = props.listRef.current?.getScrollableNode();
       await act(async () =>
         root.render(
           <MessagesTimeline
@@ -2987,10 +3018,23 @@ describe("thread entry with the real virtualizer", () => {
             routeThreadKey={displayThreadKey}
             displayThreadKey={displayThreadKey}
             entryThreadKey={key}
-            timelineEntries={entries}
+            timelineEntries={displayThreadKey.endsWith("thread-b") ? entriesB : entries}
           />,
         ),
       );
+      if (previousViewport) {
+        expect(props.listRef.current!.getScrollableNode()).toBe(previousViewport);
+        expect(previousViewport.isConnected).toBe(true);
+        const row = previousViewport.querySelector(".messages-timeline-row-frame");
+        expect(row).not.toBeNull();
+        for (
+          let node = row?.parentElement;
+          node && node !== previousViewport;
+          node = node.parentElement
+        ) {
+          expect(node.style.opacity).not.toBe("0");
+        }
+      }
       await flushLayout();
     };
     try {
@@ -3029,6 +3073,7 @@ describe("thread entry with the real virtualizer", () => {
       expect(viewport.scrollTop).toBe(100);
       props.liveFollowEnabled = true;
       await renderThread("entry-test:thread-b");
+      expect(container.textContent).toContain("Thread B message 23");
       await renderThread("entry-test:thread-a");
       const reopened = props.listRef.current!.getScrollableNode();
       expect(
@@ -3042,6 +3087,7 @@ describe("thread entry with the real virtualizer", () => {
       widthSpy.mockRestore();
       scrollHeightSpy.mockRestore();
       HTMLElement.prototype.scrollTo = originalScrollTo;
+      HTMLElement.prototype.scrollBy = originalScrollBy;
       vi.useRealTimers();
       vi.unstubAllGlobals();
       activityTestState.nativeList = false;

@@ -557,11 +557,6 @@ export function MessagesTimeline(props: MessagesTimelineProps) {
   }, [findOpen, onManualNavigation]);
   return (
     <ConversationTimeline
-      // Navigation readiness belongs to the same mount as the virtualized list.
-      key={JSON.stringify([
-        props.entryThreadKey ?? props.routeThreadKey,
-        props.displayThreadKey ?? props.routeThreadKey,
-      ])}
       {...props}
       {...find}
       liveFollowEnabled={!findOpen && props.liveFollowEnabled}
@@ -600,6 +595,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   turnDiffSummaries,
   routeThreadKey,
   displayThreadKey,
+  entryThreadKey = routeThreadKey,
   onOpenTurnDiff,
   onOpenThread,
   parentThreadLink = null,
@@ -651,9 +647,24 @@ const ConversationTimeline = memo(function ConversationTimeline({
     () => rememberedDisclosures?.attempts ?? new Set(),
   );
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+  const listIdentityRef = useRef(listIdentityKey);
   const previousLatestRunRef = useRef(latestRun);
   // The new thread must open with an instant end pin, even mid-turn.
   const [settlingListIdentity, setSettlingListIdentity] = useState<string | null>(listIdentityKey);
+  let paintedExpandedRunIds = expandedRunIds;
+  let paintedExpandedWorkGroupIds = expandedWorkGroupIds;
+  let paintedExpandedAttemptIds = expandedAttemptIds;
+  if (listIdentityRef.current !== listIdentityKey) {
+    listIdentityRef.current = listIdentityKey;
+    previousLatestRunRef.current = latestRun;
+    setSettlingListIdentity(listIdentityKey);
+    paintedExpandedRunIds = rememberedDisclosures?.runs ?? new Set();
+    paintedExpandedWorkGroupIds = rememberedDisclosures?.workGroups ?? new Set();
+    paintedExpandedAttemptIds = rememberedDisclosures?.attempts ?? new Set();
+    setExpandedRunIds(paintedExpandedRunIds);
+    setExpandedWorkGroupIds(paintedExpandedWorkGroupIds);
+    setExpandedAttemptIds(paintedExpandedAttemptIds);
+  }
   const citationThreadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
   const openPullRequest = useOpenPrLink(citationThreadRef ?? undefined);
   const expandCitedRun = useCallback((runId: RunId) => {
@@ -751,7 +762,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   );
   const onToggleWorkGroup = useCallback(
     (groupId: string, anchorKey: string) => {
-      suspendEndScrollMaintenanceForDisclosure(anchorKey, expandedWorkGroupIds.has(groupId));
+      suspendEndScrollMaintenanceForDisclosure(anchorKey, paintedExpandedWorkGroupIds.has(groupId));
       setExpandedWorkGroupIds((existing) => {
         const next = new Set(existing);
         if (next.has(groupId)) {
@@ -762,7 +773,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         return next;
       });
     },
-    [expandedWorkGroupIds, suspendEndScrollMaintenanceForDisclosure],
+    [paintedExpandedWorkGroupIds, suspendEndScrollMaintenanceForDisclosure],
   );
   const onToggleAttemptFold = useCallback(
     (attemptId: RunAttemptId) => {
@@ -834,11 +845,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
     );
   }, [activeFindRunId]);
   const visibleExpandedRunIds = useMemo(() => {
-    if (!activeFindRunId || expandedRunIds.has(activeFindRunId)) {
-      return expandedRunIds;
+    if (!activeFindRunId || paintedExpandedRunIds.has(activeFindRunId)) {
+      return paintedExpandedRunIds;
     }
-    return new Set(expandedRunIds).add(activeFindRunId);
-  }, [activeFindRunId, expandedRunIds]);
+    return new Set(paintedExpandedRunIds).add(activeFindRunId);
+  }, [activeFindRunId, paintedExpandedRunIds]);
 
   const activeFindAttemptId = activeFindMatch
     ? timelineEntries.find((entry) => entry.id === activeFindMatch.entryId)?.attempt?.id
@@ -851,10 +862,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }, [activeFindAttemptId]);
   const visibleExpandedAttemptIds = useMemo(
     () =>
-      activeFindAttemptId && !expandedAttemptIds.has(activeFindAttemptId)
-        ? new Set(expandedAttemptIds).add(activeFindAttemptId)
-        : expandedAttemptIds,
-    [activeFindAttemptId, expandedAttemptIds],
+      activeFindAttemptId && !paintedExpandedAttemptIds.has(activeFindAttemptId)
+        ? new Set(paintedExpandedAttemptIds).add(activeFindAttemptId)
+        : paintedExpandedAttemptIds,
+    [activeFindAttemptId, paintedExpandedAttemptIds],
   );
 
   const rowsProjectionRef = useRef<{
@@ -871,7 +882,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         runningRunId,
         expandedRunIds: visibleExpandedRunIds,
         expandedAttemptIds: visibleExpandedAttemptIds,
-        expandedWorkGroupIds,
+        expandedWorkGroupIds: paintedExpandedWorkGroupIds,
         isWorking,
         runlessWorkActive,
         activeTurnStartedAt,
@@ -894,7 +905,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     runningRunId,
     visibleExpandedRunIds,
     visibleExpandedAttemptIds,
-    expandedWorkGroupIds,
+    paintedExpandedWorkGroupIds,
     isWorking,
     runlessWorkActive,
     activeTurnStartedAt,
@@ -912,10 +923,17 @@ const ConversationTimeline = memo(function ConversationTimeline({
   );
   // Re-measure the minimap gutter when the chat column changes width without a viewport resize.
   const chatWidth = useClientSettings((settings) => settings.chatWidth);
+  const [findListReady, setFindListReady] = useState(false);
+  const hasTimelineList =
+    rows.length > 0 ||
+    isWorking ||
+    parentThreadLink !== null ||
+    historyControls !== undefined ||
+    footer !== null;
+  if (!hasTimelineList && findListReady) setFindListReady(false);
   const {
     target: readyCitationRequest,
     positioning: citationPositioning,
-    onListLoad: onCitationListLoad,
     alwaysRender: citationAlwaysRender,
   } = useAssistantCitationTarget({
     request: citationRequest,
@@ -923,16 +941,13 @@ const ConversationTimeline = memo(function ConversationTimeline({
     rows,
     listRef,
     viewport: timelineViewportElement,
+    listLoaded: findListReady,
     historyLoading: citationHistoryLoading,
     loadEarlier,
     onExpandTurn: expandCitedRun,
     onManualNavigation,
   });
-  const [findListReady, setFindListReady] = useState(false);
-  const handleListLoad = useCallback(() => {
-    onCitationListLoad();
-    setFindListReady(true);
-  }, [onCitationListLoad]);
+  const handleListLoad = useCallback(() => setFindListReady(true), []);
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
   const [fullscreenAppRowId, setFullscreenAppRowId] = useState<string | null>(null);
   // Only the row that holds the pin can release it.
@@ -1088,9 +1103,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
 
   useEffect(() => {
     rememberTimelineDisclosures(listIdentityKey, {
-      runs: expandedRunIds,
-      workGroups: expandedWorkGroupIds,
-      attempts: expandedAttemptIds,
+      runs: paintedExpandedRunIds,
+      workGroups: paintedExpandedWorkGroupIds,
+      attempts: paintedExpandedAttemptIds,
       workGroupState: workGroupViewState,
     });
     const frame = requestAnimationFrame(handleScroll);
@@ -1098,9 +1113,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }, [
     handleScroll,
     listIdentityKey,
-    expandedRunIds,
-    expandedWorkGroupIds,
-    expandedAttemptIds,
+    paintedExpandedRunIds,
+    paintedExpandedWorkGroupIds,
+    paintedExpandedAttemptIds,
     workGroupViewState,
     rows.length,
   ]);
@@ -1296,6 +1311,38 @@ const ConversationTimeline = memo(function ConversationTimeline({
     [listRef, onScrollNodeMount, registerTimeline],
   );
 
+  const entryNavigationRef = useRef({
+    requested: entryThreadKey,
+    displayed: listIdentityKey,
+    pending: false,
+  });
+  useLayoutEffect(() => {
+    const navigation = entryNavigationRef.current;
+    if (navigation.requested !== entryThreadKey || navigation.displayed !== listIdentityKey) {
+      navigation.requested = entryThreadKey;
+      navigation.displayed = listIdentityKey;
+      navigation.pending = true;
+    }
+    // Keep the outgoing thread's position until the incoming timeline is ready.
+    if (!navigation.pending || entryThreadKey !== listIdentityKey) return;
+    if (findActive || citationRequest !== null) {
+      navigation.pending = false;
+      return;
+    }
+    if (!liveFollowEnabled || !listRef.current) return;
+    navigation.pending = false;
+    setSettlingListIdentity(listIdentityKey);
+    void listRef.current.scrollToEnd({ animated: false });
+  }, [
+    entryThreadKey,
+    listIdentityKey,
+    findActive,
+    citationRequest,
+    liveFollowEnabled,
+    listRef,
+    rows.length,
+  ]);
+
   useLayoutEffect(() => {
     if (!findPositionReaderRef || !timelineViewportElement) return;
     const read: ThreadFindPositionReader = (query) => {
@@ -1389,14 +1436,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     [],
   );
 
-  if (
-    rows.length === 0 &&
-    !isWorking &&
-    parentThreadLink === null &&
-    historyControls === undefined &&
-    // A status line (settled, snoozed) still needs the list, whose footer renders it.
-    footer === null
-  ) {
+  if (!hasTimelineList) {
     if (hideEmptyPlaceholder) {
       // Occupy the pane with the theme surface so a thread switch cannot
       // punch a hole through to the window chrome (white in light mode).
@@ -1456,7 +1496,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
               maintainVisibleContentPosition={
                 findActive || citationPositioning ? false : maintainVisibleContentPosition
               }
-              maintainScrollAtEndThreshold={1}
+              // Manual navigation disables follow explicitly. Measuring a tall row
+              // must not break follow merely because its end moved beyond the viewport.
+              maintainScrollAtEndThreshold={liveFollowEnabled ? Number.MAX_SAFE_INTEGER : 1}
               onScroll={handleScroll}
               onItemSizeChanged={reportContentOverflow}
               className={cn(
