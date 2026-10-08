@@ -205,6 +205,7 @@ import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
   timelineContentOverflowsViewport,
   cancelTimelineProgrammaticScroll,
+  observeTimelineScrollNavigation,
   observeTimelineRun,
   type TimelineRunObservation,
   type TimelineScrollMode,
@@ -6627,6 +6628,11 @@ export default function ChatView(props: ChatViewProps) {
     const handleFocusIn = () => {
       if (viewportIsAwayFromEnd()) handleManualNavigation();
     };
+    const removeScrollNavigation = observeTimelineScrollNavigation(
+      scrollNode,
+      () => timelineScrollModeRef.current === "following-end",
+      handleManualNavigation,
+    );
     document.addEventListener("selectionchange", handleSelectionChange);
     scrollNode.addEventListener("focusin", handleFocusIn);
     scrollNode.addEventListener("wheel", handleWheel, {
@@ -6640,6 +6646,7 @@ export default function ChatView(props: ChatViewProps) {
     });
     document.addEventListener("keydown", handleKeyDown);
     return () => {
+      removeScrollNavigation();
       document.removeEventListener("selectionchange", handleSelectionChange);
       scrollNode.removeEventListener("focusin", handleFocusIn);
       scrollNode.removeEventListener("wheel", handleWheel);

@@ -185,3 +185,30 @@ export function cancelTimelineProgrammaticScroll(list: LegendListRef | null): vo
   // An instant same-position write also stops a browser smooth scroll.
   if (node && typeof offset === "number") node.scrollTop = offset;
 }
+
+export function observeTimelineScrollNavigation(
+  node: HTMLElement,
+  isFollowingEnd: () => boolean,
+  onManualNavigation: () => void,
+): () => void {
+  let previousOffset = node.scrollTop;
+  let previousHeight = node.scrollHeight;
+  let previousViewport = node.clientHeight;
+  const handleScroll = () => {
+    const offset = node.scrollTop;
+    const height = node.scrollHeight;
+    const viewport = node.clientHeight;
+    const movedAway =
+      offset < previousOffset - 1 &&
+      height >= previousHeight &&
+      viewport === previousViewport &&
+      height - viewport - offset > 40;
+    previousOffset = offset;
+    previousHeight = height;
+    previousViewport = viewport;
+    if (movedAway && isFollowingEnd()) onManualNavigation();
+  };
+  // Observe navigation before the virtualizer handles the event and schedules follow.
+  node.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+  return () => node.removeEventListener("scroll", handleScroll, true);
+}

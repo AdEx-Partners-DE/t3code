@@ -13,6 +13,9 @@ import {
   act,
   createRef,
   useLayoutEffect,
+  useState,
+  useRef,
+  useCallback,
   type ReactNode,
   type Ref,
   type ReactElement,
@@ -20,7 +23,10 @@ import {
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot } from "react-dom/client";
 import { create, type ReactTestRenderer } from "react-test-renderer";
-import { cancelTimelineProgrammaticScroll } from "./timelineScrollAnchoring";
+import {
+  cancelTimelineProgrammaticScroll,
+  observeTimelineScrollNavigation,
+} from "./timelineScrollAnchoring";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -3084,6 +3090,80 @@ describe("thread entry with the real virtualizer", () => {
       expect(
         Math.abs(reopened.scrollHeight - reopened.clientHeight - reopened.scrollTop),
       ).toBeLessThanOrEqual(1);
+
+      const unsignaledNavigation = vi.fn();
+      let appendMessage = () => {};
+      function UnsignaledNavigationTimeline() {
+        const [follow, setFollow] = useState(true);
+        const [readingEntries, setReadingEntries] = useState(entries);
+        appendMessage = () => {
+          const next = buildUserTimelineEntry("New streamed message");
+          setReadingEntries([
+            ...entries,
+            {
+              ...next,
+              id: "entry-streamed",
+              message: { ...next.message, id: MessageId.make("message-streamed") },
+            },
+          ]);
+        };
+        const following = useRef(follow);
+        following.current = follow;
+        const mountScrollNode = useCallback(
+          (node: HTMLElement) =>
+            observeTimelineScrollNavigation(
+              node,
+              () => following.current,
+              () => {
+                unsignaledNavigation();
+                following.current = false;
+                cancelTimelineProgrammaticScroll(props.listRef.current);
+                setFollow(false);
+              },
+            ),
+          [],
+        );
+
+        return (
+          <MessagesTimeline
+            {...props}
+            routeThreadKey="unsignaled-navigation:thread"
+            entryThreadKey="unsignaled-navigation:thread"
+            timelineEntries={readingEntries}
+            liveFollowEnabled={follow}
+            onScrollNodeMount={mountScrollNode}
+          />
+        );
+      }
+      lastRowHeight = 180;
+      await act(async () => root.render(<UnsignaledNavigationTimeline />));
+      await flushLayout();
+      expect(unsignaledNavigation).not.toHaveBeenCalled();
+      const readingViewport = props.listRef.current!.getScrollableNode();
+      lastRowHeight = 4000;
+      await flushLayout();
+      lastRowHeight = 180;
+      await flushLayout();
+      expect(unsignaledNavigation).not.toHaveBeenCalled();
+      expect(
+        Math.abs(
+          readingViewport.scrollHeight - readingViewport.clientHeight - readingViewport.scrollTop,
+        ),
+      ).toBeLessThanOrEqual(1);
+      await act(async () => {
+        // Accessibility and external scrolling need not dispatch an input gesture.
+        readingViewport.scrollTop = 100;
+        readingViewport.dispatchEvent(new Event("scroll"));
+      });
+      await flushLayout();
+      expect(unsignaledNavigation).toHaveBeenCalledTimes(1);
+      // Newly visible rows replace their estimates before subsequent streaming.
+      const readingOffset = readingViewport.scrollTop;
+      expect(readingOffset).toBeLessThan(300);
+      await act(async () => appendMessage());
+      lastRowHeight = 4000;
+      await flushLayout();
+      expect(readingViewport.scrollTop).toBe(readingOffset);
 
       // Interrupt a native entry target before its completion frames, then measure a tall tail.
       await act(async () => root.unmount());
