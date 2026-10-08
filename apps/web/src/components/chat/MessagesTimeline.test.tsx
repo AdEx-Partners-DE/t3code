@@ -2906,18 +2906,26 @@ describe("thread entry with the real virtualizer", () => {
     // jsdom supplies no layout. Give the real virtualizer a 600px viewport
     // and 180px message rows, twice its 90px estimate.
     let lastRowHeight = 180;
+    const rowHeights = new Map<number, number>();
     let pendingScrollHeight: number | undefined;
     let pendingViewportHeight: number | undefined;
     const rectSpy = vi
       .spyOn(HTMLElement.prototype, "getBoundingClientRect")
       .mockImplementation(function (this: HTMLElement) {
+        const rowIndex = Number(
+          this.querySelector("[data-message-id]")
+            ?.getAttribute("data-message-id")
+            ?.match(/^message-(\d+)$/)?.[1],
+        );
         const height = this.classList.contains("messages-timeline-scroll")
           ? 600
           : this.firstElementChild?.classList.contains("messages-timeline-row-frame")
-            ? this.textContent?.includes("Message 39") ||
-              this.textContent?.includes("Thread B message 39")
-              ? lastRowHeight
-              : 180
+            ? rowHeights.has(rowIndex)
+              ? rowHeights.get(rowIndex)!
+              : this.textContent?.includes("Message 39") ||
+                  this.textContent?.includes("Thread B message 39")
+                ? lastRowHeight
+                : 180
             : this.style.height.endsWith("px")
               ? Number.parseFloat(this.style.height)
               : 0;
@@ -3130,6 +3138,7 @@ describe("thread entry with the real virtualizer", () => {
                 cancelTimelineProgrammaticScroll(props.listRef.current);
                 setFollow(false);
               },
+              () => props.listRef.current?.getState().scroll,
             ),
           [],
         );
@@ -3162,6 +3171,33 @@ describe("thread entry with the real virtualizer", () => {
             readingViewport.scrollHeight - readingViewport.clientHeight - readingViewport.scrollTop,
           ),
         ).toBeLessThanOrEqual(1);
+        if (geometryChange === "none") {
+          // Native visible-position corrections must not be mistaken for navigation.
+          const aboveRow = Math.min(
+            ...Array.from(readingViewport.querySelectorAll("[data-message-id]"))
+              .map((row) =>
+                Number(row.getAttribute("data-message-id")?.match(/^message-(\d+)$/)?.[1]),
+              )
+              .filter(Number.isFinite),
+          );
+          expect(aboveRow).toBeLessThan(39);
+          for (const tailGrowth of [60, 0, 240]) {
+            rowHeights.set(aboveRow, 60);
+            lastRowHeight = 180 + tailGrowth;
+            await flushLayout();
+            expect(unsignaledNavigation).not.toHaveBeenCalled();
+            expect(
+              Math.abs(
+                readingViewport.scrollHeight -
+                  readingViewport.clientHeight -
+                  readingViewport.scrollTop,
+              ),
+            ).toBeLessThanOrEqual(1);
+            rowHeights.clear();
+            lastRowHeight = 180;
+            await flushLayout();
+          }
+        }
         await act(async () => {
           // A shrink and external navigation can coalesce into one scroll event.
           // The browser first clamps the old offset, then the reader moves farther up.

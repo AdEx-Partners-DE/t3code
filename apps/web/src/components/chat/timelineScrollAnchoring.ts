@@ -190,6 +190,7 @@ export function observeTimelineScrollNavigation(
   node: HTMLElement,
   isFollowingEnd: () => boolean,
   onManualNavigation: () => void,
+  getManagedOffset: () => number | undefined,
 ): () => void {
   let previousOffset = node.scrollTop;
   const handleScroll = () => {
@@ -200,7 +201,13 @@ export function observeTimelineScrollNavigation(
     const clampedPreviousOffset = Math.min(previousOffset, Math.max(0, height - viewport));
     const movedAway = offset < clampedPreviousOffset - 1 && height - viewport - offset > 40;
     previousOffset = offset;
-    if (movedAway && isFollowingEnd()) onManualNavigation();
+    if (movedAway && isFollowingEnd()) {
+      // Legend records its own position correction before applying the DOM scroll.
+      const managedOffset = getManagedOffset();
+      if (managedOffset === undefined || Math.abs(offset - managedOffset) > 1) {
+        onManualNavigation();
+      }
+    }
   };
   // Observe navigation before the virtualizer handles the event and schedules follow.
   node.addEventListener("scroll", handleScroll, { capture: true, passive: true });

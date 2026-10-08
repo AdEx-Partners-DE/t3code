@@ -6632,6 +6632,7 @@ export default function ChatView(props: ChatViewProps) {
       scrollNode,
       () => timelineScrollModeRef.current === "following-end",
       handleManualNavigation,
+      () => legendListRef.current?.getState().scroll,
     );
     document.addEventListener("selectionchange", handleSelectionChange);
     scrollNode.addEventListener("focusin", handleFocusIn);
