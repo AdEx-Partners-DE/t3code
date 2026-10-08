@@ -1,3 +1,4 @@
+import type { LegendListRef } from "@legendapp/list/react";
 import type { MessageId, RunId } from "@t3tools/contracts";
 
 export interface TimelineRunObservation {
@@ -169,4 +170,18 @@ export function rememberTimelineDisclosures(
     const oldest = rememberedTimelineDisclosures.keys().next().value;
     if (oldest !== undefined) rememberedTimelineDisclosures.delete(oldest);
   }
+}
+
+const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
+
+export function cancelTimelineProgrammaticScroll(list: LegendListRef | null): void {
+  const node = list?.getScrollableNode();
+  const offset = node?.scrollTop;
+  if (typeof offset === "number") {
+    // Clear an active native index target before cancelling queued requests.
+    void list?.scrollToOffset({ offset, animated: false });
+  }
+  void list?.scrollToItem({ item: TIMELINE_SCROLL_CANCEL_SENTINEL, animated: false });
+  // An instant same-position write also stops a browser smooth scroll.
+  if (node && typeof offset === "number") node.scrollTop = offset;
 }

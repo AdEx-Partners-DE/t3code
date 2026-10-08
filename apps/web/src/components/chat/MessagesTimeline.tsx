@@ -1332,7 +1332,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     if (!liveFollowEnabled || !listRef.current) return;
     navigation.pending = false;
     setSettlingListIdentity(listIdentityKey);
-    void listRef.current.scrollToEnd({ animated: false });
+    void listRef.current.scrollToOffset({
+      offset: listRef.current.getState().contentLength,
+      animated: false,
+    });
   }, [
     entryThreadKey,
     listIdentityKey,

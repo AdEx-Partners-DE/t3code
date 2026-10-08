@@ -20,6 +20,7 @@ import {
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot } from "react-dom/client";
 import { create, type ReactTestRenderer } from "react-test-renderer";
+import { cancelTimelineProgrammaticScroll } from "./timelineScrollAnchoring";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -2905,7 +2906,8 @@ describe("thread entry with the real virtualizer", () => {
         const height = this.classList.contains("messages-timeline-scroll")
           ? 600
           : this.firstElementChild?.classList.contains("messages-timeline-row-frame")
-            ? this.textContent?.includes("Message 39")
+            ? this.textContent?.includes("Message 39") ||
+              this.textContent?.includes("Thread B message 39")
               ? lastRowHeight
               : 180
             : this.style.height.endsWith("px")
@@ -2990,7 +2992,7 @@ describe("thread entry with the real virtualizer", () => {
     };
     const container = document.createElement("div");
     document.body.append(container);
-    const root = createRoot(container);
+    let root = createRoot(container);
     const props = buildProps();
     const entries = Array.from({ length: 40 }, (_, index) => {
       const entry = buildUserTimelineEntry(`Message ${index}`);
@@ -3046,7 +3048,10 @@ describe("thread entry with the real virtualizer", () => {
         firstViewport.dispatchEvent(new Event("scroll"));
       });
       // B has no cached history yet, so the client keeps A visible while B loads.
+      props.liveFollowEnabled = false;
       await renderThread("entry-test:thread-b", "entry-test:thread-a");
+      expect(firstViewport.scrollTop).toBe(100);
+      props.liveFollowEnabled = true;
       await renderThread("entry-test:thread-a");
       const viewport = props.listRef.current!.getScrollableNode();
       expect(viewport.scrollTop).toBeGreaterThan(3000);
@@ -3079,6 +3084,63 @@ describe("thread entry with the real virtualizer", () => {
       expect(
         Math.abs(reopened.scrollHeight - reopened.clientHeight - reopened.scrollTop),
       ).toBeLessThanOrEqual(1);
+
+      // Interrupt a native entry target before its completion frames, then measure a tall tail.
+      await act(async () => root.unmount());
+      root = createRoot(container);
+      const { LegendList } =
+        await vi.importActual<typeof import("@legendapp/list/react")>("@legendapp/list/react");
+      const nativeRef = createRef<LegendListRef>();
+      const a = Array.from({ length: 40 }, (_, index) => ({
+        id: `a-${index}`,
+        text: `A ${index}`,
+      }));
+      const b = a.map((item, index) => ({
+        ...item,
+        id: `b-${index}`,
+        text: `Thread B message ${index}`,
+      }));
+      function NativeEntry({ data, follow }: { data: typeof a; follow: boolean }) {
+        useLayoutEffect(() => {
+          if (data === b) void nativeRef.current?.scrollToEnd({ animated: false });
+        }, [data]);
+        return (
+          <LegendList
+            ref={nativeRef}
+            data={data}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <div className="messages-timeline-row-frame">{item.text}</div>
+            )}
+            estimatedItemSize={90}
+            className="messages-timeline-scroll"
+            initialScrollAtEnd
+            maintainScrollAtEnd={
+              follow
+                ? { animated: false, on: { dataChange: true, itemLayout: true, layout: true } }
+                : false
+            }
+            maintainScrollAtEndThreshold={follow ? Number.MAX_SAFE_INTEGER : 1}
+            maintainVisibleContentPosition={{ data: true, size: true }}
+          />
+        );
+      }
+      lastRowHeight = 180;
+      await act(async () => root.render(<NativeEntry data={a} follow />));
+      await flushLayout();
+      await act(async () => root.render(<NativeEntry data={b} follow />));
+      const interrupted = nativeRef.current!.getScrollableNode();
+      await act(async () => {
+        cancelTimelineProgrammaticScroll(nativeRef.current);
+        root.render(<NativeEntry data={b} follow={false} />);
+      });
+      await act(async () => {
+        interrupted.scrollTop = 100;
+        interrupted.dispatchEvent(new Event("scroll"));
+      });
+      lastRowHeight = 4000;
+      await flushLayout();
+      expect(interrupted.scrollTop).toBe(100);
     } finally {
       await act(async () => root.unmount());
       container.remove();
