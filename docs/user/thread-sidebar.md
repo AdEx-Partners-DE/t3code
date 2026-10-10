@@ -132,7 +132,7 @@ Thread order**, arranges the active list for you.
 - **Needs you first** leads with threads waiting on an approval or an answer, longest wait
   first, since that agent is idle until you reply. Failures and usage-limit stops follow, then
   finished work you have not read, finished work you have read, and running threads last.
-- **By project** keeps each project's threads together.
+- **By project** keeps each project's threads together under a heading with the project's name.
 
 Right-click a thread and choose **Project priority** to rank its project **High** or **Low**.
 Priority decides the order inside each of those groups and puts high-priority projects first in
