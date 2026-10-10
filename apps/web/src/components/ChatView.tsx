@@ -106,6 +106,7 @@ import {
   presentPendingBackgroundWork,
   presentProviderGoal,
 } from "@t3tools/client-runtime/state/thread-execution";
+import { listLimitSwitchTargets } from "@t3tools/client-runtime/state/limit-switch-targets";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   codexFeedbackMessage,
@@ -7809,6 +7810,12 @@ export default function ChatView(props: ChatViewProps) {
             });
             if (result._tag === "Failure") throw squashAtomCommandFailure(result);
           },
+          switchTargets: listLimitSwitchTargets({
+            providers: providerStatuses,
+            current: activeThreadShell.modelSelection,
+            nowMs: Date.now(),
+          }),
+          onSwitch: (target) => resumeThread(target.selection),
         })
       : null;
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
@@ -8695,7 +8702,8 @@ export default function ChatView(props: ChatViewProps) {
     void sendStandaloneCommand("/compact", "Failed to compact context.");
   };
 
-  const onResume = async () => {
+  // `modelSelection` moves the thread to another account while it continues.
+  const resumeThread = async (modelSelection?: ModelSelection) => {
     if (
       !activeThread ||
       (resumableRunId === null && !hasHeldQueuedRuns) ||
@@ -8734,6 +8742,7 @@ export default function ChatView(props: ChatViewProps) {
           input: {
             threadId,
             manualContinuationOfRunId: resumableRunId,
+            ...(modelSelection ? { modelSelection } : {}),
             message: {
               messageId: newMessageId(),
               role: "user",
@@ -8771,6 +8780,8 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
   };
+
+  const onResume = () => resumeThread();
 
   const onSend = async (
     e?: { preventDefault: () => void },
