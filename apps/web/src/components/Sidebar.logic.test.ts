@@ -900,35 +900,64 @@ describe("orderInboxThreads", () => {
   const thread = (
     id: string,
     projectId: string,
-    overrides: { hasPendingApprovals?: boolean; hasPendingUserInput?: boolean; working?: boolean },
+    overrides: {
+      approvalSince?: string;
+      questionSince?: string;
+      working?: boolean;
+      unread?: boolean;
+    } = {},
   ) => ({
     id,
     environmentId: EnvironmentId.make("env"),
     projectId: ProjectId.make(projectId),
-    hasPendingApprovals: overrides.hasPendingApprovals ?? false,
-    hasPendingUserInput: overrides.hasPendingUserInput ?? false,
+    hasPendingApprovals: overrides.approvalSince !== undefined,
+    hasPendingUserInput: overrides.questionSince !== undefined,
+    pendingRequestSince: overrides.approvalSince ?? overrides.questionSince ?? null,
     runtime: overrides.working ? runtime : null,
+    latestRun: makeLatestRun(),
+    // makeLatestRun completes at 10:05; a visit before that leaves it unread.
+    lastVisitedAt: overrides.unread ? "2026-03-09T10:00:00.000Z" : "2026-03-09T11:00:00.000Z",
   });
   const threads = [
     thread("working-a", "alpha", { working: true }),
-    thread("done-b", "beta", {}),
-    thread("question-a", "alpha", { hasPendingUserInput: true }),
-    thread("done-a", "alpha", {}),
-    thread("approval-b", "beta", { hasPendingApprovals: true }),
+    thread("read-b", "beta"),
+    thread("question-a", "alpha", { questionSince: "2026-03-09T10:30:00.000Z" }),
+    thread("unread-a", "alpha", { unread: true }),
+    thread("approval-b", "beta", { approvalSince: "2026-03-09T10:10:00.000Z" }),
   ];
-  const ids = (order: "manual" | "status" | "project") =>
-    orderInboxThreads(threads, order).map((entry) => entry.id);
+  const ids = (
+    order: "manual" | "status" | "project",
+    priorities: Record<string, "high" | "low"> = {},
+  ) => orderInboxThreads(threads, order, priorities).map((entry) => entry.id);
 
   it("keeps the incoming order when manual", () => {
-    expect(ids("manual")).toEqual(["working-a", "done-b", "question-a", "done-a", "approval-b"]);
+    expect(ids("manual")).toEqual(["working-a", "read-b", "question-a", "unread-a", "approval-b"]);
   });
 
-  it("lists what needs you first and running work last, keeping ties in order", () => {
-    expect(ids("status")).toEqual(["approval-b", "question-a", "done-b", "done-a", "working-a"]);
+  it("puts blocked threads first by how long they have waited, then unread, read, and running work", () => {
+    expect(ids("status")).toEqual(["approval-b", "question-a", "unread-a", "read-b", "working-a"]);
   });
 
-  it("keeps each project together in order of its first thread", () => {
-    expect(ids("project")).toEqual(["working-a", "question-a", "done-a", "done-b", "approval-b"]);
+  it("lets a project's priority decide inside a tier, never across tiers", () => {
+    expect(ids("status", { "env:alpha": "high" })).toEqual([
+      "question-a",
+      "approval-b",
+      "unread-a",
+      "read-b",
+      "working-a",
+    ]);
+    expect(ids("status", { "env:beta": "low" })[0]).toBe("question-a");
+  });
+
+  it("keeps each project together, high-priority projects first", () => {
+    expect(ids("project")).toEqual(["working-a", "question-a", "unread-a", "read-b", "approval-b"]);
+    expect(ids("project", { "env:beta": "high" })).toEqual([
+      "read-b",
+      "approval-b",
+      "working-a",
+      "question-a",
+      "unread-a",
+    ]);
   });
 });
 

@@ -11,6 +11,7 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type {
   SidebarInboxOrder,
+  SidebarProjectPriority,
   SidebarProjectSortOrder,
   SidebarThreadSortOrder,
 } from "@t3tools/contracts/settings";
@@ -774,7 +775,9 @@ export function resolveThreadLastVisitedAt(
   return serverLastVisitedAt ?? undefined;
 }
 
-export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
+function completedAfterLastVisit(
+  thread: Pick<ThreadStatusInput, "latestRun" | "lastVisitedAt">,
+): boolean {
   if (!thread.latestRun?.completedAt) return false;
   const completedAt = Date.parse(thread.latestRun.completedAt);
   if (Number.isNaN(completedAt)) return false;
@@ -783,6 +786,10 @@ export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   const lastVisitedAt = Date.parse(thread.lastVisitedAt);
   if (Number.isNaN(lastVisitedAt)) return true;
   return completedAt > lastVisitedAt;
+}
+
+export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
+  return completedAfterLastVisit(thread);
 }
 
 export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null): boolean {
@@ -964,43 +971,79 @@ export type SidebarThreadStatus =
   | "limited"
   | "ready";
 
-// Your turn first, then what is still running: answer, look at failures,
-// read finished work, and only then the threads that need nothing yet.
-const INBOX_STATUS_RANK: Record<SidebarThreadStatus, number> = {
-  approval: 0,
-  input: 1,
-  failed: 2,
-  limited: 3,
-  ready: 4,
-  waiting: 5,
-  working: 6,
-};
+/** `${environmentId}:${projectId}`, the key client settings store project choices under. */
+export function sidebarProjectPriorityKey(
+  thread: Pick<SidebarThreadSummary, "environmentId" | "projectId">,
+): string {
+  return `${thread.environmentId}:${thread.projectId}`;
+}
+
+type InboxOrderInput = SidebarThreadStatusInput &
+  Pick<SidebarThreadSummary, "environmentId" | "projectId" | "pendingRequestSince"> &
+  Pick<ThreadStatusInput, "latestRun" | "lastVisitedAt">;
+
+// Your turn first, then what is still running. A blocked agent is idle until
+// you answer, so it leads; finished work you have not read comes before work
+// you have already seen.
+function inboxStatusTier(thread: InboxOrderInput): number {
+  switch (resolveSidebarThreadStatus(thread)) {
+    case "approval":
+    case "input":
+      return 0;
+    case "failed":
+      return 1;
+    case "limited":
+      return 2;
+    case "ready":
+      return completedAfterLastVisit(thread) ? 3 : 4;
+    case "waiting":
+      return 5;
+    case "working":
+      return 6;
+  }
+}
+
+const PROJECT_PRIORITY_RANK = { high: 0, normal: 1, low: 2 } as const;
 
 /**
  * Rearranges the inbox for the chosen order. Both orders are stable, so the
  * incoming order (manual placement, or return time with the Working shelf)
- * still decides within a status or a project. Projects appear in the order
- * their first thread does.
+ * still decides where nothing else does.
+ *
+ * "status" sorts by tier, then by the project's priority, and puts the
+ * longest-waiting blocked thread first. "project" keeps each project's threads
+ * together, high-priority projects first, otherwise in order of first thread.
  */
-export function orderInboxThreads<
-  T extends SidebarThreadStatusInput & Pick<SidebarThreadSummary, "environmentId" | "projectId">,
->(threads: ReadonlyArray<T>, order: SidebarInboxOrder): ReadonlyArray<T> {
+export function orderInboxThreads<T extends InboxOrderInput>(
+  threads: ReadonlyArray<T>,
+  order: SidebarInboxOrder,
+  priorities: Readonly<Record<string, SidebarProjectPriority>> = {},
+): ReadonlyArray<T> {
   if (order === "manual") return threads;
+  const priorityRank = (thread: T) =>
+    PROJECT_PRIORITY_RANK[priorities[sidebarProjectPriorityKey(thread)] ?? "normal"];
   if (order === "status") {
+    const waitedSince = (thread: T) =>
+      inboxStatusTier(thread) === 0 && thread.pendingRequestSince
+        ? Date.parse(thread.pendingRequestSince)
+        : 0;
     return [...threads].sort(
       (left, right) =>
-        INBOX_STATUS_RANK[resolveSidebarThreadStatus(left)] -
-        INBOX_STATUS_RANK[resolveSidebarThreadStatus(right)],
+        inboxStatusTier(left) - inboxStatusTier(right) ||
+        priorityRank(left) - priorityRank(right) ||
+        waitedSince(left) - waitedSince(right),
     );
   }
   const byProject = new Map<string, T[]>();
   for (const thread of threads) {
-    const key = `${thread.environmentId}\0${thread.projectId}`;
+    const key = sidebarProjectPriorityKey(thread);
     const group = byProject.get(key);
     if (group) group.push(thread);
     else byProject.set(key, [thread]);
   }
-  return [...byProject.values()].flat();
+  return [...byProject.values()]
+    .sort((left, right) => priorityRank(left[0]!) - priorityRank(right[0]!))
+    .flat();
 }
 
 export function shouldRecedeSidebarThread(input: {
