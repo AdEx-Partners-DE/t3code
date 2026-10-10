@@ -136,13 +136,19 @@ export interface LimitSwitchSuggestion {
   readonly window: ServerProviderUsageWindow;
   /** Headroom left in `window`; 0 once it is used up. */
   readonly remainingPercent: number;
+  /**
+   * Set when the window is used up and the account has credits, so turns keep
+   * running and draw them down. The balance is the provider's own unit.
+   */
+  readonly spendingCredits: { readonly balance: string | null } | null;
   readonly targets: ReadonlyArray<LimitSwitchTarget>;
 }
 
 /**
  * Set once the selected account is low on, or out of, a window and another
- * account can take over. A provider that keeps running past its allowance, as
- * Codex does on credits, never fails the turn, so the window is the only signal.
+ * account can take over, or once it is out and running on credits. A provider
+ * that keeps running past its allowance, as Codex does on credits, never fails
+ * the turn, so the window is the only signal.
  */
 export function suggestLimitSwitch(input: {
   readonly providers: ReadonlyArray<ServerProvider>;
@@ -170,12 +176,20 @@ export function suggestLimitSwitch(input: {
       );
   if (!window) return null;
   const targets = listLimitSwitchTargets(input);
-  return targets.length === 0
+  const credits = source.usageLimits?.credits;
+  const spendingCredits =
+    window.usedPercent >= 100 && credits && (credits.hasCredits || credits.unlimited)
+      ? { balance: credits.unlimited ? null : (credits.balance ?? null) }
+      : null;
+  // Without another account there is nothing to offer, but silently spending
+  // credits is still worth saying.
+  return targets.length === 0 && spendingCredits === null
     ? null
     : {
         sourceLabel: resolveProviderInstanceDisplayName(source),
         window,
         remainingPercent: Math.max(0, 100 - window.usedPercent),
+        spendingCredits,
         targets,
       };
 }

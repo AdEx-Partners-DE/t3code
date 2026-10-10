@@ -158,6 +158,30 @@ describe("suggestLimitSwitch", () => {
     ]);
   });
 
+  it("says when a used-up account keeps running on credits, even with nobody to switch to", () => {
+    const withCredits: ServerProvider["usageLimits"] = {
+      ...weeklyUsedUp!,
+      credits: { hasCredits: true, unlimited: false, balance: "61880.5" },
+    };
+    const suggestion = suggestLimitSwitch({
+      providers: [provider("codex", { usageLimits: withCredits })],
+      current,
+      nowMs: NOW,
+    });
+    expect(suggestion?.spendingCredits).toEqual({ balance: "61880.5" });
+    expect(suggestion?.targets).toEqual([]);
+    expect(
+      suggestLimitSwitch({
+        providers: [
+          provider("codex", { usageLimits: { ...usage(93)!, credits: withCredits.credits } }),
+          provider("codex_personal"),
+        ],
+        current,
+        nowMs: NOW,
+      })?.spendingCredits,
+    ).toBeNull();
+  });
+
   it("gives a heads-up once a window is nearly used up", () => {
     const suggestion = suggestLimitSwitch({
       providers: [provider("codex", { usageLimits: usage(93) }), provider("codex_personal")],

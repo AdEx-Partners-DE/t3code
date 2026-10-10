@@ -43,6 +43,12 @@ export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBann
   };
 }
 
+/** The provider reports a decimal string; whole credits are all the notice needs. */
+function formatCreditBalance(balance: string): string {
+  const value = Number(balance);
+  return Number.isFinite(value) ? Math.floor(value).toLocaleString() : balance;
+}
+
 function switchTargetLabel(verb: string, target: LimitSwitchTarget): string {
   const left =
     target.remainingPercent === null ? "" : ` (${Math.round(target.remainingPercent)}% left)`;
@@ -58,7 +64,7 @@ export function limitSwitchBannerItem(
   onSwitch: (target: LimitSwitchTarget) => void,
   onDismiss: (id: string) => void,
 ): ComposerBannerStackItem {
-  const { window, sourceLabel, targets, remainingPercent } = suggestion;
+  const { window, sourceLabel, targets, remainingPercent, spendingCredits } = suggestion;
   const usedUp = remainingPercent <= 0;
   // The level is part of the id, so dismissing the heads-up does not hide "used up".
   const id = `usage-window:${usedUp ? "used-up" : "low"}:${sourceLabel}:${window.id}:${window.resetsAt ?? ""}`;
@@ -70,23 +76,32 @@ export function limitSwitchBannerItem(
     title: usedUp
       ? `${window.label} limit used up on ${sourceLabel}`
       : `${window.label} limit: ${Math.round(remainingPercent)}% left on ${sourceLabel}`,
-    description: window.resetsAt
-      ? `Resets ${new Date(window.resetsAt).toLocaleString()}`
-      : undefined,
-    actions: (
-      <div className="flex flex-wrap items-center gap-2">
-        {targets.map((target) => (
-          <Button
-            key={target.selection.instanceId}
-            size="xs"
-            variant="ghost"
-            onClick={() => onSwitch(target)}
-          >
-            {switchTargetLabel("Switch to", target)}
-          </Button>
-        ))}
-      </div>
-    ),
+    description:
+      [
+        spendingCredits === null
+          ? null
+          : spendingCredits.balance === null
+            ? "Further turns spend credits."
+            : `Further turns spend credits (${formatCreditBalance(spendingCredits.balance)} left).`,
+        window.resetsAt ? `Resets ${new Date(window.resetsAt).toLocaleString()}` : null,
+      ]
+        .filter((part) => part !== null)
+        .join(" ") || undefined,
+    actions:
+      targets.length === 0 ? null : (
+        <div className="flex flex-wrap items-center gap-2">
+          {targets.map((target) => (
+            <Button
+              key={target.selection.instanceId}
+              size="xs"
+              variant="ghost"
+              onClick={() => onSwitch(target)}
+            >
+              {switchTargetLabel("Switch to", target)}
+            </Button>
+          ))}
+        </div>
+      ),
     dismissLabel: "Dismiss usage limit notice",
     onDismiss: () => onDismiss(id),
   };
