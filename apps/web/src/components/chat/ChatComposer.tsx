@@ -1074,6 +1074,7 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 import { toastManager } from "../ui/toast";
 import {
   FileIcon,
@@ -3040,12 +3041,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const showResumeAction =
     canResume && !composerDraftHasUserContent(composerDraft) && !isEditingQueuedMessage;
+  // When only the account changes, the model name would read the same as before, so name the account.
+  const resumeTargetInstance =
+    showResumeAction &&
+    resumeRunModelSelection !== null &&
+    resumeRunModelSelection.instanceId !== selectedModelSelection.instanceId &&
+    resumeRunModelSelection.model === selectedModelSelection.model
+      ? providerStatuses.find((entry) => entry.instanceId === selectedModelSelection.instanceId)
+      : undefined;
   const resumeModelName =
     showResumeAction &&
     resumeRunModelSelection !== null &&
     (resumeRunModelSelection.instanceId !== selectedModelSelection.instanceId ||
       resumeRunModelSelection.model !== selectedModelSelection.model)
-      ? resolveContextWindowModelDisplayName(selectedModelSelection, modelOptionsByInstance)
+      ? resumeTargetInstance
+        ? resolveProviderInstanceDisplayName(resumeTargetInstance)
+        : resolveContextWindowModelDisplayName(selectedModelSelection, modelOptionsByInstance)
       : null;
   const collapsedComposerPrimaryActionDisabled =
     phase === "running" ||
