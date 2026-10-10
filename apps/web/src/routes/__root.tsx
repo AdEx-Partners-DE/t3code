@@ -347,9 +347,13 @@ function DocumentTitleSync() {
     primaryServerVersion,
   });
 
+  // A build that carries build metadata ("+...") is not an official release, so
+  // the title says exactly which one is running.
+  const buildLabel = APP_VERSION.includes("+") ? APP_VERSION : null;
+
   useEffect(() => {
-    document.title = title;
-  }, [title]);
+    document.title = buildLabel === null ? title : `${title} · ${buildLabel}`;
+  }, [buildLabel, title]);
 
   return null;
 }
