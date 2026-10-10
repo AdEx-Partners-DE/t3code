@@ -124,6 +124,17 @@ device keeps its own choice.
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
 
+### Sort and color the active list
+
+On web and desktop, **Settings → General → Thread order** arranges the active list for you.
+**Needs you first** lists approvals, questions, failures, and finished work above threads that
+are still running. **By project** keeps each project's threads together. While either is on you
+cannot drag threads within the active list; your saved order returns with **Manual**.
+
+Turn on **Project colors in the sidebar** to tint each thread row with its project's icon
+color. Projects with an emoji or image icon have no color and stay untinted. Each device keeps
+its own choice for both settings.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list

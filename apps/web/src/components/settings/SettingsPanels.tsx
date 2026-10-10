@@ -46,6 +46,7 @@ import {
   type ResponseStreamingMode,
   MIN_TERMINAL_FONT_SIZE,
   type QuitConfirmationMode,
+  SidebarInboxOrder,
   SidebarProjectSortOrder,
 } from "@t3tools/contracts/settings";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -193,6 +194,12 @@ const SIDEBAR_PROJECT_SORT_ORDER_LABELS: Record<SidebarProjectSortOrder, string>
   manual: "Manual",
 };
 const isSidebarProjectSortOrder = Schema.is(SidebarProjectSortOrder);
+const SIDEBAR_INBOX_ORDER_LABELS: Record<SidebarInboxOrder, string> = {
+  manual: "Manual",
+  status: "Needs you first",
+  project: "By project",
+};
+const isSidebarInboxOrder = Schema.is(SidebarInboxOrder);
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -578,6 +585,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
         ? ["Working section"]
         : []),
+      ...(settings.sidebarInboxOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarInboxOrder
+        ? ["Thread order"]
+        : []),
+      ...(settings.sidebarProjectTintEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectTintEnabled
+        ? ["Project colors"]
+        : []),
       ...(settings.sidebarAutoSettleAfterDays !==
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
@@ -714,6 +727,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectGroupingMode,
       settings.sidebarProjectSortOrder,
       settings.sidebarWorkingShelfEnabled,
+      settings.sidebarInboxOrder,
+      settings.sidebarProjectTintEnabled,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
@@ -814,6 +829,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarInboxOrder: DEFAULT_UNIFIED_SETTINGS.sidebarInboxOrder,
+      sidebarProjectTintEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarProjectTintEnabled,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
@@ -2396,6 +2413,69 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label="Working section (beta)"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("thread-order")}
+          description="How the sidebar arranges active threads. Needs you first lists approvals, questions, failures, and finished work above running threads. By project keeps each project's threads together."
+          resetAction={
+            settings.sidebarInboxOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarInboxOrder ? (
+              <SettingResetButton
+                label="thread order"
+                onClick={() =>
+                  updateSettings({ sidebarInboxOrder: DEFAULT_UNIFIED_SETTINGS.sidebarInboxOrder })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.sidebarInboxOrder}
+              onValueChange={(value) => {
+                if (isSidebarInboxOrder(value)) {
+                  updateSettings({ sidebarInboxOrder: value });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Thread order">
+                <SelectValue>{SIDEBAR_INBOX_ORDER_LABELS[settings.sidebarInboxOrder]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {SidebarInboxOrder.literals.map((order) => (
+                  <SelectItem hideIndicator key={order} value={order}>
+                    {SIDEBAR_INBOX_ORDER_LABELS[order]}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("project-colors")}
+          description="Tint each thread row in the sidebar with its project's icon color."
+          resetAction={
+            settings.sidebarProjectTintEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarProjectTintEnabled ? (
+              <SettingResetButton
+                label="project colors"
+                onClick={() =>
+                  updateSettings({
+                    sidebarProjectTintEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarProjectTintEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarProjectTintEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarProjectTintEnabled: Boolean(checked) })
+              }
+              aria-label="Project colors in the sidebar"
             />
           }
         />

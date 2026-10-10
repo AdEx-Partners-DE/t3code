@@ -34,6 +34,7 @@ import {
   resolveSidebarStageBadgeLabel,
   resolveSidebarThreadSection,
   resolveSidebarRowAccessibility,
+  orderInboxThreads,
   resolveSidebarThreadStatus,
   resolveSidebarV2TopStatus,
   resolveThreadLastVisitedAt,
@@ -884,6 +885,50 @@ describe("isContextMenuPointerDown", () => {
         isMac: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("orderInboxThreads", () => {
+  const runtime = {
+    status: "running" as const,
+    activeRunId: null,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: "Codex",
+    lastError: null,
+    updatedAt: "2026-03-09T10:00:00.000Z",
+  };
+  const thread = (
+    id: string,
+    projectId: string,
+    overrides: { hasPendingApprovals?: boolean; hasPendingUserInput?: boolean; working?: boolean },
+  ) => ({
+    id,
+    environmentId: EnvironmentId.make("env"),
+    projectId: ProjectId.make(projectId),
+    hasPendingApprovals: overrides.hasPendingApprovals ?? false,
+    hasPendingUserInput: overrides.hasPendingUserInput ?? false,
+    runtime: overrides.working ? runtime : null,
+  });
+  const threads = [
+    thread("working-a", "alpha", { working: true }),
+    thread("done-b", "beta", {}),
+    thread("question-a", "alpha", { hasPendingUserInput: true }),
+    thread("done-a", "alpha", {}),
+    thread("approval-b", "beta", { hasPendingApprovals: true }),
+  ];
+  const ids = (order: "manual" | "status" | "project") =>
+    orderInboxThreads(threads, order).map((entry) => entry.id);
+
+  it("keeps the incoming order when manual", () => {
+    expect(ids("manual")).toEqual(["working-a", "done-b", "question-a", "done-a", "approval-b"]);
+  });
+
+  it("lists what needs you first and running work last, keeping ties in order", () => {
+    expect(ids("status")).toEqual(["approval-b", "question-a", "done-b", "done-a", "working-a"]);
+  });
+
+  it("keeps each project together in order of its first thread", () => {
+    expect(ids("project")).toEqual(["working-a", "question-a", "done-a", "done-b", "approval-b"]);
   });
 });
 

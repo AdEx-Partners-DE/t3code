@@ -336,6 +336,18 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
   },
   {
+    id: "thread-order",
+    title: "Thread order",
+    to: "/settings/general",
+    searchTerms: ["sort sidebar inbox status project group done needs you first"],
+  },
+  {
+    id: "project-colors",
+    title: "Project colors in the sidebar",
+    to: "/settings/general",
+    searchTerms: ["tint color row thread sidebar project highlight"],
+  },
+  {
     id: "auto-settle-inactive-threads",
     title: "Auto-settle inactive threads",
     to: "/settings/general",
