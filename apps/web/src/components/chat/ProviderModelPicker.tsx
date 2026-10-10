@@ -17,6 +17,7 @@ import {
   getTriggerDisplayModelLabel,
   getTriggerDisplayModelName,
 } from "./providerIconUtils";
+import { tightestUsageWindow } from "@t3tools/client-runtime/state/limit-switch-targets";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import {
   ComposerControl,
@@ -94,6 +95,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     : triggerTitle;
   const showInstanceBadge =
     activeEntry !== null && shouldShowInstanceBadge(activeEntry, props.instanceEntries);
+  // Where the selected account stands, so a switch is visible without opening Usage.
+  const usageWindow =
+    activeEntry !== null && props.triggerLabel === undefined
+      ? tightestUsageWindow(activeEntry.snapshot)
+      : null;
 
   const setIsMenuOpen = (open: boolean) => {
     props.onOpenChange?.(open);
@@ -187,9 +193,18 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const allModelNames = selectedEntries
     ? selectedEntries.map((selection) => selection.label).join(", ") || "Choose models"
     : undefined;
+  const accountTooltipPrefix =
+    showInstanceBadge && activeEntry && !selectedEntries && props.triggerLabel === undefined
+      ? `${activeEntry.displayName} · `
+      : "";
+  const usageTooltipSuffix =
+    usageWindow && !selectedEntries
+      ? ` · ${usageWindow.label} limit: ${Math.round(usageWindow.remainingPercent)}% left`
+      : "";
+  const triggerTooltipLabel = `${accountTooltipPrefix}${props.triggerLabel ?? allModelNames ?? triggerLabel}${usageTooltipSuffix}`;
   const triggerTooltipContent = shortcutLabel
-    ? `${props.triggerLabel ?? allModelNames ?? triggerLabel} · ${shortcutLabel}`
-    : (props.triggerLabel ?? allModelNames ?? triggerLabel);
+    ? `${triggerTooltipLabel} · ${shortcutLabel}`
+    : triggerTooltipLabel;
 
   return (
     <Popover
@@ -274,6 +289,18 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             </TooltipTrigger>
             <TooltipPopup side="top">{triggerTooltipContent}</TooltipPopup>
           </Tooltip>
+          {usageWindow && !selectedEntries && !props.compact ? (
+            <span
+              className={cn(
+                "shrink-0 tabular-nums",
+                usageWindow.remainingPercent <= 10
+                  ? "text-warning-foreground"
+                  : "text-muted-foreground",
+              )}
+            >
+              {Math.round(usageWindow.remainingPercent)}%
+            </span>
+          ) : null}
           {selectedModel?.isUnavailable && !selectedEntries && props.triggerLabel === undefined ? (
             <Badge variant="outline" size="sm">
               Unavailable

@@ -21,6 +21,31 @@ function remainingPercent(provider: ServerProvider): number | null {
   return Math.max(0, 100 - Math.max(...usage.windows.map((window) => window.usedPercent)));
 }
 
+/**
+ * The window an account is closest to running out of, for a compact "where do I
+ * stand" readout. Null when the account reports no windows, so the caller shows
+ * nothing rather than a full bar.
+ */
+export function tightestUsageWindow(
+  provider: Pick<ServerProvider, "usageLimits">,
+): { readonly label: string; readonly remainingPercent: number } | null {
+  const usage = provider.usageLimits;
+  if (!usage || usage.unavailable) return null;
+  // Judged at the read itself, so rendering stays pure; the next probe replaces it.
+  const readAtMs = Date.parse(usage.checkedAt);
+  const tightest = usage.windows
+    // A window whose reset has passed describes the previous period.
+    .filter((window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > readAtMs)
+    .reduce<ServerProviderUsageWindow | undefined>(
+      (current, window) =>
+        current === undefined || window.usedPercent > current.usedPercent ? window : current,
+      undefined,
+    );
+  return tightest
+    ? { label: tightest.label, remainingPercent: Math.max(0, 100 - tightest.usedPercent) }
+    : null;
+}
+
 /** The used-up window that reopens last, which is the one the account is waiting on. */
 function exhaustedWindow(
   provider: ServerProvider,
