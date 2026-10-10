@@ -7824,6 +7824,9 @@ export default function ChatView(props: ChatViewProps) {
           onSwitch: (target) => resumeThread(target.selection),
         })
       : null;
+  const [dismissedLimitSwitchBannerId, setDismissedLimitSwitchBannerId] = useState<string | null>(
+    null,
+  );
   // The failed-turn banner already offers the same accounts, so this one waits for it to clear.
   const limitSwitchSuggestion =
     limitRecoveryBanner === null && activeThread && activeProviderInstanceId !== null
@@ -7833,12 +7836,28 @@ export default function ChatView(props: ChatViewProps) {
           nowMs: Date.now(),
         })
       : null;
-  const limitSwitchBanner =
+  const limitSwitchBannerCandidate =
     limitSwitchSuggestion === null
       ? null
-      : limitSwitchBannerItem(limitSwitchSuggestion, (target) =>
-          onProviderModelSelect(target.selection.instanceId, target.selection.model),
+      : limitSwitchBannerItem(
+          limitSwitchSuggestion,
+          (target) => {
+            onProviderModelSelect(target.selection.instanceId, target.selection.model);
+            toastManager.add({
+              type: "success",
+              title: `Switched to ${target.label}`,
+              description:
+                target.remainingPercent === null
+                  ? "Your next message uses this account."
+                  : `Your next message uses this account. ${Math.round(target.remainingPercent)}% of its tightest limit is left.`,
+            });
+          },
+          setDismissedLimitSwitchBannerId,
         );
+  const limitSwitchBanner =
+    limitSwitchBannerCandidate?.id === dismissedLimitSwitchBannerId
+      ? null
+      : limitSwitchBannerCandidate;
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = [limitRecoveryBanner, limitSwitchBanner].filter(
       (item) => item !== null,
