@@ -883,6 +883,18 @@ describe("pools", () => {
     ).toEqual(["weekly", "weekly:secondary"]);
   });
 
+  it("normalizes a hub account whose stripped id is empty to no display name", () => {
+    const hub = {
+      ...source,
+      accounts: [{ id: ".json", driver: claude, usageLimits: { checkedAt, windows: [window] } }],
+    };
+    const input = new Map([
+      [EnvironmentId.make("env-a"), { ...laptop, serverConfig: { usageLimitSources: [hub] } }],
+    ]);
+    const accounts = collectLimitAccounts(input);
+    expect(accounts[0]?.displayName ?? null).toBeNull();
+  });
+
   it("pools windows by id across accounts and orders resets by when they land", () => {
     const input = new Map([
       [

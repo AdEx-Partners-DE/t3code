@@ -1643,6 +1643,7 @@ function renderFeedEntry(
         environmentId={props.environmentId}
         projectedItem={entry.activities[0]!.projectedItem}
         iconColor={iconSubtleColor}
+        surfaceColor={props.screenColor}
       />
     );
   }
