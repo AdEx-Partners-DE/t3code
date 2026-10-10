@@ -1,6 +1,9 @@
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
-import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
+import {
+  limitSwitchBannerItem,
+  usageLimitRecoveryBannerItem,
+} from "./chat/UsageLimitRecoveryBanner";
 import {
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftHeroState,
@@ -106,7 +109,10 @@ import {
   presentPendingBackgroundWork,
   presentProviderGoal,
 } from "@t3tools/client-runtime/state/thread-execution";
-import { listLimitSwitchTargets } from "@t3tools/client-runtime/state/limit-switch-targets";
+import {
+  listLimitSwitchTargets,
+  suggestLimitSwitch,
+} from "@t3tools/client-runtime/state/limit-switch-targets";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   codexFeedbackMessage,
@@ -7818,8 +7824,25 @@ export default function ChatView(props: ChatViewProps) {
           onSwitch: (target) => resumeThread(target.selection),
         })
       : null;
+  // The failed-turn banner already offers the same accounts, so this one waits for it to clear.
+  const limitSwitchSuggestion =
+    limitRecoveryBanner === null && activeThread && activeProviderInstanceId !== null
+      ? suggestLimitSwitch({
+          providers: providerStatuses,
+          current: { ...activeThread.modelSelection, instanceId: activeProviderInstanceId },
+          nowMs: Date.now(),
+        })
+      : null;
+  const limitSwitchBanner =
+    limitSwitchSuggestion === null
+      ? null
+      : limitSwitchBannerItem(limitSwitchSuggestion, (target) =>
+          onProviderModelSelect(target.selection.instanceId, target.selection.model),
+        );
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
-    const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
+    const limitRecoveryItems = [limitRecoveryBanner, limitSwitchBanner].filter(
+      (item) => item !== null,
+    );
     const backgroundWorkItems = [
       childInputBannerItem,
       goalBannerItem,
@@ -7892,6 +7915,7 @@ export default function ChatView(props: ChatViewProps) {
     canWriteSourceControl,
     feedbackBannerItems,
     limitRecoveryBanner,
+    limitSwitchBanner,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     backgroundWorkBannerItem,
