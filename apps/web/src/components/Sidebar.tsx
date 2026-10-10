@@ -216,6 +216,7 @@ import {
   sidebarMarkerId,
   sidebarThreadKeyAtY,
   orderInboxThreads,
+  sidebarProjectPriorityKey,
   sortInboxThreadsByReturn,
   sortPinnedThreadsForSidebar,
   sortSidebarV2ProjectGroups,
@@ -318,6 +319,17 @@ const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
 // Working beta: when this client saw each thread leave the Working shelf.
 // Module scope keeps the inbox order across routes that unmount the sidebar.
 const inboxReturns = createInboxReturnTracker();
+
+const PROJECT_PRIORITY_CHOICES = [
+  { id: "project-priority:high", label: "High", value: "high" },
+  { id: "project-priority:normal", label: "Normal", value: "normal" },
+  { id: "project-priority:low", label: "Low", value: "low" },
+] as const;
+
+type ProjectPriorityMenuId = (typeof PROJECT_PRIORITY_CHOICES)[number]["id"] | "project-priority";
+function isProjectPriorityMenuId(id: string): id is ProjectPriorityMenuId {
+  return id === "project-priority" || PROJECT_PRIORITY_CHOICES.some((choice) => choice.id === id);
+}
 
 const SIDEBAR_INBOX_ORDER_LABELS: Record<SidebarInboxOrder, string> = {
   manual: "Manual",
@@ -1284,6 +1296,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarThreadStatus(thread);
+  // A blocked agent is idle until answered, so the row says for how long.
+  const blockedFor =
+    (status === "approval" || status === "input") && thread.pendingRequestSince
+      ? ` · ${compactSidebarTimeLabel(formatRelativeTimeLabel(thread.pendingRequestSince))}`
+      : "";
   const isInFlight =
     status === "working" || status === "waiting" || status === "approval" || status === "input";
   // A woken thread reappears at its original position (the sort is
@@ -1332,13 +1349,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           }
         : status === "approval"
           ? {
-              label: "Approval",
+              label: `Approval${blockedFor}`,
               icon: "approval" as const,
               className: "text-warning-foreground",
             }
           : status === "input"
             ? {
-                label: "Input",
+                label: `Input${blockedFor}`,
                 icon: "input" as const,
                 className: "text-indigo-600 dark:text-indigo-300",
               }
@@ -2429,6 +2446,7 @@ export default function Sidebar() {
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const inboxOrder = useClientSettings((s) => s.sidebarInboxOrder);
+  const projectPriorities = useClientSettings((s) => s.sidebarProjectPriorities);
   const updateClientSettings = useUpdateClientSettings();
   // The saved manual order only applies while nothing else arranges the inbox.
   const inboxAutoOrdered = workingShelfEnabled || inboxOrder !== "manual";
@@ -2891,6 +2909,7 @@ export default function Sidebar() {
         ? sortInboxThreadsByReturn(active, inboxReturns.returnedAt)
         : sortThreadsForSidebar(active),
       inboxOrder,
+      projectPriorities,
     );
     return {
       pinnedThreads:
@@ -2931,6 +2950,7 @@ export default function Sidebar() {
     threads,
     workingShelfEnabled,
     inboxOrder,
+    projectPriorities,
   ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -4653,40 +4673,66 @@ export default function Sidebar() {
                 projectRef.projectId === thread.projectId,
             ),
           ) ?? null;
+        const priorityKey = sidebarProjectPriorityKey(thread);
+        const currentPriority = projectPriorities[priorityKey] ?? "normal";
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            buildThreadActionMenuItems({
-              canOperate: readEnvironmentScope(
-                threadRef.environmentId,
-                AuthOrchestrationOperateScope,
-              ),
-              branch: thread.branch ?? null,
-              projectFilter: threadProjectGroup
-                ? {
-                    label: threadProjectGroup.displayName,
-                    isActive: projectScopeKey === threadProjectGroup.projectKey,
-                  }
-                : null,
-              isPinned,
-              isSettled,
-              autoSettleEnabled: thread.autoSettleDisabledAt == null,
-              isSnoozed,
-              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              isRegeneratingTitle,
-              isRunning: !threadRuntimeCanArchive(thread.runtime),
-              supports: {
-                settlement: supportsSettlement,
-                autoSettleOptOut: supportsAutoSettleOptOut,
-                snooze: supportsSnooze,
-                pinning: supportsPinning,
-                titleRegeneration: supportsTitleRegeneration,
+            [
+              ...buildThreadActionMenuItems({
+                canOperate: readEnvironmentScope(
+                  threadRef.environmentId,
+                  AuthOrchestrationOperateScope,
+                ),
+                branch: thread.branch ?? null,
+                projectFilter: threadProjectGroup
+                  ? {
+                      label: threadProjectGroup.displayName,
+                      isActive: projectScopeKey === threadProjectGroup.projectKey,
+                    }
+                  : null,
+                isPinned,
+                isSettled,
+                autoSettleEnabled: thread.autoSettleDisabledAt == null,
+                isSnoozed,
+                canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+                isRegeneratingTitle,
+                isRunning: !threadRuntimeCanArchive(thread.runtime),
+                supports: {
+                  settlement: supportsSettlement,
+                  autoSettleOptOut: supportsAutoSettleOptOut,
+                  snooze: supportsSnooze,
+                  pinning: supportsPinning,
+                  titleRegeneration: supportsTitleRegeneration,
+                },
+                snoozePresets,
+              }),
+              {
+                id: "project-priority" as const,
+                label: "Project priority",
+                separatorBefore: true,
+                children: PROJECT_PRIORITY_CHOICES.map((choice) => ({
+                  id: choice.id,
+                  label: choice.label,
+                  checked: choice.value === currentPriority,
+                })),
               },
-              snoozePresets,
-            }),
+            ],
             position,
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
+        if (isProjectPriorityMenuId(clicked.value)) {
+          const picked = PROJECT_PRIORITY_CHOICES.find((choice) => choice.id === clicked.value);
+          if (picked) {
+            // "normal" is the absence of an entry, so the map only holds real choices.
+            const { [priorityKey]: _previous, ...rest } = projectPriorities;
+            void updateClientSettings({
+              sidebarProjectPriorities:
+                picked.value === "normal" ? rest : { ...rest, [priorityKey]: picked.value },
+            });
+          }
+          return;
+        }
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
