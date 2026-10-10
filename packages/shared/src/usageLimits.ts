@@ -327,7 +327,7 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         merge(resolveKey(account) ?? key, {
           key,
           driver: account.driver,
-          displayName: account.email ? null : account.id.replace(/\.json$/i, ""),
+          displayName: account.email ? null : account.id.replace(/\.json$/i, "") || null,
           email: account.email,
           plan: account.plan,
           accentColor: undefined,
