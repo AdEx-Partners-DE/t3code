@@ -126,14 +126,24 @@ cannot drag or move threads within it. Your saved order returns when you turn it
 
 ### Sort and color the active list
 
-On web and desktop, **Settings → General → Thread order** arranges the active list for you.
-**Needs you first** lists approvals, questions, failures, and finished work above threads that
-are still running. **By project** keeps each project's threads together. While either is on you
-cannot drag threads within the active list; your saved order returns with **Manual**.
+On web and desktop, the sort button next to the project filter, or **Settings → General →
+Thread order**, arranges the active list for you.
+
+- **Needs you first** leads with threads waiting on an approval or an answer, longest wait
+  first, since that agent is idle until you reply. Failures and usage-limit stops follow, then
+  finished work you have not read, finished work you have read, and running threads last.
+- **By project** keeps each project's threads together.
+
+Right-click a thread and choose **Project priority** to rank its project **High** or **Low**.
+Priority decides the order inside each of those groups and puts high-priority projects first in
+**By project**. It never moves a thread ahead of one that is waiting on you.
+
+While either order is on you cannot drag threads within the active list; your saved order
+returns with **Manual**. A row that waits on you shows for how long.
 
 Turn on **Project colors in the sidebar** to tint each thread row with its project's icon
 color. Projects with an emoji or image icon have no color and stay untinted. Each device keeps
-its own choice for both settings.
+its own choice for these settings.
 
 ## Settle finished work
 

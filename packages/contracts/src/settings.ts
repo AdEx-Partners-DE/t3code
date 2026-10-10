@@ -73,6 +73,10 @@ const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const SidebarInboxOrder = Schema.Literals(["manual", "status", "project"]);
 export type SidebarInboxOrder = typeof SidebarInboxOrder.Type;
 
+/** A project the user ranks above or below the rest; unlisted projects are normal. */
+export const SidebarProjectPriority = Schema.Literals(["high", "low"]);
+export type SidebarProjectPriority = typeof SidebarProjectPriority.Type;
+
 export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
@@ -484,6 +488,11 @@ export const ClientSettingsSchema = Schema.Struct({
   // Working shelf does.
   sidebarInboxOrder: SidebarInboxOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed("manual" as const)),
+  ),
+  // Keyed by `${environmentId}:${projectId}`. Breaks ties inside a status
+  // tier and orders the groups of the by-project inbox.
+  sidebarProjectPriorities: Schema.Record(TrimmedNonEmptyString, SidebarProjectPriority).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
   ),
   // Tints each thread row with its project's icon color.
   sidebarProjectTintEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -1690,6 +1699,9 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarInboxOrder: Schema.optionalKey(SidebarInboxOrder),
   sidebarProjectTintEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarProjectPriorities: Schema.optionalKey(
+    Schema.Record(TrimmedNonEmptyString, SidebarProjectPriority),
+  ),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),
