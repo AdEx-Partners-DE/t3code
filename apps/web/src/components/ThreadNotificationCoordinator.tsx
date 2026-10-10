@@ -243,10 +243,7 @@ function EnvironmentNotifications({
       try {
         const tag = threadNotificationTag(environmentId, thread.id);
         const notification = new Notification(title, {
-          body: project
-            ? `${project.title}
-${thread.title}`
-            : thread.title,
+          body: project ? `${project.title}\n${thread.title}` : thread.title,
           tag,
           silent: true,
         });
