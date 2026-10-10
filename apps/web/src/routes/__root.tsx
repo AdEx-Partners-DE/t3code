@@ -347,9 +347,9 @@ function DocumentTitleSync() {
     primaryServerVersion,
   });
 
-  // A build that carries build metadata ("+...") is not an official release, so
-  // the title says exactly which one is running.
-  const buildLabel = APP_VERSION.includes("+") ? APP_VERSION : null;
+  // Set at build time by a fork's build script. Kept apart from APP_VERSION,
+  // which the version-mismatch check compares with the server's version.
+  const buildLabel = import.meta.env.VITE_BUILD_LABEL?.trim() || null;
 
   useEffect(() => {
     document.title = buildLabel === null ? title : `${title} · ${buildLabel}`;
