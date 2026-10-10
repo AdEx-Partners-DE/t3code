@@ -214,6 +214,7 @@ import {
   sidebarListItemId,
   sidebarMarkerId,
   sidebarThreadKeyAtY,
+  orderInboxThreads,
   sortInboxThreadsByReturn,
   sortPinnedThreadsForSidebar,
   sortSidebarV2ProjectGroups,
@@ -250,6 +251,7 @@ import {
 } from "./ThreadStatusIndicators";
 import { resolveSnoozePresets, snoozeWakeLabel, type SnoozePreset } from "./Sidebar.snooze";
 import { ProjectFavicon, type ProjectFaviconProject } from "./ProjectFavicon";
+import { PROJECT_ICON_COLORS } from "../projectIconColors";
 import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
@@ -1580,6 +1582,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // like elevated cards while settled threads were plain rows, leaving neither
   // a useful hierarchy nor a reliable hover cue. Status now lives in the row
   // content; surface is reserved for interaction (hover, multi-select, route).
+  const projectTintEnabled = useClientSettings((s) => s.sidebarProjectTintEnabled);
+  const projectIcon = props.project?.projectIcon ?? null;
+  const projectTintClassName =
+    projectTintEnabled && projectIcon !== null && projectIcon.kind !== "emoji"
+      ? (PROJECT_ICON_COLORS.find((color) => color.value === projectIcon.color)?.rowClassName ??
+        null)
+      : null;
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" && "[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70",
@@ -1590,8 +1599,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         : hasUnsentDraft
           ? cn(draftSurfaceClassName, "text-sidebar-foreground")
           : shouldRecede
-            ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-            : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+            ? cn(
+                "text-sidebar-muted-foreground/75 hover:text-sidebar-foreground",
+                projectTintClassName ?? "hover:bg-sidebar-row-hover",
+              )
+            : cn(
+                "text-sidebar-foreground",
+                projectTintClassName ?? "bg-transparent hover:bg-sidebar-row-hover",
+              ),
     // Background work fades as a whole row, status label included, so it
     // takes less attention than rows that need a human (input, approval).
     shouldRecede &&
@@ -2394,6 +2409,9 @@ export default function Sidebar() {
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
+  const inboxOrder = useClientSettings((s) => s.sidebarInboxOrder);
+  // The saved manual order only applies while nothing else arranges the inbox.
+  const inboxAutoOrdered = workingShelfEnabled || inboxOrder !== "manual";
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
@@ -2848,9 +2866,12 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    const sortedActive = workingShelfEnabled
-      ? sortInboxThreadsByReturn(active, inboxReturns.returnedAt)
-      : sortThreadsForSidebar(active);
+    const sortedActive = orderInboxThreads(
+      workingShelfEnabled
+        ? sortInboxThreadsByReturn(active, inboxReturns.returnedAt)
+        : sortThreadsForSidebar(active),
+      inboxOrder,
+    );
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -2889,6 +2910,7 @@ export default function Sidebar() {
     snoozeWakeTick,
     threads,
     workingShelfEnabled,
+    inboxOrder,
   ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -3973,7 +3995,7 @@ export default function Sidebar() {
             activeOrder: activeKeys,
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
-            activeTimeOrdered: workingShelfEnabled,
+            activeTimeOrdered: inboxAutoOrdered,
           }).kind !== "none"
         );
       },
@@ -4023,7 +4045,7 @@ export default function Sidebar() {
         activeOrder: activeKeys,
         activeKeysById,
         activeReorderableKeys: activeReorderableThreadKeys,
-        activeTimeOrdered: workingShelfEnabled,
+        activeTimeOrdered: inboxAutoOrdered,
       });
       if (plan.kind === "none") return;
       if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;

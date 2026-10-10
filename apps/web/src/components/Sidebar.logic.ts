@@ -9,7 +9,11 @@ import {
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
-import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import type {
+  SidebarInboxOrder,
+  SidebarProjectSortOrder,
+  SidebarThreadSortOrder,
+} from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 import {
@@ -959,6 +963,45 @@ export type SidebarThreadStatus =
   | "failed"
   | "limited"
   | "ready";
+
+// Your turn first, then what is still running: answer, look at failures,
+// read finished work, and only then the threads that need nothing yet.
+const INBOX_STATUS_RANK: Record<SidebarThreadStatus, number> = {
+  approval: 0,
+  input: 1,
+  failed: 2,
+  limited: 3,
+  ready: 4,
+  waiting: 5,
+  working: 6,
+};
+
+/**
+ * Rearranges the inbox for the chosen order. Both orders are stable, so the
+ * incoming order (manual placement, or return time with the Working shelf)
+ * still decides within a status or a project. Projects appear in the order
+ * their first thread does.
+ */
+export function orderInboxThreads<
+  T extends SidebarThreadStatusInput & Pick<SidebarThreadSummary, "environmentId" | "projectId">,
+>(threads: ReadonlyArray<T>, order: SidebarInboxOrder): ReadonlyArray<T> {
+  if (order === "manual") return threads;
+  if (order === "status") {
+    return [...threads].sort(
+      (left, right) =>
+        INBOX_STATUS_RANK[resolveSidebarThreadStatus(left)] -
+        INBOX_STATUS_RANK[resolveSidebarThreadStatus(right)],
+    );
+  }
+  const byProject = new Map<string, T[]>();
+  for (const thread of threads) {
+    const key = `${thread.environmentId}\0${thread.projectId}`;
+    const group = byProject.get(key);
+    if (group) group.push(thread);
+    else byProject.set(key, [thread]);
+  }
+  return [...byProject.values()].flat();
+}
 
 export function shouldRecedeSidebarThread(input: {
   status: SidebarThreadStatus;

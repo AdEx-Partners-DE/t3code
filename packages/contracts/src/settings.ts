@@ -66,6 +66,13 @@ export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 // wire field keeps its decoding default below.
 const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 
+/**
+ * How the sidebar inbox arranges its threads. "status" puts threads that need
+ * you first; "project" keeps each project's threads together.
+ */
+export const SidebarInboxOrder = Schema.Literals(["manual", "status", "project"]);
+export type SidebarInboxOrder = typeof SidebarInboxOrder.Type;
+
 export const SidebarProjectGroupingMode = Schema.Literals([
   "repository",
   "repository_path",
@@ -473,6 +480,13 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarWorkingShelfEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  // Anything but "manual" ignores (and keeps) the saved order, as the
+  // Working shelf does.
+  sidebarInboxOrder: SidebarInboxOrder.pipe(
+    Schema.withDecodingDefault(Effect.succeed("manual" as const)),
+  ),
+  // Tints each thread row with its project's icon color.
+  sidebarProjectTintEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -1674,6 +1688,8 @@ export const ClientSettingsPatch = Schema.Struct({
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarInboxOrder: Schema.optionalKey(SidebarInboxOrder),
+  sidebarProjectTintEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),
