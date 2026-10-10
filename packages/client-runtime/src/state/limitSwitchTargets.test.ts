@@ -6,7 +6,11 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { listLimitSwitchTargets, suggestLimitSwitch } from "./limitSwitchTargets.ts";
+import {
+  listLimitSwitchTargets,
+  suggestLimitSwitch,
+  tightestUsageWindow,
+} from "./limitSwitchTargets.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00.000Z");
 
@@ -179,5 +183,35 @@ describe("suggestLimitSwitch", () => {
         nowMs: NOW,
       }),
     ).toBeNull();
+  });
+});
+
+describe("tightestUsageWindow", () => {
+  it("reads the window closest to running out", () => {
+    expect(
+      tightestUsageWindow({
+        usageLimits: {
+          checkedAt: "2026-10-10T11:59:00.000Z",
+          windows: [
+            { id: "primary", kind: "session", label: "Session", usedPercent: 20 },
+            { id: "secondary", kind: "weekly", label: "Weekly", usedPercent: 63 },
+          ],
+        },
+      }),
+    ).toEqual({ label: "Weekly", remainingPercent: 37 });
+  });
+
+  it("reports nothing for an account without usable windows", () => {
+    expect(tightestUsageWindow({})).toBeNull();
+    expect(
+      tightestUsageWindow({
+        usageLimits: {
+          checkedAt: "2026-10-10T11:59:00.000Z",
+          windows: [],
+          unavailable: { reason: "probeFailed" },
+        },
+      }),
+    ).toBeNull();
+    expect(tightestUsageWindow({ usageLimits: usage(100, "2026-10-10T11:00:00.000Z") })).toBeNull();
   });
 });
