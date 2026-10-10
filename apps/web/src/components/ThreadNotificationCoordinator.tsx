@@ -21,6 +21,7 @@ import {
   setNotificationBadge,
   unlockNotificationAudio,
 } from "../threadNotifications";
+import { ProjectFavicon } from "./ProjectFavicon";
 import { resolveSidebarThreadStatus } from "./Sidebar.logic";
 import { toastManager } from "./ui/toast";
 
@@ -106,6 +107,8 @@ function EnvironmentNotifications({
   // stable, so this only rescans when a thread actually changed.
   const threads =
     shell.status === "live" && Option.isSome(shell.snapshot) ? shell.snapshot.value.threads : null;
+  const projects =
+    shell.status === "live" && Option.isSome(shell.snapshot) ? shell.snapshot.value.projects : null;
   const mode = useClientSettings((settings) => settings.notificationMode);
   const inAppNotificationsEnabled = useClientSettings(
     (settings) => settings.inAppNotificationsEnabled,
@@ -164,6 +167,8 @@ function EnvironmentNotifications({
               : status === "failed"
                 ? "Thread failed"
                 : "Input needed";
+      // Several threads often share a title pattern; the project says which one this is.
+      const project = projects?.find((candidate) => candidate.id === thread.projectId) ?? null;
       if (hasNotificationSound(mode)) {
         void playNotificationSound(kind, () =>
           hasNotificationSound(getClientSettings().notificationMode),
@@ -178,7 +183,26 @@ function EnvironmentNotifications({
         const toastId = toastManager.add({
           type: kind === "completion" ? "success" : status === "failed" ? "error" : "warning",
           title,
-          description: thread.title,
+          description: project ? (
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="truncate text-foreground">{thread.title}</span>
+              <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-foreground">
+                <ProjectFavicon
+                  project={{
+                    environmentId,
+                    workspaceRoot: project.workspaceRoot,
+                    title: project.title,
+                    faviconPath: project.faviconPath ?? null,
+                    projectIcon: project.projectIcon ?? null,
+                  }}
+                  className="size-4 shrink-0"
+                />
+                <span className="truncate">{project.title}</span>
+              </span>
+            </span>
+          ) : (
+            thread.title
+          ),
           data: {
             hideCopyButton: true,
             leadingIcon:
@@ -214,7 +238,7 @@ function EnvironmentNotifications({
         continue;
       try {
         const notification = new Notification(title, {
-          body: thread.title,
+          body: project ? `${project.title}\n${thread.title}` : thread.title,
           tag: `${environmentId}:${thread.id}`,
           silent: true,
         });
@@ -240,6 +264,7 @@ function EnvironmentNotifications({
     mode,
     navigate,
     onNotification,
+    projects,
     threads,
   ]);
 
