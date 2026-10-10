@@ -859,6 +859,28 @@ function SidebarSectionHeader(props: {
   );
 }
 
+// Names the project above its block of rows when the inbox is ordered by
+// project. Not a sortable marker: that order is automatic, so rows never
+// drag across it.
+function SidebarProjectGroupHeader(props: {
+  project: ProjectFaviconProject | null;
+  name: string;
+  count: number;
+}) {
+  return (
+    <div
+      data-testid="sidebar-project-group-header"
+      className="mx-0.5 flex h-6 items-center gap-1.5 px-2 pt-1 text-2xs font-medium text-muted-foreground"
+    >
+      {props.project ? (
+        <ProjectFavicon project={props.project} className="size-3 shrink-0" />
+      ) : null}
+      <span className="min-w-0 truncate">{props.name}</span>
+      <span className="shrink-0 tabular-nums opacity-60">{props.count}</span>
+    </div>
+  );
+}
+
 // One unsent draft session the user has invested content in. Two lines,
 // nothing else: project name, then the typed prompt. All the draft's
 // settings (model, env mode, branch, worktree) still travel with it —
@@ -5587,9 +5609,37 @@ export default function Sidebar() {
                           onDraftContextMenu={handleDraftContextMenu}
                         />,
                       ];
+                      const groupByProject = inboxOrder === "project" && from === null;
+                      const activeCountByProject = new Map<string, number>();
+                      if (groupByProject) {
+                        for (const thread of activeThreads) {
+                          const projectKey = sidebarProjectPriorityKey(thread);
+                          activeCountByProject.set(
+                            projectKey,
+                            (activeCountByProject.get(projectKey) ?? 0) + 1,
+                          );
+                        }
+                      }
+                      let lastGroupProjectKey: string | null = null;
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
-                          items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                          const thread = threadByKey.get(item.key)!;
+                          if (groupByProject && item.section === "active") {
+                            const projectKey =
+                              `${thread.environmentId}:${thread.projectId}` as const;
+                            if (projectKey !== lastGroupProjectKey) {
+                              lastGroupProjectKey = projectKey;
+                              items.push(
+                                <SidebarProjectGroupHeader
+                                  key={`project-group:${projectKey}`}
+                                  project={projectByKey.get(projectKey) ?? null}
+                                  name={projectDisplayNameByKey.get(projectKey) ?? "No project"}
+                                  count={activeCountByProject.get(projectKey) ?? 0}
+                                />,
+                              );
+                            }
+                          }
+                          items.push(renderThreadRow(thread, item.section));
                           continue;
                         }
                         switch (item.marker) {
