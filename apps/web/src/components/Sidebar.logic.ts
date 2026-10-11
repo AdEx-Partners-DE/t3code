@@ -1101,6 +1101,22 @@ export interface OpenThreadSummary {
   readonly idle: number;
 }
 
+/** The cockpit's groups of open threads; "working" includes threads waiting on background work. */
+export type OpenThreadFilter = "working" | "needYou" | "idle";
+
+function openThreadGroup(thread: InboxOrderInput): OpenThreadFilter {
+  const tier = inboxStatusTier(thread);
+  return tier <= 3 ? "needYou" : tier >= 5 ? "working" : "idle";
+}
+
+/** The threads of one cockpit group, in the order given; all of them when `filter` is null. */
+export function filterOpenThreads<T extends InboxOrderInput>(
+  threads: ReadonlyArray<T>,
+  filter: OpenThreadFilter | null,
+): ReadonlyArray<T> {
+  return filter === null ? threads : threads.filter((thread) => openThreadGroup(thread) === filter);
+}
+
 export function summariseOpenThreads(threads: ReadonlyArray<InboxOrderInput>): OpenThreadSummary {
   let working = 0;
   let waiting = 0;

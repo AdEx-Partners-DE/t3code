@@ -44,17 +44,20 @@ const REFRESH_BATCH = 5;
 export function PortfolioChecklistDialog({
   environmentId,
   threads,
+  initialStatus,
   onClose,
 }: {
   readonly environmentId: EnvironmentId;
   readonly threads: ReadonlyArray<PortfolioThread>;
+  /** The group shown first; "Needs you" when left out. */
+  readonly initialStatus?: ThreadChecklistItem["status"] | undefined;
   readonly onClose: () => void;
 }) {
   const navigate = useNavigate();
   const input = useMemo(() => ({}), []);
   const query = useEnvironmentQuery(serverEnvironment.threadChecklists({ environmentId, input }));
   const refresh = useAtomCommand(serverEnvironment.refreshThreadChecklist, "update checklist");
-  const [status, setStatus] = useState<ThreadChecklistItem["status"]>("attention");
+  const [status, setStatus] = useState<ThreadChecklistItem["status"]>(initialStatus ?? "attention");
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   const checklistByThread = useMemo(

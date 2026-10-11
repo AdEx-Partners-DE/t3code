@@ -35,6 +35,8 @@ import {
   resolveSidebarThreadSection,
   resolveSidebarRowAccessibility,
   countWaitingThreads,
+  filterOpenThreads,
+  summariseOpenThreads,
   orderInboxThreads,
   resolveNextWaitingThread,
   resolveSidebarThreadStatus,
@@ -973,6 +975,18 @@ describe("orderInboxThreads", () => {
     expect(next("unread")).toBe("unread-a");
     expect(next("blocked", "approval-b")).toBe("question-a");
     expect(next("failed")).toBeNull();
+  });
+
+  it("narrows the list to one cockpit group and keeps the order", () => {
+    const only = (filter: "working" | "needYou" | "idle" | null) =>
+      filterOpenThreads(threads, filter).map((entry) => entry.id);
+    expect(only("working")).toEqual(["working-a"]);
+    expect(only("needYou")).toEqual(["question-a", "unread-a", "approval-b"]);
+    expect(only("idle")).toEqual(["read-b"]);
+    expect(only(null)).toHaveLength(threads.length);
+    // The three groups are the cockpit's counts.
+    const summary = summariseOpenThreads(threads);
+    expect([summary.working + summary.waiting, summary.needYou, summary.idle]).toEqual([1, 3, 1]);
   });
 
   it("keeps each project together, high-priority projects first", () => {

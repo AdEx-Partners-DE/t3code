@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadChecklistItem } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import * as Schema from "effect/Schema";
@@ -8,7 +8,7 @@ import { useMemo } from "react";
 
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { serverEnvironment } from "../state/server";
-import type { OpenThreadSummary } from "./Sidebar.logic";
+import type { OpenThreadFilter, OpenThreadSummary } from "./Sidebar.logic";
 import { buildUsageBurn } from "./usage/usageBurn";
 
 const COCKPIT_EXPANDED_KEY = "t3code:sidebar:cockpit-expanded";
@@ -24,16 +24,19 @@ export function SidebarCockpit({
   summary,
   environmentId,
   nowMs,
-  onOpenNextWaiting,
+  filter,
+  onFilter,
   onOpenChecklists,
 }: {
   readonly summary: OpenThreadSummary;
   /** The environment whose usage history feeds the burn chart; null hides the chart. */
   readonly environmentId: EnvironmentId | null;
   readonly nowMs: number;
-  readonly onOpenNextWaiting: () => void;
-  /** Opens the checklists of all open threads. */
-  readonly onOpenChecklists: () => void;
+  /** The group the thread list is narrowed to; null shows every open thread. */
+  readonly filter: OpenThreadFilter | null;
+  readonly onFilter: (filter: OpenThreadFilter | null) => void;
+  /** Opens the checklists of all open threads on the given group of items. */
+  readonly onOpenChecklists: (status: ThreadChecklistItem["status"]) => void;
 }) {
   const [expanded, setExpanded] = useLocalStorage(COCKPIT_EXPANDED_KEY, true, Schema.Boolean);
   const blockedShare = summary.open === 0 ? 0 : Math.round((summary.needYou / summary.open) * 100);
@@ -54,22 +57,53 @@ export function SidebarCockpit({
         {expanded ? null : (
           <span className="min-w-0 truncate tabular-nums">
             {summary.open} open · {summary.working} working · {summary.needYou} need you
+            {filter === null ? "" : ` · list shows ${FILTER_LABEL[filter].toLowerCase()} only`}
           </span>
         )}
       </button>
       {expanded ? (
         <div className="mt-1 flex flex-col gap-1.5">
           <div className="grid grid-cols-4 gap-1">
-            <CockpitStat label="Open" value={summary.open} />
-            <CockpitStat label="Working" value={summary.working + summary.waiting} />
+            <CockpitStat
+              label="Open"
+              value={summary.open}
+              pressed={filter === null}
+              onClick={() => onFilter(null)}
+            />
+            <CockpitStat
+              label="Working"
+              value={summary.working + summary.waiting}
+              pressed={filter === "working"}
+              onClick={() => onFilter(filter === "working" ? null : "working")}
+            />
             <CockpitStat
               label="Need you"
               value={summary.needYou}
               emphasis={summary.needYou > 0}
-              onClick={summary.needYou > 0 ? onOpenNextWaiting : undefined}
+              pressed={filter === "needYou"}
+              onClick={() => onFilter(filter === "needYou" ? null : "needYou")}
             />
-            <CockpitStat label="Idle" value={summary.idle} />
+            <CockpitStat
+              label="Idle"
+              value={summary.idle}
+              pressed={filter === "idle"}
+              onClick={() => onFilter(filter === "idle" ? null : "idle")}
+            />
           </div>
+          {filter === null ? null : (
+            <div className="flex items-center gap-1.5">
+              <span className="font-medium text-sidebar-foreground">
+                List shows {FILTER_LABEL[filter].toLowerCase()} only
+              </span>
+              <button
+                type="button"
+                onClick={() => onFilter(null)}
+                className="cursor-pointer rounded-sm underline underline-offset-2 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+              >
+                show all
+              </button>
+            </div>
+          )}
           <div className="tabular-nums">
             {summary.open === 0
               ? "No open threads."
@@ -88,11 +122,19 @@ export function SidebarCockpit({
   );
 }
 
+const FILTER_LABEL: Record<OpenThreadFilter, string> = {
+  working: "Working",
+  needYou: "Need you",
+  idle: "Idle",
+};
+
+/** One count; a click narrows the thread list to that group. */
 function CockpitStat(props: {
   readonly label: string;
   readonly value: number;
   readonly emphasis?: boolean;
-  readonly onClick?: (() => void) | undefined;
+  readonly pressed: boolean;
+  readonly onClick: () => void;
 }) {
   const body = (
     <>
@@ -108,18 +150,15 @@ function CockpitStat(props: {
       <span className="truncate">{props.label}</span>
     </>
   );
-  const className =
-    "flex min-w-0 flex-col items-start rounded-sm bg-sidebar-row-hover/60 px-1.5 py-1";
-  return props.onClick ? (
+  return (
     <button
       type="button"
+      aria-pressed={props.pressed}
       onClick={props.onClick}
-      className={`${className} cursor-pointer text-left hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset`}
+      className="flex min-w-0 cursor-pointer flex-col items-start rounded-sm bg-sidebar-row-hover/60 px-1.5 py-1 text-left hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset aria-pressed:bg-sidebar-row-hover aria-pressed:ring-1 aria-pressed:ring-sidebar-foreground/30 aria-pressed:ring-inset"
     >
       {body}
     </button>
-  ) : (
-    <div className={className}>{body}</div>
   );
 }
 
@@ -129,7 +168,7 @@ function CockpitChecklists({
   onOpen,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly onOpen: () => void;
+  readonly onOpen: (status: ThreadChecklistItem["status"]) => void;
 }) {
   const input = useMemo(() => ({}), []);
   const result = useAtomValue(serverEnvironment.threadChecklists({ environmentId, input }));
@@ -140,24 +179,40 @@ function CockpitChecklists({
       0,
     );
   const attention = count("attention");
+  const part =
+    "cursor-pointer rounded-sm tabular-nums hover:text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset";
+  if (checklists === null || checklists.length === 0) {
+    return (
+      <button
+        type="button"
+        data-testid="sidebar-cockpit-checklists"
+        onClick={() => onOpen("attention")}
+        className={`${part} self-start text-left`}
+      >
+        Checklists of all threads
+      </button>
+    );
+  }
+  // Each count opens the list on its own group of items.
   return (
-    <button
-      type="button"
-      data-testid="sidebar-cockpit-checklists"
-      onClick={onOpen}
-      className="cursor-pointer rounded-sm text-left tabular-nums hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
-    >
-      {checklists === null || checklists.length === 0 ? (
-        "Checklists of all threads"
-      ) : (
-        <>
-          <span className={attention > 0 ? "font-medium text-destructive" : undefined}>
-            {attention} {attention === 1 ? "point needs" : "points need"} you
-          </span>{" "}
-          · {count("open")} open · {count("done")} done
-        </>
-      )}
-    </button>
+    <div data-testid="sidebar-cockpit-checklists" className="flex flex-wrap gap-x-1.5">
+      <button
+        type="button"
+        onClick={() => onOpen("attention")}
+        className={`${part} ${attention > 0 ? "font-medium text-destructive" : ""}`}
+      >
+        {attention} {attention === 1 ? "point needs" : "points need"} you
+      </button>
+      <button type="button" onClick={() => onOpen("open")} className={part}>
+        {count("open")} open
+      </button>
+      <button type="button" onClick={() => onOpen("backlog")} className={part}>
+        {count("backlog")} backlog
+      </button>
+      <button type="button" onClick={() => onOpen("done")} className={part}>
+        {count("done")} done
+      </button>
+    </div>
   );
 }
 

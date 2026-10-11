@@ -59,6 +59,7 @@ import {
   type EnvironmentMachineKind,
   type ScopedThreadRef,
   type ThreadId,
+  type ThreadChecklistItem,
 } from "@t3tools/contracts";
 
 import { SidebarInboxOrder, type TimestampFormat } from "@t3tools/contracts/settings";
@@ -221,6 +222,8 @@ import {
   sidebarThreadKeyAtY,
   countWaitingThreads,
   summariseOpenThreads,
+  filterOpenThreads,
+  type OpenThreadFilter,
   isWaitingOnUser,
   threadsWaitingOnAnswer,
   orderInboxThreads,
@@ -2925,11 +2928,11 @@ export default function Sidebar() {
     readonly assignedKeys: ReadonlyMap<string, string>;
   } | null>(null);
   const {
-    pinnedThreads,
+    pinnedThreads: allPinnedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
-    activeThreads,
-    workingThreads,
+    activeThreads: allActiveThreads,
+    workingThreads: allWorkingThreads,
     snoozedThreads,
     settledThreads,
     snoozeNow,
@@ -3057,6 +3060,22 @@ export default function Sidebar() {
     inboxOrder,
     projectPriorities,
   ]);
+
+  // The cockpit can narrow the list to one group of open threads. Not kept
+  // across reloads: a forgotten filter would look like missing threads.
+  const [openThreadFilter, setOpenThreadFilter] = useState<OpenThreadFilter | null>(null);
+  const pinnedThreads = useMemo(
+    () => filterOpenThreads(allPinnedThreads, openThreadFilter),
+    [allPinnedThreads, openThreadFilter],
+  );
+  const activeThreads = useMemo(
+    () => filterOpenThreads(allActiveThreads, openThreadFilter),
+    [allActiveThreads, openThreadFilter],
+  );
+  const workingThreads = useMemo(
+    () => filterOpenThreads(allWorkingThreads, openThreadFilter),
+    [allWorkingThreads, openThreadFilter],
+  );
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -5126,7 +5145,7 @@ export default function Sidebar() {
       const keyOf = (thread: EnvironmentThreadShell) =>
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       const target = resolveNextWaitingThread(
-        [...pinnedThreads, ...activeThreads, ...workingThreads],
+        [...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads],
         projectPriorities,
         (thread) => keyOf(thread) === routeThreadKey,
         request.kind,
@@ -5156,21 +5175,23 @@ export default function Sidebar() {
   );
   useEffect(() => subscribeNextWaitingThread(openNextWaitingThread), [openNextWaitingThread]);
   const waitingCounts = useMemo(
-    () => countWaitingThreads([...pinnedThreads, ...activeThreads, ...workingThreads]),
-    [activeThreads, pinnedThreads, workingThreads],
+    () => countWaitingThreads([...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads]),
+    [allActiveThreads, allPinnedThreads, allWorkingThreads],
   );
   // The burn chart moves by the hour; a minute's grain is plenty.
   const cockpitNowMs = Date.parse(`${useNowMinute()}:00.000Z`);
   const openThreadSummary = useMemo(
-    () => summariseOpenThreads([...pinnedThreads, ...activeThreads, ...workingThreads]),
-    [activeThreads, pinnedThreads, workingThreads],
+    () => summariseOpenThreads([...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads]),
+    [allActiveThreads, allPinnedThreads, allWorkingThreads],
   );
   const [pendingRequestsOpen, setPendingRequestsOpen] = useState(false);
   const [portfolioChecklistOpen, setPortfolioChecklistOpen] = useState(false);
+  const [portfolioChecklistStatus, setPortfolioChecklistStatus] =
+    useState<ThreadChecklistItem["status"]>("attention");
   const portfolioThreads = useMemo(
     () =>
       portfolioChecklistOpen
-        ? [...pinnedThreads, ...activeThreads, ...workingThreads].map((thread) => ({
+        ? [...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads].map((thread) => ({
             environmentId: thread.environmentId,
             id: thread.id,
             title: thread.title,
@@ -5542,14 +5563,19 @@ export default function Sidebar() {
               summary={openThreadSummary}
               environmentId={serverConfigs.keys().next().value ?? null}
               nowMs={cockpitNowMs}
-              onOpenNextWaiting={() => openNextWaitingThread({ quiet: true })}
-              onOpenChecklists={() => setPortfolioChecklistOpen(true)}
+              filter={openThreadFilter}
+              onFilter={setOpenThreadFilter}
+              onOpenChecklists={(status) => {
+                setPortfolioChecklistStatus(status);
+                setPortfolioChecklistOpen(true);
+              }}
             />
           )}
           {portfolioChecklistOpen && serverConfigs.size > 0 ? (
             <PortfolioChecklistDialog
               environmentId={serverConfigs.keys().next().value!}
               threads={portfolioThreads}
+              initialStatus={portfolioChecklistStatus}
               onClose={() => setPortfolioChecklistOpen(false)}
             />
           ) : null}
