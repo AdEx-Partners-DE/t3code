@@ -143,6 +143,18 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
     description:
       "The task turns itself off instead of running when the thread's last reply contains this text, ignoring case.",
   }),
+  allOpenThreads: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Send to every open thread that stands still instead of one bound thread. The task then has no thread of its own; maxRuns counts the sends over all threads.",
+  }),
+  maxParallel: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 10 })),
+  ).annotate({
+    description:
+      "With allOpenThreads: send only while fewer than this many open threads are at work. Defaults to 2.",
+  }),
+  /** With allOpenThreads: per thread, the run this task last reacted to. Kept by the server. */
+  nudged: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   watchThreadId: Schema.optional(ThreadId).annotate({
     description:
       "Wait for this thread to finish instead of the task's own thread. With maxRuns 1 this starts one thread's work after another's.",

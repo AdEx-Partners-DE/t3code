@@ -114,6 +114,9 @@ const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
   existing_worktree: "Use a specific checkout",
 };
 
+/** "Send to" value for an idle task that covers every open thread. */
+const ALL_OPEN_THREADS = "all-open-threads";
+
 const EMPTY_DRAFT: DraftState = {
   editingId: null,
   title: "",
@@ -126,6 +129,8 @@ const EMPTY_DRAFT: DraftState = {
   idleStopPhrase: "",
   idleMinRemainingPercent: "",
   idleWatchThreadId: "",
+  idleAllOpenThreads: false,
+  idleMaxParallel: "2",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
@@ -181,7 +186,7 @@ function splitModelKey(value: string): ModelSelection | null {
 export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
   if (schedule.type === "idle") {
-    const runs = `When idle, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
+    const runs = `${schedule.allOpenThreads ? "All open threads, when idle" : "When idle"}, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
     return [
       runs,
       ...(schedule.stopPhrase === undefined ? [] : [`stops at "${schedule.stopPhrase}"`]),
@@ -218,11 +223,13 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
  */
 export function taskFactsLabel(task: ScheduledTask, threadTitle: string | null): string {
   const target =
-    task.threadId === null
-      ? "New thread each run"
-      : threadTitle === null
-        ? "Thread no longer exists"
-        : `In "${threadTitle}"`;
+    task.schedule.type === "idle" && task.schedule.allOpenThreads
+      ? `Up to ${task.schedule.maxParallel ?? 2} threads at work at once`
+      : task.threadId === null
+        ? "New thread each run"
+        : threadTitle === null
+          ? "Thread no longer exists"
+          : `In "${threadTitle}"`;
   const runs = `${task.runCount} ${task.runCount === 1 ? "run" : "runs"}`;
   const last = task.lastRunAt === null ? "never ran" : `last ${relativeLabel(task.lastRunAt)}`;
   const author = task.createdBy === "agent" ? "made by an agent" : `made by ${task.createdBy}`;
@@ -965,7 +972,7 @@ function ScheduledTaskEditorDialog({
       if (draft.scheduleMode === "idle") {
         reportFailure(
           "Invalid run limit",
-          "Enter a whole number of runs from 1 to 500 and a wait of 0 minutes or more.",
+          "Enter a whole number of runs from 1 to 500, a wait of 0 minutes or more and, for all open threads, 1 to 10 threads at work.",
         );
       } else {
         reportFailure(
@@ -975,7 +982,7 @@ function ScheduledTaskEditorDialog({
       }
       return;
     }
-    if (schedule.type === "idle" && !draft.threadId) {
+    if (schedule.type === "idle" && !schedule.allOpenThreads && !draft.threadId) {
       reportFailure("Choose a thread", "A task that runs when a thread is idle needs a thread.");
       return;
     }
@@ -1025,7 +1032,10 @@ function ScheduledTaskEditorDialog({
       enabled: draft.enabled,
       schedule,
       projectId: selectedProjectId as ProjectId,
-      threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+      threadId:
+        draft.threadId && !(schedule.type === "idle" && schedule.allOpenThreads)
+          ? (draft.threadId as ThreadId)
+          : null,
       workspaceStrategy,
       modelSelection,
       runtimeMode: draft.runtimeMode,
@@ -1436,17 +1446,24 @@ function ScheduledTaskEditorDialog({
                   <div className="flex flex-wrap items-center gap-2">
                     <Label htmlFor="scheduled-task-idle-thread">Send to</Label>
                     <Select
-                      value={draft.threadId}
+                      value={draft.idleAllOpenThreads ? ALL_OPEN_THREADS : draft.threadId}
                       onValueChange={(threadId) =>
-                        setDraft((current) => ({ ...current, threadId: threadId ?? "" }))
+                        setDraft((current) => ({
+                          ...current,
+                          idleAllOpenThreads: threadId === ALL_OPEN_THREADS,
+                          threadId: threadId === ALL_OPEN_THREADS ? "" : (threadId ?? ""),
+                        }))
                       }
                     >
                       <SelectTrigger size="sm" id="scheduled-task-idle-thread" className="w-56">
                         <SelectValue placeholder="Choose a thread">
-                          {idleThreads.find((thread) => thread.id === draft.threadId)?.title}
+                          {draft.idleAllOpenThreads
+                            ? "All open threads"
+                            : idleThreads.find((thread) => thread.id === draft.threadId)?.title}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectPopup>
+                        <SelectItem value={ALL_OPEN_THREADS}>All open threads</SelectItem>
                         {idleThreads.map((thread) => (
                           <SelectItem key={thread.id} value={thread.id}>
                             {thread.title}
@@ -1454,29 +1471,57 @@ function ScheduledTaskEditorDialog({
                         ))}
                       </SelectPopup>
                     </Select>
-                    <Label htmlFor="scheduled-task-idle-watch">when</Label>
-                    <Select
-                      value={draft.idleWatchThreadId}
-                      onValueChange={(threadId) =>
-                        setDraft((current) => ({ ...current, idleWatchThreadId: threadId ?? "" }))
-                      }
-                    >
-                      <SelectTrigger size="sm" id="scheduled-task-idle-watch" className="w-56">
-                        <SelectValue>
-                          {draft.idleWatchThreadId === ""
-                            ? "that thread finishes"
-                            : `"${idleThreads.find((thread) => thread.id === draft.idleWatchThreadId)?.title ?? "another thread"}" finishes`}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectPopup>
-                        <SelectItem value="">that thread finishes</SelectItem>
-                        {idleThreads.map((thread) => (
-                          <SelectItem key={thread.id} value={thread.id}>
-                            {thread.title}
-                          </SelectItem>
-                        ))}
-                      </SelectPopup>
-                    </Select>
+                    {draft.idleAllOpenThreads ? (
+                      <>
+                        <Label htmlFor="scheduled-task-idle-parallel">
+                          that stand still, while fewer than
+                        </Label>
+                        <Input
+                          id="scheduled-task-idle-parallel"
+                          type="number"
+                          nativeInput
+                          min={1}
+                          max={10}
+                          step={1}
+                          className="w-20"
+                          value={draft.idleMaxParallel}
+                          onChange={(event) =>
+                            setDraft((current) => ({
+                              ...current,
+                              idleMaxParallel: event.target.value,
+                            }))
+                          }
+                        />
+                        <span className="text-xs text-muted-foreground">are at work</span>
+                      </>
+                    ) : null}
+                    {draft.idleAllOpenThreads ? null : (
+                      <Label htmlFor="scheduled-task-idle-watch">when</Label>
+                    )}
+                    {draft.idleAllOpenThreads ? null : (
+                      <Select
+                        value={draft.idleWatchThreadId}
+                        onValueChange={(threadId) =>
+                          setDraft((current) => ({ ...current, idleWatchThreadId: threadId ?? "" }))
+                        }
+                      >
+                        <SelectTrigger size="sm" id="scheduled-task-idle-watch" className="w-56">
+                          <SelectValue>
+                            {draft.idleWatchThreadId === ""
+                              ? "that thread finishes"
+                              : `"${idleThreads.find((thread) => thread.id === draft.idleWatchThreadId)?.title ?? "another thread"}" finishes`}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectPopup>
+                          <SelectItem value="">that thread finishes</SelectItem>
+                          {idleThreads.map((thread) => (
+                            <SelectItem key={thread.id} value={thread.id}>
+                              {thread.title}
+                            </SelectItem>
+                          ))}
+                        </SelectPopup>
+                      </Select>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Label htmlFor="scheduled-task-idle-runs">Run up to</Label>
