@@ -219,6 +219,7 @@ import {
   sidebarMarkerId,
   sidebarThreadKeyAtY,
   countWaitingThreads,
+  threadsWaitingOnAnswer,
   orderInboxThreads,
   resolveNextWaitingThread,
   type WaitingThreadKind,
@@ -270,6 +271,7 @@ import {
   type ProviderInstanceEntry,
 } from "../providerInstances";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
+import { PendingRequestsDialog } from "./PendingRequestsDialog";
 import { SidebarAutomationStatus } from "./SidebarAutomationStatus";
 import { subscribeNextWaitingThread } from "./threadNextWaitingBus";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -5082,6 +5084,22 @@ export default function Sidebar() {
     () => countWaitingThreads([...pinnedThreads, ...activeThreads, ...workingThreads]),
     [activeThreads, pinnedThreads, workingThreads],
   );
+  const [pendingRequestsOpen, setPendingRequestsOpen] = useState(false);
+  const pendingRequestThreads = useMemo(
+    () =>
+      pendingRequestsOpen
+        ? threadsWaitingOnAnswer(
+            [...pinnedThreads, ...activeThreads, ...workingThreads],
+            projectPriorities,
+          ).map((thread) => ({
+            environmentId: thread.environmentId,
+            id: thread.id,
+            title: thread.title,
+            projectName: null,
+          }))
+        : [],
+    [activeThreads, pendingRequestsOpen, pinnedThreads, projectPriorities, workingThreads],
+  );
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
@@ -5443,7 +5461,23 @@ export default function Sidebar() {
                   {WAITING_COUNT_LABELS[kind]}
                 </button>
               ))}
+              {waitingCounts.some(({ kind }) => kind === "blocked") ? (
+                <button
+                  type="button"
+                  data-testid="sidebar-answer-all"
+                  onClick={() => setPendingRequestsOpen(true)}
+                  className="cursor-pointer rounded-sm underline underline-offset-2 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+                >
+                  answer here
+                </button>
+              ) : null}
             </div>
+          ) : null}
+          {pendingRequestsOpen ? (
+            <PendingRequestsDialog
+              threads={pendingRequestThreads}
+              onClose={() => setPendingRequestsOpen(false)}
+            />
           ) : null}
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (

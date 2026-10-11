@@ -1072,6 +1072,16 @@ export function resolveNextWaitingThread<T extends InboxOrderInput>(
 const WAITING_THREAD_KINDS = ["blocked", "failed", "limited", "unread"] as const;
 export type WaitingThreadKind = (typeof WAITING_THREAD_KINDS)[number];
 
+/** The threads that wait on an approval or an answer, longest wait first as the status sort has them. */
+export function threadsWaitingOnAnswer<T extends InboxOrderInput>(
+  threads: ReadonlyArray<T>,
+  priorities: Readonly<Record<string, SidebarProjectPriority>>,
+): ReadonlyArray<T> {
+  return orderInboxThreads(threads, "status", priorities).filter(
+    (thread) => WAITING_THREAD_KINDS[inboxStatusTier(thread)] === "blocked",
+  );
+}
+
 /** How many threads wait on the user, by reason. Kinds with none are left out. */
 export function countWaitingThreads(
   threads: ReadonlyArray<InboxOrderInput>,
