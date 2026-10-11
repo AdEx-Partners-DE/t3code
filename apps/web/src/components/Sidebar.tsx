@@ -219,6 +219,7 @@ import {
   sidebarMarkerId,
   sidebarThreadKeyAtY,
   countWaitingThreads,
+  summariseOpenThreads,
   isWaitingOnUser,
   threadsWaitingOnAnswer,
   orderInboxThreads,
@@ -276,6 +277,7 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { PendingRequestsDialog } from "./PendingRequestsDialog";
 import { SidebarAutomationStatus } from "./SidebarAutomationStatus";
+import { SidebarCockpit } from "./SidebarCockpit";
 import { subscribeNextWaitingThread } from "./threadNextWaitingBus";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button, InlineButton } from "./ui/button";
@@ -5155,6 +5157,12 @@ export default function Sidebar() {
     () => countWaitingThreads([...pinnedThreads, ...activeThreads, ...workingThreads]),
     [activeThreads, pinnedThreads, workingThreads],
   );
+  // The burn chart moves by the hour; a minute's grain is plenty.
+  const cockpitNowMs = Date.parse(`${useNowMinute()}:00.000Z`);
+  const openThreadSummary = useMemo(
+    () => summariseOpenThreads([...pinnedThreads, ...activeThreads, ...workingThreads]),
+    [activeThreads, pinnedThreads, workingThreads],
+  );
   const [pendingRequestsOpen, setPendingRequestsOpen] = useState(false);
   const pendingRequestThreads = useMemo(
     () =>
@@ -5511,6 +5519,14 @@ export default function Sidebar() {
         }
       >
         <SidebarGroup className="flex-1" role="presentation">
+          {isSearchingThreads ? null : (
+            <SidebarCockpit
+              summary={openThreadSummary}
+              environmentId={serverConfigs.keys().next().value ?? null}
+              nowMs={cockpitNowMs}
+              onOpenNextWaiting={() => openNextWaitingThread({ quiet: true })}
+            />
+          )}
           {isSearchingThreads
             ? null
             : [...serverConfigs.keys()].map((id) => (

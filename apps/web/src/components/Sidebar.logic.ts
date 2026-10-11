@@ -1087,6 +1087,39 @@ export function isWaitingOnUser(thread: InboxOrderInput): boolean {
   return WAITING_THREAD_KINDS[inboxStatusTier(thread)] !== undefined;
 }
 
+/** Where the open threads stand, for the cockpit above the list. */
+export interface OpenThreadSummary {
+  /** Threads that are not settled. */
+  readonly open: number;
+  /** An agent is at work right now. */
+  readonly working: number;
+  /** The agent stopped, but background work of its own will wake it. */
+  readonly waiting: number;
+  /** An answer, a failure, a limit or an unread result: the user's turn. */
+  readonly needYou: number;
+  /** Finished, read, and nothing running. */
+  readonly idle: number;
+}
+
+export function summariseOpenThreads(threads: ReadonlyArray<InboxOrderInput>): OpenThreadSummary {
+  let working = 0;
+  let waiting = 0;
+  let needYou = 0;
+  for (const thread of threads) {
+    const tier = inboxStatusTier(thread);
+    if (tier <= 3) needYou += 1;
+    else if (tier === 5) waiting += 1;
+    else if (tier === 6) working += 1;
+  }
+  return {
+    open: threads.length,
+    working,
+    waiting,
+    needYou,
+    idle: threads.length - working - waiting - needYou,
+  };
+}
+
 /** How many threads wait on the user, by reason. Kinds with none are left out. */
 export function countWaitingThreads(
   threads: ReadonlyArray<InboxOrderInput>,
