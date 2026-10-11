@@ -1130,7 +1130,8 @@ export function createServerEnvironmentAtoms<R, E>(
     }),
     threadChecklist: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:thread-checklist",
-      tag: ORCHESTRATION_V2_WS_METHODS.getThreadChecklist,
+      // The same method as the list across threads, asked for one thread.
+      tag: ORCHESTRATION_V2_WS_METHODS.listThreadChecklists,
       staleTimeMs: 60_000,
     }),
     usageLimitHistory: createEnvironmentRpcQueryAtomFamily(runtime, {

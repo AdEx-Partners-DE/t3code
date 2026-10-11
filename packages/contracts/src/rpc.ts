@@ -1736,15 +1736,6 @@ const WsOrchestrationV2ListThreadChecklistsRpc = Rpc.make(
   },
 );
 
-const WsOrchestrationV2GetThreadChecklistRpc = Rpc.make(
-  ORCHESTRATION_V2_WS_METHODS.getThreadChecklist,
-  {
-    payload: OrchestrationV2RpcSchemas.getThreadChecklist.input,
-    success: OrchestrationV2RpcSchemas.getThreadChecklist.output,
-    error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
-  },
-);
-
 const WsOrchestrationV2RefreshThreadChecklistRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist,
   {
@@ -2129,7 +2120,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2ClearAllQueuesRpc,
-  WsOrchestrationV2GetThreadChecklistRpc,
   WsOrchestrationV2ListThreadChecklistsRpc,
   WsOrchestrationV2RefreshThreadChecklistRpc,
   WsOrchestrationV2NudgeIdleThreadsRpc,

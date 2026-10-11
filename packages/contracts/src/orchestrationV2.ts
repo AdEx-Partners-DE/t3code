@@ -3305,7 +3305,6 @@ export type ThreadChecklist = typeof ThreadChecklist.Type;
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   clearAllQueues: "orchestration.clearAllQueues",
-  getThreadChecklist: "orchestration.getThreadChecklist",
   listThreadChecklists: "orchestration.listThreadChecklists",
   refreshThreadChecklist: "orchestration.refreshThreadChecklist",
   nudgeIdleThreads: "orchestration.nudgeIdleThreads",
@@ -3885,9 +3884,12 @@ export const OrchestrationV2RpcSchemas = {
    * checker takes, and one more method turns the server's types into `any`.
    */
   listThreadChecklists: {
-    input: Schema.Struct({}),
+    /** With `threadId`: only that thread's stored checklist, in `checklist`. */
+    input: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
     output: Schema.Struct({
       checklists: Schema.Array(ThreadChecklist),
+      /** Set when one thread was asked for; null when it has no checklist yet. */
+      checklist: Schema.optional(Schema.NullOr(ThreadChecklist)),
       waitingQueues: Schema.optional(
         Schema.Array(
           Schema.Struct({
@@ -3899,10 +3901,6 @@ export const OrchestrationV2RpcSchemas = {
         ),
       ),
     }),
-  },
-  getThreadChecklist: {
-    input: Schema.Struct({ threadId: ThreadId }),
-    output: Schema.Struct({ checklist: Schema.NullOr(ThreadChecklist) }),
   },
   /** Has a model write the checklist anew; this costs a model call. */
   refreshThreadChecklist: {

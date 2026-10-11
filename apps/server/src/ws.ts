@@ -1989,10 +1989,15 @@ const layerWsRpc = (
                 }),
             ),
           ),
-        [ORCHESTRATION_V2_WS_METHODS.listThreadChecklists]: () =>
-          Effect.all({
-            checklists: threadChecklist.listOpen,
-            waitingQueues: queueOverview.read,
+        [ORCHESTRATION_V2_WS_METHODS.listThreadChecklists]: (input) =>
+          Effect.gen(function* () {
+            if (input.threadId !== undefined) {
+              return { checklists: [], checklist: yield* threadChecklist.read(input.threadId) };
+            }
+            return {
+              checklists: yield* threadChecklist.listOpen,
+              waitingQueues: yield* queueOverview.read,
+            };
           }).pipe(
             Effect.mapError(
               (cause) =>
@@ -2002,8 +2007,6 @@ const layerWsRpc = (
                 }),
             ),
           ),
-        [ORCHESTRATION_V2_WS_METHODS.getThreadChecklist]: (input) =>
-          threadChecklist.read(input.threadId).pipe(Effect.map((checklist) => ({ checklist }))),
         [ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist]: (input) =>
           threadChecklist.refresh(input.threadId).pipe(
             Effect.map((checklist) => ({ checklist })),
