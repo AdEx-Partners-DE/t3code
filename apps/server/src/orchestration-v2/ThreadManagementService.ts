@@ -47,6 +47,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { limitAccountSwitchSelection } from "./LimitAccountSwitch.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import { startsWithoutTheUser } from "./QueuePauseHold.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
@@ -624,9 +625,28 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const allQueuesPaused = Option.isNone(serverSettings)
+    ? Effect.succeed(false)
+    : serverSettings.value.getSettings.pipe(
+        Effect.map((settings) => settings.threadQueuesPaused),
+        Effect.orElseSucceed(() => false),
+      );
+
+  // The pause holds every turn the user did not start by hand, not only the
+  // next one in a queue. Reading the setting is I/O, so it happens here.
+  const withQueuePauseHold = (command: Parameters<ThreadManagementServiceShape["dispatch"]>[0]) =>
+    command.type !== "message.dispatch" ||
+    command.heldByQueuePause !== undefined ||
+    !startsWithoutTheUser(command)
+      ? Effect.succeed(command)
+      : allQueuesPaused.pipe(
+          Effect.map((paused) => (paused ? { ...command, heldByQueuePause: true } : command)),
+        );
+
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
     ensureCommandTranscripts(command).pipe(
       Effect.andThen(withLimitAccountSwitch(command)),
+      Effect.flatMap(withQueuePauseHold),
       Effect.flatMap((routed) => orchestrator.dispatch(routed)),
     );
 
@@ -661,15 +681,7 @@ const make = Effect.gen(function* () {
           : (yield* orchestrator.getShellSnapshot()).threads
               .filter((thread) => thread.archivedAt === null)
               .map((thread) => thread.id);
-      // A message queued into a thread that stands still starts at once; the
-      // queue pause only stops the next one from moving up. So while all
-      // queues are paused, a standing thread gets nothing back.
-      const allQueuesPaused = Option.isNone(serverSettings)
-        ? false
-        : yield* serverSettings.value.getSettings.pipe(
-            Effect.map((settings) => settings.threadQueuesPaused),
-            Effect.orElseSucceed(() => false),
-          );
+      const paused = yield* allQueuesPaused;
       let threads = 0;
       let messages = 0;
       let heldBack = 0;
@@ -703,7 +715,9 @@ const make = Effect.gen(function* () {
         for (const run of cleared) {
           const source = byId.get(run.userMessageId);
           if (source === undefined || byId.has(restoredId(run))) continue;
-          if (allQueuesPaused && !working) {
+          // A thread that never ran has no run to wait behind: put back, the
+          // message would start through the pause. It stays restorable.
+          if (paused && !working && !runs.some((entry) => entry.startedAt !== null)) {
             heldBack += 1;
             continue;
           }
@@ -722,6 +736,9 @@ const make = Effect.gen(function* () {
             dispatchMode: { type: "queue_after_active" },
             createdBy: source.createdBy,
             creationSource: source.creationSource,
+            // Back into the queue, not into a turn: while the pause is on,
+            // even a message the user once typed waits.
+            ...(paused ? { heldByQueuePause: true } : {}),
           }).pipe(
             Effect.as(true),
             Effect.catch((cause) =>
@@ -890,7 +907,10 @@ const make = Effect.gen(function* () {
         };
       }
 
-      const dispatch = yield* orchestrator.dispatch({
+      // Through the same funnel as a client's message, so a send from an
+      // agent tool or a scheduled task also hands over at a used-up account
+      // and waits while all queues are paused.
+      const sent = yield* dispatch({
         type: "message.dispatch",
         commandId: input.commandId,
         threadId: input.threadId,
@@ -942,7 +962,7 @@ const make = Effect.gen(function* () {
             : input.mode === "restart"
               ? "restarted"
               : "steered";
-      return { dispatch, projection, message, run, turnItem, delivery };
+      return { dispatch: sent, projection, message, run, turnItem, delivery };
     });
 
   const waitForThread: ThreadManagementServiceShape["waitForThread"] = (input) =>

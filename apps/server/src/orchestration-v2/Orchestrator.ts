@@ -4995,7 +4995,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection.thread.worktreePath === null
           ? latestRun
           : undefined;
-      const queueBehindRun = activeRun ?? worktreeMissingRun;
+      // While all queues are paused, a turn nobody at a client asked for waits
+      // behind the thread's last run. A thread that never ran has nothing to
+      // wait behind and starts as usual.
+      const queuePauseRun =
+        activeRun === undefined &&
+        command.heldByQueuePause === true &&
+        (dispatchMode.type === "queue_after_active" || dispatchMode.type === "start_immediately")
+          ? (latestRun ?? undefined)
+          : undefined;
+      const queueBehindRun = activeRun ?? worktreeMissingRun ?? queuePauseRun;
       const pendingMergeBackTransfers = pendingMergeBackTransfersForThread(projection);
       const shouldQueue =
         queueBehindRun !== undefined &&

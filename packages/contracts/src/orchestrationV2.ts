@@ -2954,6 +2954,12 @@ export const OrchestrationV2Command = Schema.Union([
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
     /** Resolve untargeted delivery against the server's serialized thread state. */
     deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
+    /**
+     * Set by the server while all queues are paused, on a message that would
+     * start a turn the user did not ask for: it is queued behind the thread's
+     * last run instead of starting, and starts when the pause is lifted.
+     */
+    heldByQueuePause: Schema.optional(Schema.Boolean),
     delegatedCompletion: Schema.optional(
       Schema.Struct({
         parentRunId: RunId,

@@ -100,8 +100,10 @@ export const make = Effect.gen(function* () {
             text: input.text,
             attachments: [],
             dispatchMode: { type: "start_immediately" },
+            // The user pressed the button: it is their message, and it goes
+            // through a queue pause like anything they type.
             createdBy: "user",
-            creationSource: "server",
+            creationSource: "web",
           })
           .pipe(
             Effect.as(true),
