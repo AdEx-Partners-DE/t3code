@@ -24,7 +24,6 @@ function decide(
   return decideIdleTrigger({
     schedule,
     thread: thread(),
-    runCount: 0,
     armedAtMs: ARMED,
     lastRunAtMs: null,
     nowMs: at("2026-10-11T08:12:00.000Z"),
@@ -86,9 +85,11 @@ describe("decideIdleTrigger", () => {
   });
 
   it("stops for good once the runs are used up, whatever the thread is doing", () => {
-    expect(decide({ runCount: 3 })).toEqual({ type: "exhausted" });
-    expect(decide({ runCount: 3, thread: thread({ activeRunId: RunId.make("run:1") }) })).toEqual({
-      type: "exhausted",
-    });
+    const used = { ...schedule, runsUsed: 3 };
+    expect(decide({ schedule: used })).toEqual({ type: "exhausted" });
+    expect(
+      decide({ schedule: used, thread: thread({ activeRunId: RunId.make("run:1") }) }),
+    ).toEqual({ type: "exhausted" });
+    expect(decide({ schedule: { ...schedule, runsUsed: 2 } })).toEqual({ type: "fire" });
   });
 });

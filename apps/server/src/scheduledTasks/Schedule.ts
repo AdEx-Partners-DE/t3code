@@ -13,7 +13,8 @@ export function nextScheduledRunAt(
   schedule: ScheduledTaskSchedule,
   from: DateTime.DateTime,
 ): DateTime.DateTime | null {
-  if (schedule.type === "webhook") return null;
+  // Webhook and idle tasks are started by an event, not by the clock.
+  if (schedule.type === "webhook" || schedule.type === "idle") return null;
   if (schedule.type === "interval") {
     // Persisted rows created before the one-minute floor remain readable, but
     // they must not retain their old high-frequency execution rate.
@@ -58,6 +59,10 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
   }
   // Webhook tasks never have a next run, whatever their signature settings.
   if (a.type === "webhook") return b.type === "webhook";
+  // `runsUsed` is the server's own counter and not part of what the user set.
+  if (a.type === "idle") {
+    return b.type === "idle" && a.maxRuns === b.maxRuns && a.minPauseMs === b.minPauseMs;
+  }
   if (b.type !== "fixed_time") return false;
   // The contract accepts padded and unpadded hours ("9:00" and "09:00"), so
   // compare the parsed time — string equality would treat a format-only edit
@@ -97,6 +102,9 @@ export function isMissedFixedTimeRun(
 
 function describeSchedule(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
+  if (schedule.type === "idle") {
+    return `When the thread is idle, up to ${schedule.maxRuns} ${schedule.maxRuns === 1 ? "run" : "runs"}`;
+  }
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / MINUTE_MS;
     if (Number.isInteger(minutes)) {

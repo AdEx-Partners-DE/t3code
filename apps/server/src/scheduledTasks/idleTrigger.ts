@@ -35,13 +35,12 @@ export type IdleTriggerDecision =
 export function decideIdleTrigger(input: {
   readonly schedule: ScheduledTaskIdleSchedule;
   readonly thread: IdleTriggerThread;
-  readonly runCount: number;
   readonly armedAtMs: number;
   readonly lastRunAtMs: number | null;
   readonly nowMs: number;
 }): IdleTriggerDecision {
   const { schedule, thread } = input;
-  if (input.runCount >= schedule.maxRuns) return { type: "exhausted" };
+  if ((schedule.runsUsed ?? 0) >= schedule.maxRuns) return { type: "exhausted" };
   if (thread.activeRunId !== null || (thread.activityRunStatus ?? null) !== null) {
     return { type: "wait", reason: "busy" };
   }

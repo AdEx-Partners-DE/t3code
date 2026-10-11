@@ -126,9 +126,6 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
  * Run the prompt each time the bound thread goes idle: no run active or
  * queued, nothing waiting on the user. Both limits are required, because a
  * prompt that answers every finished run would otherwise never stop.
- *
- * Not part of `ScheduledTaskSchedule` yet: the trigger is decided on the
- * server first and joins the union once every client can show it.
  */
 export const ScheduledTaskIdleSchedule = Schema.Struct({
   type: Schema.Literal("idle").annotate({
@@ -140,6 +137,8 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
   minPauseMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
     description: "Shortest wait after a run ends before the next one may start.",
   }),
+  /** Runs since the task was last armed. Kept by the server; saving or enabling resets it. */
+  runsUsed: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }).annotate({
   description: "Run each time the bound thread goes idle, up to a fixed number of runs.",
 });
@@ -153,9 +152,10 @@ export const ScheduledTaskSchedule = Schema.Union([
   ScheduledTaskIntervalSchedule,
   ScheduledTaskFixedTimeSchedule,
   ScheduledTaskWebhookSchedule,
+  ScheduledTaskIdleSchedule,
 ]).annotate({
   description:
-    "Structured trigger. Pass an object with type 'interval', 'fixed_time' or 'webhook'.",
+    "Structured trigger. Pass an object with type 'interval', 'fixed_time', 'webhook' or 'idle'.",
 });
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
 
@@ -175,8 +175,10 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
   }),
   ScheduledTaskFixedTimeSchedule,
   ScheduledTaskUpsertWebhookSchedule,
+  ScheduledTaskIdleSchedule,
 ]).annotate({
-  description: "Writable trigger. Pass an object with type 'interval', 'fixed_time' or 'webhook'.",
+  description:
+    "Writable trigger. Pass an object with type 'interval', 'fixed_time', 'webhook' or 'idle'.",
 });
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;
 

@@ -45,6 +45,7 @@ import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import { decideIdleTrigger } from "./idleTrigger.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -161,6 +162,7 @@ const decodeTaskId = Schema.decodeUnknownOption(ScheduledTaskId);
 const decodeScheduleJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ScheduledTask.fields.schedule),
 );
+const encodeScheduleJson = Schema.encodeSync(Schema.fromJsonString(ScheduledTask.fields.schedule));
 const decodeWorkspaceStrategyJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ScheduledTask.fields.workspaceStrategy),
 );
@@ -709,7 +711,7 @@ export const layer = Layer.effect(
 
     const runTask = Effect.fn("ScheduledTaskService.runTask")(function* (
       task: ScheduledTask,
-      trigger: "scheduled" | "manual" | "webhook",
+      trigger: "scheduled" | "manual" | "webhook" | "idle",
       webhook?: { readonly deliveryId: string; readonly prompt: string },
     ) {
       const reserved = yield* Ref.modify(activeRuns, (active) => {
@@ -719,7 +721,7 @@ export const layer = Layer.effect(
         return [true, next] as const;
       });
       if (!reserved) {
-        if (trigger !== "scheduled") {
+        if (trigger !== "scheduled" && trigger !== "idle") {
           return yield* taskError("Schedule task is already running.", { taskId: task.id });
         }
         return task;
@@ -741,10 +743,15 @@ export const layer = Layer.effect(
           }
           // A manual run on a just-deleted task must fail loudly, not report
           // a successful run that never dispatched.
-          if (trigger !== "scheduled") {
+          if (trigger !== "scheduled" && trigger !== "idle") {
             return yield* taskError("Schedule task not found.", { taskId: task.id });
           }
           return task;
+        }
+        // The idle poll read this task a moment ago: it may have been paused
+        // or given another trigger since.
+        if (trigger === "idle" && (!active.enabled || active.schedule.type !== "idle")) {
+          return active;
         }
         // A next_run_at corrupted between the poll read and this re-read must
         // not defect the poll; an unparseable value is treated as not due.
@@ -832,6 +839,22 @@ export const layer = Layer.effect(
 
         const completedAt = yield* localNow;
         const runSucceeded = result._tag === "Success";
+        // Count the run against an idle task's allowance whether or not it was
+        // accepted, so a prompt that keeps failing still stops.
+        if (trigger === "idle" && active.schedule.type === "idle") {
+          yield* sql`
+            UPDATE scheduled_tasks
+            SET schedule_json = ${encodeScheduleJson({
+              ...active.schedule,
+              runsUsed: (active.schedule.runsUsed ?? 0) + 1,
+            })}
+            WHERE task_id = ${active.id} AND created_at = ${active.createdAt}
+          `.pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not count an idle task run", { taskId: active.id, cause }),
+            ),
+          );
+        }
         const lastRunStatus = runSucceeded ? ("succeeded" as const) : ("failed" as const);
         const lastRunError = runSucceeded ? null : errorMessage(result.cause);
         // Re-read the task so the next run is computed from the schedule as it
@@ -979,6 +1002,56 @@ export const layer = Layer.effect(
 
     yield* scheduler.register("scheduled-tasks", runDueTasks());
 
+    // Idle tasks have no due time: each poll asks whether their thread has
+    // gone quiet. The thread is read here, on the server, right before the
+    // prompt is sent; a prompt that still meets a new run queues behind it.
+    const runIdleTasks = Effect.fn("ScheduledTaskService.runIdleTasks")(function* () {
+      const rows = yield* sql<ScheduledTaskRow>`
+        SELECT * FROM scheduled_tasks
+        WHERE enabled = 1 AND next_run_at IS NULL AND thread_id IS NOT NULL
+          AND last_run_status <> 'running' AND schedule_json LIKE '%"type":"idle"%'
+      `.pipe(Effect.mapError((cause) => taskError("Could not list idle tasks.", { cause })));
+      yield* Effect.forEach(
+        rows,
+        (row) =>
+          Effect.gen(function* () {
+            const task = yield* decodeRow(row);
+            if (task.schedule.type !== "idle" || task.threadId === null) return;
+            const thread = yield* threadManagement.getThreadShell(ThreadId.make(task.threadId));
+            if (thread === null) return;
+            const now = yield* localNow;
+            const lastRunAt =
+              task.lastRunAt === null ? Option.none() : DateTime.make(task.lastRunAt);
+            const armedAt = DateTime.make(task.updatedAt);
+            if (Option.isNone(armedAt)) return;
+            const decision = decideIdleTrigger({
+              schedule: task.schedule,
+              thread,
+              armedAtMs: DateTime.toEpochMillis(armedAt.value),
+              lastRunAtMs: Option.isSome(lastRunAt)
+                ? DateTime.toEpochMillis(lastRunAt.value)
+                : null,
+              nowMs: DateTime.toEpochMillis(now),
+            });
+            if (decision.type === "fire") {
+              yield* runTask(task, "idle");
+            } else if (decision.type === "exhausted") {
+              yield* sql`
+                UPDATE scheduled_tasks SET enabled = 0, updated_at = ${iso(now)}
+                WHERE task_id = ${task.id}
+              `;
+              yield* notifyChanged;
+            }
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Idle task check failed", { taskId: row.task_id, cause }),
+            ),
+          ),
+        { concurrency: 1, discard: true },
+      );
+    });
+    yield* scheduler.register("scheduled-tasks-idle", runIdleTasks());
+
     const list: ScheduledTaskService["Service"]["list"] = () =>
       listRows().pipe(
         Effect.map((tasks) => ({ tasks })),
@@ -1035,7 +1108,24 @@ export const layer = Layer.effect(
                       },
                 maxDeliveryAgeMinutes: input.schedule.maxDeliveryAgeMinutes ?? null,
               }
-            : input.schedule;
+            : input.schedule.type === "idle"
+              ? // Saving arms the task afresh; an untouched schedule keeps its count.
+                {
+                  ...input.schedule,
+                  runsUsed:
+                    existingTask !== null &&
+                    existingTask.enabled === input.enabled &&
+                    isSameSchedule(existingTask.schedule, input.schedule) &&
+                    existingTask.schedule.type === "idle"
+                      ? (existingTask.schedule.runsUsed ?? 0)
+                      : 0,
+                }
+              : input.schedule;
+        if (schedule.type === "idle" && (input.threadId ?? null) === null) {
+          return yield* taskError("A task that runs when a thread is idle needs a thread.", {
+            taskId: id,
+          });
+        }
         const webhook =
           input.schedule.type === "webhook"
             ? yield* Effect.gen(function* () {
@@ -1113,12 +1203,19 @@ export const layer = Layer.effect(
         if (existing.enabled === input.enabled) return { task: existing };
         const now = yield* localNow;
         const next = nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);
+        // Enabling an idle task arms it afresh with its full number of runs.
+        const scheduleJson = encodeScheduleJson(
+          existing.schedule.type === "idle" && input.enabled
+            ? { ...existing.schedule, runsUsed: 0 }
+            : existing.schedule,
+        );
         // RETURNING so a task deleted between the load and this UPDATE is a
         // visible not-found error, not a false success.
         const updated = yield* sql<{ task_id: string }>`
           UPDATE scheduled_tasks
           SET enabled = ${input.enabled ? 1 : 0},
               next_run_at = ${next},
+              schedule_json = ${scheduleJson},
               updated_at = ${iso(now)}
           WHERE task_id = ${input.id}
           RETURNING task_id

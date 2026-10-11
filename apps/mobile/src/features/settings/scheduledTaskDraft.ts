@@ -68,6 +68,9 @@ export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): Sch
           ? [...new Set(task.schedule.weekdays)].sort((a, b) => a - b)
           : [0, 1, 2, 3, 4, 5, 6],
       };
+    // No editor for idle tasks here yet; they are created and changed by agents.
+    case "idle":
+      return DEFAULT_SCHEDULE;
     case "interval":
       return {
         ...DEFAULT_SCHEDULE,
