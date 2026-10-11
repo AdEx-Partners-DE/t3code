@@ -12,11 +12,13 @@ import { deriveProviderInstanceEntries } from "../../providerInstances";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 const KEEP = "";
+const MAX_LISTED_MODELS = 60;
 
 interface ModelChoice {
   readonly key: string;
@@ -60,6 +62,7 @@ function OpenThreadModelOverrideControls({
   const restore = useAtomCommand(serverEnvironment.restoreOpenThreadModels);
   const [modelKey, setModelKey] = useState(KEEP);
   const [effort, setEffort] = useState(KEEP);
+  const [filter, setFilter] = useState("");
   const [pending, setPending] = useState(false);
 
   const choices = useMemo<ReadonlyArray<ModelChoice>>(
@@ -84,6 +87,14 @@ function OpenThreadModelOverrideControls({
     [providers],
   );
   const chosen = choices.find((choice) => choice.key === modelKey) ?? null;
+  // Some providers list hundreds of models; the list shows what the filter
+  // leaves, and never more than fits a menu.
+  const listed = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    return choices
+      .filter((choice) => needle === "" || choice.label.toLowerCase().includes(needle))
+      .slice(0, MAX_LISTED_MODELS);
+  }, [choices, filter]);
   // With a model chosen, its own levels; otherwise every level some model offers.
   const efforts = useMemo(() => {
     const seen = new Map<string, string>();
@@ -157,13 +168,21 @@ function OpenThreadModelOverrideControls({
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
+      <Input
+        nativeInput
+        aria-label="Filter the model list"
+        placeholder={`Filter ${choices.length} models`}
+        className="w-40"
+        value={filter}
+        onChange={(event) => setFilter(event.target.value)}
+      />
       <Select value={modelKey} onValueChange={(value) => setModelKey(value ?? KEEP)}>
         <SelectTrigger size="sm" aria-label="Model for all open threads" className="w-56">
           <SelectValue>{chosen?.label ?? "Keep each thread's model"}</SelectValue>
         </SelectTrigger>
         <SelectPopup>
           <SelectItem value={KEEP}>Keep each thread's model</SelectItem>
-          {choices.map((choice) => (
+          {listed.map((choice) => (
             <SelectItem key={choice.key} value={choice.key}>
               {choice.label}
             </SelectItem>
