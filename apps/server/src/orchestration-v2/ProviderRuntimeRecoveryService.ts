@@ -53,6 +53,8 @@ export interface ProviderRuntimeRecoverySummary {
   readonly closedRequests: number;
   readonly retiredEffects: number;
   readonly requeuedEffects: number;
+  /** See ProviderRuntimeReconciliationSummary. */
+  readonly queuesToResume?: ReadonlyArray<ThreadId> | undefined;
 }
 
 export interface ProviderRuntimeReconciliationSummary {
@@ -61,6 +63,11 @@ export interface ProviderRuntimeReconciliationSummary {
   readonly closedRequests: number;
   readonly retiredEffects: number;
   readonly requeuedEffects: number;
+  /**
+   * Standing threads whose queue was left free to go on after a restart.
+   * Nothing else would start them: a queue only moves when a run ends.
+   */
+  readonly queuesToResume?: ReadonlyArray<ThreadId> | undefined;
 }
 
 export class ProviderRuntimeRecoveryService extends Context.Service<
@@ -302,6 +309,10 @@ export const make = Effect.gen(function* () {
       for (const run of projection.runs) {
         if (run.status !== "queued" || run.queueHeld === true || run === handoffContinuation)
           continue;
+        // "Continue threads after a server update" is that consent, given
+        // once for every restart. Without it each update would park every
+        // waiting queue until the user resumed the threads one by one.
+        if (continueAfterRestart) continue;
         events.push({
           id: yield* allocateEventId(),
           type: "run.updated",
@@ -762,6 +773,14 @@ export const make = Effect.gen(function* () {
         stoppedSessions,
         closedRequests: requests.length,
         retiredEffects,
+        // A thread with a cut run gets its queue moving again when that run's
+        // continuation ends; only a thread that stood still needs a start.
+        queueToResume:
+          continueAfterRestart &&
+          trigger === "startup" &&
+          runs.length === 0 &&
+          continuationRun === undefined &&
+          queuedRuns.some((run) => run.queueHeld !== true),
       };
     },
   );
@@ -782,6 +801,7 @@ export const make = Effect.gen(function* () {
       let stoppedSessions = 0;
       let closedRequests = 0;
       let retiredEffects = 0;
+      const queuesToResume: Array<ThreadId> = [];
       for (const threadId of threadIds) {
         const projection = yield* projections.getRuntimeRecoveryProjection(threadId).pipe(
           Effect.mapError(
@@ -802,6 +822,7 @@ export const make = Effect.gen(function* () {
         stoppedSessions += result.stoppedSessions;
         closedRequests += result.closedRequests;
         retiredEffects += result.retiredEffects;
+        if (result.queueToResume) queuesToResume.push(threadId);
       }
       const outboxReconciliation = yield* outbox.reconcileAfterProcessLoss.pipe(
         Effect.mapError(
@@ -814,6 +835,7 @@ export const make = Effect.gen(function* () {
         closedRequests,
         retiredEffects: retiredEffects + outboxReconciliation.cancelled,
         requeuedEffects: outboxReconciliation.requeued,
+        ...(queuesToResume.length === 0 ? {} : { queuesToResume }),
       } satisfies ProviderRuntimeReconciliationSummary;
     });
 

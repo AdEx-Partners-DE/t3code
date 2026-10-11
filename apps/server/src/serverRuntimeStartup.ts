@@ -15,6 +15,8 @@ import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+
+import { recordDecision } from "./decisionLog.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -537,6 +539,36 @@ const make = (options?: StartupOptions) =>
         ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),
       });
       yield* Effect.logInfo("V2 orchestration recovery completed", recovery);
+      // Queues that recovery left free in standing threads: start them now
+      // that the effect worker runs. A paused or limited thread declines.
+      const startupId = DateTime.toEpochMillis(yield* DateTime.now);
+      yield* Effect.forEach(
+        recovery.queuesToResume ?? [],
+        (threadId) =>
+          orchestrator
+            .dispatch({
+              type: "queue.resume",
+              commandId: CommandId.make(`command:startup-queue-resume:${threadId}:${startupId}`),
+              threadId,
+            })
+            .pipe(
+              Effect.andThen(
+                recordDecision({
+                  kind: "restart-queue",
+                  threadId,
+                  outcome: "resumed",
+                  facts: {},
+                }),
+              ),
+              Effect.catch((cause) =>
+                Effect.logWarning("Could not resume a queue after the restart", {
+                  threadId,
+                  cause,
+                }),
+              ),
+            ),
+        { discard: true },
+      );
       // Runs after activation: the status check fetches every enabled project's
       // remote, and awaiting it here held command readiness for that long.
       yield* runStartupPhase(
