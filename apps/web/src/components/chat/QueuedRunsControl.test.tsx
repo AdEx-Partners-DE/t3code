@@ -30,6 +30,7 @@ vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => async () => undefined,
 }));
 
+vi.mock("../../hooks/useSettings", () => ({ useEnvironmentSettings: () => false }));
 vi.mock("../../assets/assetUrls", () => ({
   useAssetUrls: (_environmentId: never, resources: ReadonlyArray<{ attachmentId: string }>) =>
     resources.map((resource) => `https://assets.test/${resource.attachmentId}`),

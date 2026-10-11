@@ -18,6 +18,7 @@ import {
 import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 
 import { useAssetUrls } from "../../assets/assetUrls";
+import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { threadEnvironment } from "../../state/threads";
 import { useThreadProjection } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -92,6 +93,11 @@ export function QueuedRunsControl({
   const activeRun = workflow?.activeRun ?? null;
   const canReorder = workflow?.canReorder === true;
   const queueHeld = workflow?.isHeld === true;
+  // The environment-wide pause holds this queue too, whatever the thread says.
+  const allQueuesPaused = useEnvironmentSettings(
+    props.environmentId,
+    (settings) => settings.threadQueuesPaused,
+  );
   const queuedImageAttachmentIds = useMemo(() => {
     const ids: string[] = [];
     for (const { attachments } of workflow?.queuedRuns ?? []) {
@@ -267,7 +273,11 @@ export function QueuedRunsControl({
             <ListOrderedIcon />
           </ComposerBanner.Icon>
           <ComposerBanner.Content className="text-muted-foreground">
-            {queueHeld ? "Queued, paused" : "Queued"}
+            {allQueuesPaused
+              ? "Queued, all queues paused"
+              : queueHeld
+                ? "Queued, paused"
+                : "Queued"}
           </ComposerBanner.Content>
           <ComposerBanner.Actions>
             <ComposerBanner.Count>{items.length}</ComposerBanner.Count>
@@ -279,9 +289,11 @@ export function QueuedRunsControl({
             {queued.length > 0 ? (
               <ComposerBanner.Row render={<li />}>
                 <ComposerBanner.Content className="text-muted-foreground">
-                  {queueHeld
-                    ? "Nothing here starts until you resume."
-                    : "Pausing lets the current run finish and holds the rest."}
+                  {allQueuesPaused
+                    ? "All queues are paused in Settings → General. Nothing starts until that is turned off."
+                    : queueHeld
+                      ? "Nothing here starts until you resume."
+                      : "Pausing lets the current run finish and holds the rest."}
                 </ComposerBanner.Content>
                 <ComposerBanner.Actions>
                   <Button

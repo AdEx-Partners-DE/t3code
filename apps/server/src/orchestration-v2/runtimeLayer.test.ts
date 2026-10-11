@@ -3596,6 +3596,86 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("holds a queue without touching the run under way, and resumes it", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-hold-queue-thread");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-hold-queue-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-hold-queue-project"),
+        title: "Hold the queue",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-hold-queue",
+      });
+      // Nothing is queued yet, so there is nothing to carry a hold.
+      const empty = yield* Effect.exit(
+        orchestrator.dispatch({
+          type: "queue.hold",
+          commandId: CommandId.make("runtime-layer-hold-queue-empty"),
+          threadId,
+        }),
+      );
+      assert.equal(empty._tag, "Failure");
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-hold-queue-active-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-hold-queue-active-message"),
+        text: "Keep the provider occupied.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-hold-queue-next-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-hold-queue-next-message"),
+        text: "Wait until the queue is resumed.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const activeRun = before.runs.find((run) => run.status === "starting");
+      const queuedRun = before.runs.find((run) => run.status === "queued");
+      assert.isDefined(activeRun);
+      assert.isDefined(queuedRun);
+
+      yield* orchestrator.dispatch({
+        type: "queue.hold",
+        commandId: CommandId.make("runtime-layer-hold-queue-hold"),
+        threadId,
+      });
+      const held = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(held.runs.find((run) => run.id === queuedRun.id)?.queueHeld, true);
+      assert.equal(held.runs.find((run) => run.id === queuedRun.id)?.status, "queued");
+      // The hold is not a stop: the run under way is exactly where it was.
+      assert.equal(held.runs.find((run) => run.id === activeRun.id)?.status, activeRun.status);
+
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("runtime-layer-hold-queue-resume"),
+        threadId,
+      });
+      const resumed = yield* orchestrator.getThreadProjection(threadId);
+      assert.notEqual(resumed.runs.find((run) => run.id === queuedRun.id)?.queueHeld, true);
+    }),
+  );
+
   it.effect("cancels queued work when a thread is archived", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
