@@ -9,7 +9,7 @@
  *
  * @module StandingModelOverride
  */
-import { CommandId, TrimmedNonEmptyString, type ModelSelection } from "@t3tools/contracts";
+import { CommandId, ModelSelection, TrimmedNonEmptyString } from "@t3tools/contracts";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { overriddenModelSelection, type ModelOverride } from "@t3tools/shared/modelOverride";
 import * as Clock from "effect/Clock";
@@ -22,7 +22,7 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import { recordDecision } from "../decisionLog.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import { isOpenThread } from "./OpenThreadModelOverride.ts";
+import { isOpenThread, MODEL_OVERRIDE_FILE_NAME } from "./OpenThreadModelOverride.ts";
 import type * as ThreadManagement from "./ThreadManagementService.ts";
 
 export const STANDING_OVERRIDE_FILE_NAME = "open-thread-model-override.active.json";
@@ -61,10 +61,52 @@ export const forgetStandingOverride = Effect.gen(function* () {
   yield* fileSystem.remove(yield* filePath);
 }).pipe(Effect.ignore);
 
+/**
+ * The override that a set of applied selections stands for: the model when
+ * they all share one, the thinking level when they all share one. Used for an
+ * override set before its terms were kept, so it holds without setting it again.
+ */
+export function standingOverrideFromApplied(
+  applied: ReadonlyArray<ModelSelection>,
+): ModelOverride | null {
+  const [first, ...rest] = applied;
+  if (first === undefined) return null;
+  const effortOf = (selection: ModelSelection) =>
+    selection.options?.find((option) => /effort/i.test(option.id))?.value;
+  const sameModel = rest.every(
+    (selection) => selection.instanceId === first.instanceId && selection.model === first.model,
+  );
+  const effort = effortOf(first);
+  const sameEffort =
+    typeof effort === "string" && rest.every((selection) => effortOf(selection) === effort);
+  if (!sameModel && !sameEffort) return null;
+  return {
+    ...(sameModel ? { model: { instanceId: first.instanceId, model: first.model } } : {}),
+    ...(sameEffort ? { effort } : {}),
+  };
+}
+
+const AppliedSelections = Schema.Record(Schema.String, Schema.Struct({ applied: ModelSelection }));
+const decodeApplied = Schema.decodeUnknownOption(Schema.fromJsonString(AppliedSelections));
+
 const readStandingOverride = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
-  const contents = yield* fileSystem.readFileString(yield* filePath);
-  return Option.getOrNull(decodeStored(contents)) as ModelOverride | null;
+  const stored = yield* fileSystem.readFileString(yield* filePath).pipe(
+    Effect.map((contents) => Option.getOrNull(decodeStored(contents)) as ModelOverride | null),
+    Effect.orElseSucceed(() => null),
+  );
+  if (stored !== null) return stored;
+  const path = yield* Path.Path;
+  const config = yield* ServerConfig.ServerConfig;
+  const applied = yield* fileSystem
+    .readFileString(path.join(config.stateDir, MODEL_OVERRIDE_FILE_NAME))
+    .pipe(
+      Effect.map(decodeApplied),
+      Effect.orElseSucceed(() => Option.none()),
+    );
+  return Option.isNone(applied)
+    ? null
+    : standingOverrideFromApplied(Object.values(applied.value).map((entry) => entry.applied));
 }).pipe(Effect.orElseSucceed(() => null));
 
 /**
