@@ -22,6 +22,7 @@ const PreferenceFields = {
   retryInstantFailures: ServerSettings.fields.retryInstantFailures,
   scheduledTasksPaused: ServerSettings.fields.scheduledTasksPaused,
   threadQueuesPaused: ServerSettings.fields.threadQueuesPaused,
+  continueThreadsAfterServerUpdate: ServerSettings.fields.continueThreadsAfterServerUpdate,
   backgroundActivity: Schema.Struct({ profile: BackgroundActivityProfileSelection }),
   sourceControlWritingStyle: Schema.Struct({
     mode: Schema.String,
@@ -67,6 +68,7 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
     retryInstantFailures: ServerSettingsPatch.fields.retryInstantFailures,
     scheduledTasksPaused: ServerSettingsPatch.fields.scheduledTasksPaused,
     threadQueuesPaused: ServerSettingsPatch.fields.threadQueuesPaused,
+    continueThreadsAfterServerUpdate: ServerSettingsPatch.fields.continueThreadsAfterServerUpdate,
     backgroundActivity: Schema.optionalKey(Schema.Struct({ profile: BackgroundActivityProfile })),
     sourceControlWritingStyle: ServerSettingsPatch.fields.sourceControlWritingStyle,
   }),

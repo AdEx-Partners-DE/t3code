@@ -17,6 +17,7 @@ export function preferences(settings: ServerSettings) {
     retryInstantFailures,
     scheduledTasksPaused,
     threadQueuesPaused,
+    continueThreadsAfterServerUpdate,
     backgroundActivity,
     sourceControlWritingStyle,
   } = settings;
@@ -29,6 +30,7 @@ export function preferences(settings: ServerSettings) {
     retryInstantFailures,
     scheduledTasksPaused,
     threadQueuesPaused,
+    continueThreadsAfterServerUpdate,
     backgroundActivity: { profile: backgroundActivity.profile },
     sourceControlWritingStyle: {
       ...sourceControlWritingStyle,
