@@ -20,6 +20,10 @@ vi.mock("../../state/server", () => ({
     runScheduledTaskNow: { permissionAtom: () => null },
   },
 }));
+vi.mock("../../hooks/useSettings", () => ({
+  useEnvironmentSettings: () => false,
+  useUpdateEnvironmentSettings: () => () => undefined,
+}));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) => (command === "toggle" ? state.toggle : state.run),
 }));
@@ -74,7 +78,7 @@ it("rejects a retained toggle after task permission is revoked", async () => {
     renderer = create(<ThreadAutomationsPanel environmentId={environmentId} threadId={threadId} />);
   });
   const toggle = renderer.root
-    .findAllByProps({ "aria-label": "Pause Daily review" })
+    .findAllByProps({ "aria-label": "Turn off Daily review" })
     .find((node) => node.props.onCheckedChange)!;
   state.allowed = false;
   await act(async () => {
