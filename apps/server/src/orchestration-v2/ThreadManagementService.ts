@@ -30,6 +30,7 @@ import {
   type TurnItemId,
 } from "@t3tools/contracts";
 import { modelSelectionCommandType, modelSelectionsEqual } from "@t3tools/shared/model";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -39,6 +40,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { limitAccountSwitchSelection } from "./LimitAccountSwitch.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
@@ -452,6 +456,9 @@ const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const layerScope = yield* Effect.scope;
   const legacyImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+  // Optional, so harnesses that build this service without providers still work.
+  const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
 
   const ensureLegacyTranscript = Effect.fn(
     "orchestrationV2.threadManagement.ensureLegacyTranscript",
@@ -518,8 +525,48 @@ const make = Effect.gen(function* () {
       Effect.andThen(orchestrator.getThreadSnapshotWindow(threadId, options)),
     );
 
+  // Every way to start a turn (clients, agent tools, scheduled tasks) comes
+  // through here, so this is where a used-up account hands over. Reading the
+  // limits is I/O, which the orchestrator's decisions must not do.
+  const withLimitAccountSwitch = Effect.fn("orchestrationV2.threadManagement.limitAccountSwitch")(
+    function* (command: Parameters<ThreadManagementServiceShape["dispatch"]>[0]) {
+      if (
+        command.type !== "message.dispatch" ||
+        Option.isNone(serverSettings) ||
+        Option.isNone(providerRegistry)
+      ) {
+        return command;
+      }
+      const enabled = yield* serverSettings.value.getSettings.pipe(
+        Effect.map((settings) => settings.switchAccountAtUsageLimit),
+        Effect.orElseSucceed(() => false),
+      );
+      if (!enabled) return command;
+      const thread = yield* orchestrator
+        .getThreadShell(command.threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (thread === null) return command;
+      const selection = limitAccountSwitchSelection({
+        command,
+        thread,
+        providers: yield* providerRegistry.value.getProviders,
+        nowMs: yield* Clock.currentTimeMillis,
+      });
+      if (selection === null) return command;
+      yield* Effect.logInfo("Starting the turn on another account: usage limit reached", {
+        threadId: command.threadId,
+        from: (command.modelSelection ?? thread.modelSelection).instanceId,
+        to: selection.instanceId,
+      });
+      return { ...command, modelSelection: selection };
+    },
+  );
+
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
-    ensureCommandTranscripts(command).pipe(Effect.andThen(orchestrator.dispatch(command)));
+    ensureCommandTranscripts(command).pipe(
+      Effect.andThen(withLimitAccountSwitch(command)),
+      Effect.flatMap((routed) => orchestrator.dispatch(routed)),
+    );
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>
     getThreadProjection(input.threadId).pipe(
