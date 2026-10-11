@@ -22,9 +22,16 @@ const MAX_BUFFERED_RAW_MESSAGES = 32;
 const MAX_INCOMING_MESSAGE_BYTES = 128 * 1024 * 1024;
 // Unfinished-message fragments shorter than this many UTF-16 code units are
 // joined into one entry once they add up to it, so a peer that sends one byte
-// per read holds one entry per block rather than one per byte. Longer reads,
-// such as 64 KiB pipe reads, are kept as they are without a copy.
+// per read holds one entry per block rather than one per byte. A whole longer
+// read, such as a 64 KiB pipe read, is kept as it is without a copy.
 const REMAINDER_BLOCK_LENGTH = 1024;
+
+// `text.slice(start)` as a new string that does not keep `text` alive. V8
+// returns a slice of 13 or more code units, and a one-item join of that slice,
+// as a view that holds the whole of `text`; a join of two items builds a new
+// flat string.
+const sliceDetached = (text: string, start: number) =>
+  [text.slice(start, start + 1), text.slice(start + 1)].join("");
 
 // UTF-8 size of `text.slice(start, end)` without encoding a copy. Text from a
 // streaming TextDecoder holds no lone surrogates, so each surrogate is one half
@@ -426,7 +433,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     // Fragments shorter than a block wait in the tail, which stays under a block
     // of code units and so under that many entries. Packing joins the tail into
     // one remainder entry, so a short fragment is copied here and once more when
-    // its line is joined, never again.
+    // its line is joined, plus once on arrival if it follows a newline.
     const packRemainderTail = () => {
       if (remainderTail.length > 0) {
         remainder.push(remainderTail.join(""));
@@ -487,7 +494,10 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             }
             if (newline === -1) {
               // Keep unfinished lines in fragments so each chunk is scanned only once.
-              retainFragment(chunk.slice(start));
+              // A fragment after a newline is copied so it does not keep the lines
+              // before it alive. Only a message's first fragment can follow a
+              // newline, so a message pays for at most one such copy of one read.
+              retainFragment(start === 0 ? chunk : sliceDetached(chunk, start));
               remainderBytes = bytes;
               break;
             }

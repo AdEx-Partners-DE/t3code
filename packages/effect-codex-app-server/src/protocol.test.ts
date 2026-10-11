@@ -576,6 +576,41 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       }),
   );
 
+  it.effect.each([
+    { label: "short", prefixLength: 64 },
+    { label: "long", prefixLength: remainderBlockLength + 76 },
+  ])(
+    "routes a message with a $label first fragment after complete lines in a large chunk",
+    ({ prefixLength }) =>
+      Effect.gen(function* () {
+        const before = { method: "x/before", params: { index: 1 } };
+        const message = {
+          method: "x/after",
+          params: { text: `最🙂${positionalText(4 * remainderBlockLength)}` },
+        };
+        const line = encodeUnknownJsonString(message);
+        const lineLimit = 64 * 1024;
+        const { input, termination, notifications } = yield* makeLimitedProtocol(lineLimit);
+
+        // Whitespace lines make the chunk far longer than the fragment kept from its end.
+        const blankLines = `${" ".repeat(lineLimit)}\n`.repeat(16);
+        yield* Queue.offer(
+          input,
+          encoder.encode(
+            `${blankLines}${encodeUnknownJsonString(before)}\n${line.slice(0, prefixLength)}`,
+          ),
+        );
+        yield* Queue.offer(input, encoder.encode(`${line.slice(prefixLength)}\n`));
+        yield* Queue.end(input);
+
+        assert.instanceOf(
+          yield* Deferred.await(termination),
+          CodexError.CodexAppServerInputStreamEndedError,
+        );
+        assert.deepEqual(notifications, [before, message]);
+      }),
+  );
+
   it.effect("routes an unterminated final message at the byte limit when input ends", () =>
     Effect.gen(function* () {
       const message = { method: "x/final", params: { text: "no newline" } };
