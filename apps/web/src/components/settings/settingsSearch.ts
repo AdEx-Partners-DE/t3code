@@ -374,6 +374,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["tint color row thread sidebar project highlight"],
   },
   {
+    id: "thread-list-animation",
+    title: "Animate the thread list",
+    to: "/settings/general",
+    searchTerms: ["motion animation sidebar rows move fade slide transition"],
+  },
+  {
     id: "next-thread-after-sending",
     title: "Open the next thread that needs you after sending",
     to: "/settings/general",

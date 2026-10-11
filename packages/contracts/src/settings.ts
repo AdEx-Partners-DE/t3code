@@ -499,6 +499,11 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   // Tints each thread row with its project's icon color.
   sidebarProjectTintEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Off by default: rows of a list that is looked at all day take their new
+  // place at once. Dragging a row still moves under the pointer.
+  sidebarListAnimationEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -1747,6 +1752,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarInboxOrder: Schema.optionalKey(SidebarInboxOrder),
   sidebarProjectTintEnabled: Schema.optionalKey(Schema.Boolean),
+  sidebarListAnimationEnabled: Schema.optionalKey(Schema.Boolean),
   openNextWaitingThreadAfterSend: Schema.optionalKey(Schema.Boolean),
   sidebarProjectPriorities: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectPriority),

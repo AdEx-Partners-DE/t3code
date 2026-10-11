@@ -3746,6 +3746,7 @@ export default function Sidebar() {
     [],
   );
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
+  const listAnimationEnabled = useClientSettings((s) => s.sidebarListAnimationEnabled);
   const attachListMotionRef = useCallback((node: HTMLUListElement | null) => {
     threadListRef.current = node;
     listMotionRef.current?.dispose();
@@ -3768,15 +3769,19 @@ export default function Sidebar() {
   const dragTargetSection = isContextDrag ? null : (dragState?.targetSection ?? null);
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
   const contextDragKeyRef = useRef<string | null>(null);
-  const finishThreadDrag = useCallback((started: boolean) => {
-    dragSensorRef.current = null;
-    contextDragKeyRef.current = null;
-    endThreadContextDrag();
-    if (started) {
-      listMotionRef.current?.release();
-      setDragState(null);
-    }
-  }, []);
+  const finishThreadDrag = useCallback(
+    (started: boolean) => {
+      dragSensorRef.current = null;
+      contextDragKeyRef.current = null;
+      endThreadContextDrag();
+      if (started) {
+        // Without list animation the dropped row simply sits in its slot.
+        if (listAnimationEnabled) listMotionRef.current?.release();
+        setDragState(null);
+      }
+    },
+    [listAnimationEnabled],
+  );
   const attachDragSensor = useCallback((sensor: SidebarPointerSensor) => {
     dragSensorRef.current = sensor;
   }, []);
@@ -4153,8 +4158,9 @@ export default function Sidebar() {
     // Later thread actions can animate while writes settle.
     // Draft navigation can reveal a frozen row without changing the draft count.
     void sidebarListOrderKey;
-    listMotionRef.current?.update(!listMotionPaused && sidebarListHasRows);
+    listMotionRef.current?.update(listAnimationEnabled && !listMotionPaused && sidebarListHasRows);
   }, [
+    listAnimationEnabled,
     listMotionPaused,
     routeDraftIdForRows,
     sidebarListHasRows,

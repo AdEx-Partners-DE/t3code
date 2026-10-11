@@ -594,6 +594,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarProjectTintEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectTintEnabled
         ? ["Project colors"]
         : []),
+      ...(settings.sidebarListAnimationEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.sidebarListAnimationEnabled
+        ? ["Thread list animation"]
+        : []),
       ...(settings.openNextWaitingThreadAfterSend !==
       DEFAULT_UNIFIED_SETTINGS.openNextWaitingThreadAfterSend
         ? ["Next thread after sending"]
@@ -748,6 +752,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarWorkingShelfEnabled,
       settings.sidebarInboxOrder,
       settings.sidebarProjectTintEnabled,
+      settings.sidebarListAnimationEnabled,
       settings.openNextWaitingThreadAfterSend,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
@@ -851,6 +856,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarInboxOrder: DEFAULT_UNIFIED_SETTINGS.sidebarInboxOrder,
       sidebarProjectTintEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarProjectTintEnabled,
+      sidebarListAnimationEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarListAnimationEnabled,
       openNextWaitingThreadAfterSend: DEFAULT_UNIFIED_SETTINGS.openNextWaitingThreadAfterSend,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -2500,6 +2506,34 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarProjectTintEnabled: Boolean(checked) })
               }
               aria-label="Project colors in the sidebar"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("thread-list-animation")}
+          description="Slide and fade thread rows when the list changes. Off, rows take their new place at once."
+          resetAction={
+            settings.sidebarListAnimationEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarListAnimationEnabled ? (
+              <SettingResetButton
+                label="thread list animation"
+                onClick={() =>
+                  updateSettings({
+                    sidebarListAnimationEnabled:
+                      DEFAULT_UNIFIED_SETTINGS.sidebarListAnimationEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarListAnimationEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarListAnimationEnabled: Boolean(checked) })
+              }
+              aria-label="Animate the thread list"
             />
           }
         />
