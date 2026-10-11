@@ -398,7 +398,7 @@ export const make = Effect.gen(function* () {
       { concurrency: 8 },
     ))
       .filter((thread) => thread !== null)
-      .filter((thread) => settlementPullRequestLinks(thread.pullRequests ?? []).length === 0);
+      .filter((thread) => visibleThreadPullRequests(thread.pullRequests ?? []).length === 0);
     // Use the same cwd as the sidebar so both paths share GitManager's PR cache.
     const lookupCwdByThreadId = new Map<string, string>();
     yield* Effect.forEach(

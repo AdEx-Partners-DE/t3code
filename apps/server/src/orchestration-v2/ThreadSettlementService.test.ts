@@ -880,6 +880,64 @@ describe("ThreadSettlementServiceV2 worker", () => {
     ),
   );
 
+  it.effect("does not look up a pull request that was already merged when linked", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const reference = {
+          projectId: PROJECT_ID,
+          repository: "owner/repository",
+          number: 42,
+          url: "https://example.test/owner/repository/pull/42",
+        };
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([
+            makeThread("merged-then-linked", {
+              linkedPullRequest: reference,
+              pullRequests: [
+                {
+                  host: "example.test",
+                  repository: reference.repository,
+                  number: reference.number,
+                  url: reference.url,
+                  source: "agent",
+                  linkedAt: "2026-08-28T00:00:00.000Z",
+                  snapshot: {
+                    state: "merged",
+                    title: "Pull request",
+                    headBranch: "feature",
+                    baseBranch: "main",
+                    isDraft: false,
+                    updatedAt: "2026-08-27T00:00:00.000Z",
+                    syncedAt: "2026-08-28T00:00:00.000Z",
+                    mergedAt: "2026-08-27T00:00:00.000Z",
+                  },
+                  stack: null,
+                },
+              ],
+            }),
+          ]),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            sidebarAutoSettleAfterDays: null,
+            sidebarAutoSettleOnMerge: true,
+          },
+          pullRequestSummary: (input) =>
+            Effect.succeed({
+              ...makePullRequestSummary({ ...input, state: "merged" }),
+              mergedAt: "2026-08-27T00:00:00.000Z",
+            }),
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
+          assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+          assert.deepStrictEqual(yield* Ref.get(fixture.summaryCalls), []);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
   it.effect("reevaluates immediately after a pull request merge", () =>
     Effect.scoped(
       Effect.gen(function* () {
