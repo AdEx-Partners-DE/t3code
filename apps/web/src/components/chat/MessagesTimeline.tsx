@@ -1798,7 +1798,13 @@ function TimelineMinimap({
                   aria-hidden="true"
                   className={cn(
                     "group/strip pointer-events-none absolute left-0 h-0.5 w-6 origin-left -translate-y-1/2 rounded-full transition-transform duration-150",
-                    activeDistance === 0 ? "bg-muted-foreground/75" : "bg-muted-foreground/35",
+                    item.failed
+                      ? activeDistance === 0
+                        ? "bg-destructive"
+                        : "bg-destructive/60"
+                      : activeDistance === 0
+                        ? "bg-muted-foreground/75"
+                        : "bg-muted-foreground/35",
                     activeDistance === 0
                       ? "scale-x-100"
                       : activeDistance === 1

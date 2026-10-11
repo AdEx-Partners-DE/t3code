@@ -5,6 +5,8 @@ export interface TimelineMinimapItem {
   readonly rowIndex: number;
   readonly userText: string | null;
   readonly assistantText: string | null;
+  /** The turn ended on an error, so its mark stands out among the others. */
+  readonly failed: boolean;
 }
 
 /** Keep full source text untouched until a minimap preview is opened. */
@@ -23,9 +25,25 @@ export function deriveTimelineMinimapItems(
       rowIndex: index,
       userText: row.message.text,
       assistantText: resolveFinalAssistantTextForTurn(rows, index),
+      failed: turnFailed(rows, index),
     });
   }
   return items;
+}
+
+/** Whether the turn that starts at `userRowIndex` shows a failure that was not retried away. */
+function turnFailed(rows: ReadonlyArray<MessagesTimelineRow>, userRowIndex: number): boolean {
+  for (let index = userRowIndex + 1; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row?.kind === "message" && row.message.role === "user") break;
+    if (
+      row?.kind === "event" &&
+      row.projectedItem.item.type === "error" &&
+      row.projectedItem.item.status === "failed"
+    )
+      return true;
+  }
+  return false;
 }
 
 function resolveFinalAssistantTextForTurn(
