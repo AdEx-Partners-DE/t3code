@@ -489,6 +489,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     scope: "environment-defaults",
   },
   {
+    id: "switch-account-at-usage-limit",
+    title: "Switch account at usage limit",
+    to: "/settings/general",
+    searchTerms: ["quota limit credits second account subscription automatic fallback weekly"],
+  },
+  {
     id: "continue-threads-after-server-update",
     title: "Continue threads after restarts",
     to: "/settings/general",
