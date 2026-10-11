@@ -59,6 +59,8 @@ export interface DraftState {
   readonly idleMaxRuns: string;
   /** Idle tasks: shortest wait after a run ends, in minutes as typed. */
   readonly idlePauseMinutes: string;
+  /** Idle tasks: text in the thread's last reply that ends the task early. Empty for none. */
+  readonly idleStopPhrase: string;
   readonly timeOfDay: string;
   readonly weekdays: ReadonlySet<number>;
   readonly projectId: string;
@@ -123,7 +125,14 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
     // A run limit is what keeps an idle task from answering itself forever.
     if (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > 500) return null;
     if (!Number.isFinite(pauseMinutes) || pauseMinutes < 0) return null;
-    return { type: "idle", maxRuns, minPauseMs: Math.round(pauseMinutes * 60_000) };
+    const stopPhrase = draft.idleStopPhrase.trim();
+    if (stopPhrase !== "" && (stopPhrase.length < 3 || stopPhrase.length > 80)) return null;
+    return {
+      type: "idle",
+      maxRuns,
+      minPauseMs: Math.round(pauseMinutes * 60_000),
+      ...(stopPhrase === "" ? {} : { stopPhrase }),
+    };
   }
   const selectedEveryDay = draft.weekdays.size === 0 || draft.weekdays.size === 7;
   return {
@@ -154,6 +163,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
             : "fixed",
     idleMaxRuns: schedule.type === "idle" ? String(schedule.maxRuns) : "5",
     idlePauseMinutes: schedule.type === "idle" ? String(schedule.minPauseMs / 60_000) : "1",
+    idleStopPhrase: schedule.type === "idle" ? (schedule.stopPhrase ?? "") : "",
     intervalMinutes:
       schedule.type === "interval" ? String(Math.max(1, schedule.everyMs / 60_000)) : "15",
     timeOfDay: schedule.type === "fixed_time" ? schedule.timeOfDay : "09:00",

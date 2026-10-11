@@ -137,6 +137,12 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
   minPauseMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
     description: "Shortest wait after a run ends before the next one may start.",
   }),
+  stopPhrase: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMinLength(3), Schema.isMaxLength(80)),
+  ).annotate({
+    description:
+      "The task turns itself off instead of running when the thread's last reply contains this text, ignoring case.",
+  }),
   /** Runs since the task was last armed. Kept by the server; saving or enabling resets it. */
   runsUsed: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }).annotate({

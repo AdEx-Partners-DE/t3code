@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { RunId, RuntimeRequestId, type ScheduledTaskIdleSchedule } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { decideIdleTrigger, type IdleTriggerThread } from "./idleTrigger.ts";
+import { decideIdleTrigger, saysStopPhrase, type IdleTriggerThread } from "./idleTrigger.ts";
 
 const at = (iso: string) => Date.parse(iso);
 const ARMED = at("2026-10-11T08:00:00.000Z");
@@ -91,5 +91,23 @@ describe("decideIdleTrigger", () => {
       decide({ schedule: used, thread: thread({ activeRunId: RunId.make("run:1") }) }),
     ).toEqual({ type: "exhausted" });
     expect(decide({ schedule: { ...schedule, runsUsed: 2 } })).toEqual({ type: "fire" });
+  });
+});
+
+describe("saysStopPhrase", () => {
+  it("matches the phrase anywhere in the last reply, ignoring case", () => {
+    expect(saysStopPhrase("ALL DONE", "Nothing left to fix. All done.")).toBe(true);
+    expect(saysStopPhrase("  all done ", "ALL DONE")).toBe(true);
+  });
+
+  it("does not match a reply without the phrase, or no reply at all", () => {
+    expect(saysStopPhrase("ALL DONE", "Two items are still open.")).toBe(false);
+    expect(saysStopPhrase("ALL DONE", null)).toBe(false);
+    expect(saysStopPhrase("ALL DONE", "")).toBe(false);
+  });
+
+  it("never stops a task that has no phrase", () => {
+    expect(saysStopPhrase(undefined, "ALL DONE")).toBe(false);
+    expect(saysStopPhrase("   ", "anything")).toBe(false);
   });
 });

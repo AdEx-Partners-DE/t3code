@@ -27,6 +27,17 @@ export type IdleTriggerDecision =
   | { readonly type: "exhausted" };
 
 /**
+ * Whether the thread's last reply says the work is done. The phrase is what
+ * the task's prompt asks the agent to answer with, so the match ignores case
+ * and surrounding text but nothing else.
+ */
+export function saysStopPhrase(stopPhrase: string | undefined, lastReply: string | null): boolean {
+  const phrase = stopPhrase?.trim().toLowerCase() ?? "";
+  if (phrase === "" || lastReply === null) return false;
+  return lastReply.toLowerCase().includes(phrase);
+}
+
+/**
  * `armedAtMs` is when the task was last enabled or edited: a run that ended
  * before that does not count, so arming a task on a thread that has been
  * quiet for a day does not fire it at once. `lastRunAtMs` is the task's own

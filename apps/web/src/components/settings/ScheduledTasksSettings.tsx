@@ -122,6 +122,7 @@ const EMPTY_DRAFT: DraftState = {
   intervalMinutes: "15",
   idleMaxRuns: "5",
   idlePauseMinutes: "1",
+  idleStopPhrase: "",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
@@ -177,7 +178,8 @@ function splitModelKey(value: string): ModelSelection | null {
 export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
   if (schedule.type === "idle") {
-    return `When idle, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
+    const runs = `When idle, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
+    return schedule.stopPhrase === undefined ? runs : `${runs}, stops at "${schedule.stopPhrase}"`;
   }
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / 60_000;
@@ -1396,6 +1398,20 @@ function ScheduledTaskEditorDialog({
                       }
                     />
                     <span className="text-xs text-muted-foreground">minutes after each run</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Label htmlFor="scheduled-task-idle-stop">Stop when the reply contains</Label>
+                    <Input
+                      id="scheduled-task-idle-stop"
+                      nativeInput
+                      maxLength={80}
+                      placeholder="Optional, e.g. ALL DONE"
+                      className="w-56"
+                      value={draft.idleStopPhrase}
+                      onChange={(event) =>
+                        setDraft((current) => ({ ...current, idleStopPhrase: event.target.value }))
+                      }
+                    />
                   </div>
                   <p className="text-sm text-muted-foreground">
                     Sends the prompt each time the chosen thread finishes and nothing waits on you.

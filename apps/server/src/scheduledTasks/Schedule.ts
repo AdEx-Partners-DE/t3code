@@ -61,7 +61,12 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
   if (a.type === "webhook") return b.type === "webhook";
   // `runsUsed` is the server's own counter and not part of what the user set.
   if (a.type === "idle") {
-    return b.type === "idle" && a.maxRuns === b.maxRuns && a.minPauseMs === b.minPauseMs;
+    return (
+      b.type === "idle" &&
+      a.maxRuns === b.maxRuns &&
+      a.minPauseMs === b.minPauseMs &&
+      (a.stopPhrase ?? null) === (b.stopPhrase ?? null)
+    );
   }
   if (b.type !== "fixed_time") return false;
   // The contract accepts padded and unpadded hours ("9:00" and "09:00"), so

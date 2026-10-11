@@ -5,6 +5,7 @@ import {
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
+  type RunId,
   ThreadId,
   ScheduledTaskWebhookDeliveryId,
   type ScheduledTaskDeleteInput,
@@ -46,7 +47,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
-import { decideIdleTrigger } from "./idleTrigger.ts";
+import { decideIdleTrigger, saysStopPhrase } from "./idleTrigger.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -1081,6 +1082,21 @@ export const layer = Layer.effect(
     // Idle tasks have no due time: each poll asks whether their thread has
     // gone quiet. The thread is read here, on the server, right before the
     // prompt is sent; a prompt that still meets a new run queues behind it.
+    const lastReplyText = (threadId: ThreadId, runId: RunId | null) =>
+      runId === null
+        ? Effect.succeed(null)
+        : threadManagement
+            .getThreadRecords(threadId, ["messages"], {
+              messageRoles: ["assistant"],
+              messageRunIds: [runId],
+            })
+            .pipe(
+              Effect.map(
+                (records) =>
+                  records.messages.findLast((message) => message.text.trim() !== "")?.text ?? null,
+              ),
+            );
+
     const runIdleTasks = Effect.fn("ScheduledTaskService.runIdleTasks")(function* () {
       if (yield* tasksPaused) return;
       const rows = yield* sql<ScheduledTaskRow>`
@@ -1110,9 +1126,18 @@ export const layer = Layer.effect(
                 : null,
               nowMs: DateTime.toEpochMillis(now),
             });
-            if (decision.type === "fire") {
+            // The reply is read only when the task would otherwise fire, so a
+            // waiting task costs one shell read per poll and no message read.
+            const stopped =
+              decision.type === "fire" &&
+              task.schedule.stopPhrase !== undefined &&
+              saysStopPhrase(
+                task.schedule.stopPhrase,
+                yield* lastReplyText(ThreadId.make(task.threadId), thread.latestRunId),
+              );
+            if (decision.type === "fire" && !stopped) {
               yield* runTask(task, "idle");
-            } else if (decision.type === "exhausted") {
+            } else if (decision.type === "exhausted" || stopped) {
               yield* sql`
                 UPDATE scheduled_tasks SET enabled = 0, updated_at = ${iso(now)}
                 WHERE task_id = ${task.id}
