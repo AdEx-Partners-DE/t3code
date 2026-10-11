@@ -10,6 +10,8 @@ import { buildUsageLimitTrend } from "./usageLimitTrend";
 const PERIOD_DAYS = 7;
 const DAY_MS = 24 * 60 * 60_000;
 
+const weekdayFormat = new Intl.DateTimeFormat(undefined, { weekday: "short" });
+
 const resetTimeFormat = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
   day: "numeric",
@@ -40,6 +42,22 @@ export function UsageLimitTrendSection({
   if (history === null) return null;
   const accounts = buildUsageLimitTrend({ history, providers, sinceMs, nowMs: now });
   if (accounts.length === 0) return null;
+  // One mark per day boundary inside the period, and the weekday of each day.
+  const dayMarks = Array.from({ length: PERIOD_DAYS }, (_, index) => index)
+    .map((index) => ((sinceMs + index * DAY_MS - sinceMs) / (now - sinceMs)) * 100)
+    .filter((x) => x > 0 && x < 100);
+  const dayLabels = Array.from({ length: PERIOD_DAYS }, (_, index) =>
+    weekdayFormat.format(new Date(sinceMs + index * DAY_MS + DAY_MS / 2)),
+  );
+  const unusedTotal = accounts.reduce(
+    (total, account) =>
+      total +
+      account.lines.reduce(
+        (sum, line) => sum + (line.kind === "session" ? 0 : line.unusedAtResets),
+        0,
+      ),
+    0,
+  );
   return (
     <section className="flex flex-col gap-3" data-testid="usage-limit-trend">
       <h2 className="text-sm font-medium text-foreground">
@@ -48,7 +66,13 @@ export function UsageLimitTrendSection({
           recorded since this environment started keeping history
         </span>
       </h2>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <p className="text-xs text-muted-foreground">
+        The line falls as an allowance is used; a dashed red line is a reset.
+        {unusedTotal > 0
+          ? ` At the resets in this period ${Math.round(unusedTotal)} percentage points of weekly or monthly allowance went unused across all accounts.`
+          : " No weekly or monthly allowance went unused at a reset in this period."}
+      </p>
+      <div className="grid gap-3">
         {accounts.map((account) => (
           <div
             key={account.instanceId}
@@ -65,8 +89,35 @@ export function UsageLimitTrendSection({
                   preserveAspectRatio="none"
                   role="img"
                   aria-label={`${line.label}: ${Math.round(line.remainingPercent)}% left`}
-                  className="h-8 min-w-0 flex-1 rounded-sm bg-muted/40 text-foreground/70"
+                  className="h-16 min-w-0 flex-1 rounded-sm bg-muted/40 text-foreground/70"
                 >
+                  {dayMarks.map((x) => (
+                    <line
+                      key={`day:${x}`}
+                      x1={x}
+                      x2={x}
+                      y1="0"
+                      y2="100"
+                      stroke="currentColor"
+                      strokeWidth="1"
+                      opacity="0.15"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ))}
+                  {line.resetMarks.map((x) => (
+                    <line
+                      key={`reset:${x}`}
+                      x1={x}
+                      x2={x}
+                      y1="0"
+                      y2="100"
+                      className="text-destructive"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeDasharray="3 3"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  ))}
                   <polyline
                     points={line.path}
                     fill="none"
@@ -77,6 +128,15 @@ export function UsageLimitTrendSection({
                 </svg>
                 <span className="w-16 shrink-0 text-right text-xs tabular-nums text-foreground">
                   {Math.round(line.remainingPercent)}% left
+                </span>
+                <span className="basis-full pl-31 text-xs text-muted-foreground tabular-nums">
+                  {line.usedPerDay
+                    .map((value, index) => `${dayLabels[index] ?? ""} ${Math.round(value)}`)
+                    .join(" · ")}{" "}
+                  points used per day
+                  {line.resetMarks.length > 0
+                    ? ` · ${Math.round(line.unusedAtResets)} points unused at ${line.resetMarks.length === 1 ? "the reset" : `${line.resetMarks.length} resets`}`
+                    : ""}
                 </span>
                 {line.forecast ? (
                   <span

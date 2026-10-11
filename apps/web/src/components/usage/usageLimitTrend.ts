@@ -65,8 +65,16 @@ export function forecastUsageWindow(
 export interface UsageLimitTrendLine {
   readonly windowId: string;
   readonly label: string;
+  /** A session window refills several times a day; what it leaves unused is not lost the way a week's is. */
+  readonly kind: UsageLimitHistoryPoint["kind"];
   /** Absent when there is not enough to go on. */
   readonly forecast?: UsageLimitForecast;
+  /** Where this window reset in the period, as x positions 0..100. */
+  readonly resetMarks: ReadonlyArray<number>;
+  /** Percentage points of allowance that were still there at the resets in the period. */
+  readonly unusedAtResets: number;
+  /** Percentage points used on each day of the period, oldest first. */
+  readonly usedPerDay: ReadonlyArray<number>;
   /** Remaining allowance now, by the last recorded reading. */
   readonly remainingPercent: number;
   /**
@@ -77,6 +85,32 @@ export interface UsageLimitTrendLine {
   readonly path: string;
 }
 
+const round = (value: number) => Math.round(value * 100) / 100;
+
+const DAY_MS = 24 * 60 * 60_000;
+
+/**
+ * Rises between consecutive readings, counted on the day of the later
+ * reading. A drop is a reset and counts as nothing. `sinceMs` is the start of
+ * the first day.
+ */
+export function usedPerDay(
+  points: ReadonlyArray<UsageLimitHistoryPoint>,
+  sinceMs: number,
+  nowMs: number,
+): number[] {
+  const days = Math.max(1, Math.ceil((nowMs - sinceMs) / DAY_MS));
+  const perDay = Array.from({ length: days }, () => 0);
+  for (let index = 1; index < points.length; index += 1) {
+    const rise = points[index]!.usedPercent - points[index - 1]!.usedPercent;
+    const atMs = Date.parse(points[index]!.at);
+    if (!(rise > 0) || atMs < sinceMs || atMs > nowMs) continue;
+    const day = Math.min(days - 1, Math.floor((atMs - sinceMs) / DAY_MS));
+    perDay[day] = round(perDay[day]! + rise);
+  }
+  return perDay;
+}
+
 export interface UsageLimitTrendAccount {
   readonly instanceId: string;
   readonly name: string;
@@ -84,8 +118,6 @@ export interface UsageLimitTrendAccount {
   /** Newest first. */
   readonly resets: ReadonlyArray<UsageLimitReset>;
 }
-
-const round = (value: number) => Math.round(value * 100) / 100;
 
 function steppedPath(
   points: ReadonlyArray<UsageLimitHistoryPoint>,
@@ -148,10 +180,25 @@ export function buildUsageLimitTrend(input: {
           );
           const last = sorted.at(-1)!;
           const forecast = forecastUsageWindow(sorted, input.nowMs);
+          const span = Math.max(1, input.nowMs - input.sinceMs);
+          const windowResets = input.history.resets.filter(
+            (reset) =>
+              reset.instanceId === instanceId &&
+              reset.windowId === windowId &&
+              Date.parse(reset.at) >= input.sinceMs,
+          );
           return {
+            resetMarks: windowResets.map((reset) =>
+              round(((Date.parse(reset.at) - input.sinceMs) / span) * 100),
+            ),
+            unusedAtResets: round(
+              windowResets.reduce((total, reset) => total + reset.unusedPercentBefore, 0),
+            ),
+            usedPerDay: usedPerDay(sorted, input.sinceMs, input.nowMs),
             ...(forecast === null ? {} : { forecast }),
             windowId,
             label: last.label,
+            kind: last.kind,
             remainingPercent: Math.max(0, 100 - last.usedPercent),
             path: steppedPath(sorted, input.sinceMs, input.nowMs),
           };

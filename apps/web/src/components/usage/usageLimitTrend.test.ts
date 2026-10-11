@@ -1,7 +1,7 @@
 import { ProviderDriverKind, ProviderInstanceId, type UsageLimitHistory } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildUsageLimitTrend, forecastUsageWindow } from "./usageLimitTrend";
+import { buildUsageLimitTrend, forecastUsageWindow, usedPerDay } from "./usageLimitTrend";
 
 const SINCE = Date.parse("2026-10-10T00:00:00.000Z");
 const NOW = Date.parse("2026-10-11T00:00:00.000Z");
@@ -38,8 +38,12 @@ describe("buildUsageLimitTrend", () => {
       {
         windowId: "weekly",
         label: "Weekly",
+        kind: "weekly",
         remainingPercent: 40,
         path: "25,20 75,20 75,60 100,60",
+        resetMarks: [],
+        unusedAtResets: 0,
+        usedPerDay: [40],
       },
     ]);
   });
@@ -131,5 +135,51 @@ describe("forecastUsageWindow", () => {
     ).toBeNull();
     expect(forecastUsageWindow([reading("2026-10-10T23:30:00.000Z", 10)], NOW)).toBeNull();
     expect(forecastUsageWindow([], NOW)).toBeNull();
+  });
+});
+
+describe("usedPerDay", () => {
+  it("counts each rise on its day and a reset as nothing", () => {
+    const since = Date.parse("2026-10-09T00:00:00.000Z");
+    expect(
+      usedPerDay(
+        [
+          point("codex", "2026-10-09T06:00:00.000Z", 10),
+          point("codex", "2026-10-09T18:00:00.000Z", 30),
+          point("codex", "2026-10-10T03:00:00.000Z", 0),
+          point("codex", "2026-10-10T20:00:00.000Z", 25),
+        ],
+        since,
+        NOW,
+      ),
+    ).toEqual([20, 25]);
+  });
+});
+
+describe("resets in the trend", () => {
+  it("marks where a window reset and adds up what was left unused", () => {
+    const history: UsageLimitHistory = {
+      points: [
+        point("codex", "2026-10-10T06:00:00.000Z", 70),
+        point("codex", "2026-10-10T12:00:00.000Z", 0),
+      ],
+      resets: [
+        {
+          at: "2026-10-10T12:00:00.000Z",
+          instanceId: ProviderInstanceId.make("codex"),
+          windowId: "weekly",
+          kind: "weekly",
+          label: "Weekly",
+          usedPercentBefore: 70,
+          unusedPercentBefore: 30,
+          usedPercentAfter: 0,
+          lastSeenBeforeAt: "2026-10-10T06:00:00.000Z",
+          ahead: true,
+        },
+      ],
+    };
+    const [account] = buildUsageLimitTrend({ history, providers, sinceMs: SINCE, nowMs: NOW });
+    expect(account?.lines[0]?.resetMarks).toEqual([50]);
+    expect(account?.lines[0]?.unusedAtResets).toBe(30);
   });
 });
