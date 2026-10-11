@@ -70,6 +70,8 @@ export function QueuedRunsControl({
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
+  const holdQueue = useAtomCommand(threadEnvironment.holdThreadQueue, "pause queue");
+  const resumeQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
@@ -89,6 +91,7 @@ export function QueuedRunsControl({
   const queued = workflow?.queuedRuns ?? [];
   const activeRun = workflow?.activeRun ?? null;
   const canReorder = workflow?.canReorder === true;
+  const queueHeld = workflow?.isHeld === true;
   const queuedImageAttachmentIds = useMemo(() => {
     const ids: string[] = [];
     for (const { attachments } of workflow?.queuedRuns ?? []) {
@@ -263,7 +266,9 @@ export function QueuedRunsControl({
           <ComposerBanner.Icon>
             <ListOrderedIcon />
           </ComposerBanner.Icon>
-          <ComposerBanner.Content className="text-muted-foreground">Queued</ComposerBanner.Content>
+          <ComposerBanner.Content className="text-muted-foreground">
+            {queueHeld ? "Queued, paused" : "Queued"}
+          </ComposerBanner.Content>
           <ComposerBanner.Actions>
             <ComposerBanner.Count>{items.length}</ComposerBanner.Count>
             <ComposerBanner.ToggleIcon expanded={expanded} />
@@ -271,6 +276,29 @@ export function QueuedRunsControl({
         </ComposerBanner.Row>
         <ComposerBanner.Scroll className={cn("max-h-32", !expanded && "hidden")}>
           <ComposerBanner.Children render={<ol />} id={queueListId}>
+            {queued.length > 0 ? (
+              <ComposerBanner.Row render={<li />}>
+                <ComposerBanner.Content className="text-muted-foreground">
+                  {queueHeld
+                    ? "Nothing here starts until you resume."
+                    : "Pausing lets the current run finish and holds the rest."}
+                </ComposerBanner.Content>
+                <ComposerBanner.Actions>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() =>
+                      void (queueHeld ? resumeQueue : holdQueue)({
+                        environmentId: props.environmentId,
+                        input: { threadId: props.threadId },
+                      })
+                    }
+                  >
+                    {queueHeld ? "Resume queue" : "Pause queue"}
+                  </Button>
+                </ComposerBanner.Actions>
+              </ComposerBanner.Row>
+            ) : null}
             {items.map((item) => {
               const previewText = replaceComposerContextReferences(item.text, (reference) =>
                 reference.kind === "image" && item.thumbnails.length > 0 ? "" : reference.label,

@@ -2950,6 +2950,16 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
   }),
+  /**
+   * Holds the thread's queue without touching the run under way: it finishes,
+   * and nothing queued starts until `queue.resume`. Stop holds the queue too,
+   * but also ends the current run.
+   */
+  Schema.Struct({
+    type: Schema.Literal("queue.hold"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
   Schema.Struct({
     type: Schema.Literal("queued-run.reorder"),
     commandId: CommandId,
