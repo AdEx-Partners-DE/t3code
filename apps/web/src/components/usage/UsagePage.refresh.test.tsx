@@ -90,6 +90,7 @@ vi.mock("../WorkspacePageContainer", () => ({ WorkspacePageContainer: "main" }))
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
 vi.mock("./UsageProviderChart", () => ({ UsageProviderChart: "div" }));
 vi.mock("./UsagePriceOverrides", () => ({ UsagePriceOverrides: () => null }));
+vi.mock("./UsageLimitTrendSection", () => ({ UsageLimitTrendSection: () => null }));
 vi.mock("../chat/ProviderInstanceIcon", () => ({ ProviderInstanceIcon: () => null }));
 vi.mock("../settings/RedactedSensitiveText", () => ({ RedactedSensitiveText: "span" }));
 vi.mock("../settings/providerDriverMeta", () => ({

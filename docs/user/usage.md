@@ -117,6 +117,16 @@ or endpoint configurations do not report subscription limits.
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
+### See how limits were used over time
+
+Below the bars, **Last 7 days** draws one line per account window: flat while nothing was used,
+falling as the allowance is spent. It starts with the first reading the environment recorded, so a
+fresh install shows a short line.
+
+Each reset is listed under its account with how much of the allowance was still unused. A reset
+that came before the time the provider had announced is marked **early**, which is how you see
+what a provider-wide reset took away.
+
 ## Connect a CLIProxyAPI hub
 
 To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the
