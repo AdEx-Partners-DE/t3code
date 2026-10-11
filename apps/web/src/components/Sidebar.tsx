@@ -265,6 +265,7 @@ import { ProjectFavicon, type ProjectFaviconProject } from "./ProjectFavicon";
 import { PROJECT_ICON_COLORS } from "../projectIconColors";
 import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
+import { usageHeadroomPercent } from "@t3tools/shared/usageLimitSwitch";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import {
@@ -442,6 +443,7 @@ function SidebarProviderStack(props: {
       acpRegistryAgentId={currentEntry.acpRegistryAgentId}
       acpRegistryIconUrl={currentEntry.acpRegistryIconUrl}
       showBadge={showInstanceBadge}
+      remainingPercent={usageHeadroomPercent(currentEntry.snapshot)}
       // Glyph dims, badge stays saturated; offset matches the composer trigger.
       iconClassName="size-3.5 opacity-60"
       badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"

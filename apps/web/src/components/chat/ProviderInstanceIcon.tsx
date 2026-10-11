@@ -67,6 +67,12 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   badgeClassName?: string;
   statusDotClassName?: string;
   indicatorBackground?: string;
+  /**
+   * Allowance left in the account's tightest usage window, 0 to 100. Draws a
+   * ring around the icon that empties with it; omit for accounts that report
+   * no usage.
+   */
+  remainingPercent?: number | null | undefined;
 }) {
   const Icon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
   const packageIcon = providerClients.get(props.driverKind)?.icon;
@@ -112,6 +118,35 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
           {providerInstanceInitials(props.displayName)}
         </span>
       )}
+      {props.remainingPercent != null ? (
+        <svg
+          viewBox="0 0 36 36"
+          className="pointer-events-none absolute -inset-1 -z-10 -rotate-90"
+          aria-hidden
+        >
+          <circle
+            cx="18"
+            cy="18"
+            r="16"
+            fill="none"
+            strokeWidth="2.5"
+            className="stroke-muted-foreground/20"
+          />
+          <circle
+            cx="18"
+            cy="18"
+            r="16"
+            fill="none"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            pathLength={100}
+            strokeDasharray={`${Math.max(0, Math.min(100, props.remainingPercent))} 100`}
+            className={
+              props.remainingPercent < 10 ? "stroke-destructive" : "stroke-muted-foreground/70"
+            }
+          />
+        </svg>
+      ) : null}
       {props.statusDotClassName ? (
         <span
           className={cn(
