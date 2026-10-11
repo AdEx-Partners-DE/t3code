@@ -110,7 +110,9 @@ export function instantFailureRetryCommand(
       detail: message.text,
     },
     modelSelection: run.modelSelection,
-    dispatchMode: { type: "start_immediately" },
+    // A server notice may only be queued; in a thread whose turn just failed
+    // nothing is running, so it starts at once.
+    dispatchMode: { type: "queue_after_active" },
     createdBy: "agent",
     creationSource: "server",
   };
