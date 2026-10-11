@@ -35,6 +35,20 @@ export function buildChecklistTranscript(
   messages: ReadonlyArray<TranscriptMessage>,
   budget: number,
 ): string {
+  return buildChecklistTranscriptWithSources(messages, budget).transcript;
+}
+
+/**
+ * The transcript plus, per entry number in it, the message it came from, so a
+ * checklist item that names an entry can lead back to its place in the thread.
+ */
+export function buildChecklistTranscriptWithSources(
+  messages: ReadonlyArray<TranscriptMessage>,
+  budget: number,
+): {
+  readonly transcript: string;
+  readonly messageIdOfEntry: ReadonlyMap<number, TranscriptMessage["id"]>;
+} {
   // The closing reply of a turn is the one that says what was done.
   const lastReplyOfRun = new Map<string, string>();
   for (const message of messages) {
@@ -43,6 +57,7 @@ export function buildChecklistTranscript(
     }
   }
   interface Entry {
+    readonly messageId: TranscriptMessage["id"];
     readonly who: "USER" | "AUTOMATION" | "AGENT";
     readonly at: string;
     text: string;
@@ -62,13 +77,20 @@ export function buildChecklistTranscript(
     const at = DateTime.formatIso(message.createdAt).slice(0, 16).replace("T", " ");
     if (message.role === "assistant") {
       if (message.runId !== null && lastReplyOfRun.get(message.runId) !== message.id) continue;
-      entries.push({ who: "AGENT", at, text: clip(message.text, REPLY_LIMIT), dropped: false });
+      entries.push({
+        messageId: message.id,
+        who: "AGENT",
+        at,
+        text: clip(message.text, REPLY_LIMIT),
+        dropped: false,
+      });
       continue;
     }
     if (message.scheduledTaskId !== undefined) {
       const first = automationPrompts.get(message.text);
       if (first !== undefined) {
         entries.push({
+          messageId: message.id,
           who: "AUTOMATION",
           at,
           text: `(same prompt as entry ${first})`,
@@ -77,10 +99,22 @@ export function buildChecklistTranscript(
         continue;
       }
       automationPrompts.set(message.text, entries.length + 1);
-      entries.push({ who: "AUTOMATION", at, text: clip(message.text, USER_LIMIT), dropped: false });
+      entries.push({
+        messageId: message.id,
+        who: "AUTOMATION",
+        at,
+        text: clip(message.text, USER_LIMIT),
+        dropped: false,
+      });
       continue;
     }
-    entries.push({ who: "USER", at, text: clip(message.text, USER_LIMIT), dropped: false });
+    entries.push({
+      messageId: message.id,
+      who: "USER",
+      at,
+      text: clip(message.text, USER_LIMIT),
+      dropped: false,
+    });
   }
   const size = () =>
     entries.reduce((total, entry) => total + (entry.dropped ? 0 : entry.text.length + 40), 0);
@@ -94,10 +128,17 @@ export function buildChecklistTranscript(
   for (let index = 0; index < entries.length && size() > budget; index += 1) {
     if (entries[index]!.who !== "USER") entries[index]!.dropped = true;
   }
-  return entries
-    .map((entry, index) =>
-      entry.dropped ? null : `[${index + 1}] ${entry.who} ${entry.at}: ${entry.text}`,
-    )
-    .filter((line) => line !== null)
-    .join("\n");
+  return {
+    transcript: entries
+      .map((entry, index) =>
+        entry.dropped ? null : `[${index + 1}] ${entry.who} ${entry.at}: ${entry.text}`,
+      )
+      .filter((line) => line !== null)
+      .join("\n"),
+    messageIdOfEntry: new Map(
+      entries.flatMap((entry, index) =>
+        entry.dropped ? [] : [[index + 1, entry.messageId] as const],
+      ),
+    ),
+  };
 }

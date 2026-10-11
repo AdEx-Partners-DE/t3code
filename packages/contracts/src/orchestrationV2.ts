@@ -3282,6 +3282,8 @@ export const ThreadChecklistItem = Schema.Struct({
   text: TrimmedNonEmptyString,
   status: Schema.Literals(["done", "open", "backlog", "attention"]),
   note: Schema.optional(Schema.String),
+  /** The message where the point was raised or last settled, when the model named one. */
+  messageId: Schema.optional(MessageId),
 });
 export type ThreadChecklistItem = typeof ThreadChecklistItem.Type;
 

@@ -2,7 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { MessageId, RunId, ScheduledTaskId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { buildChecklistTranscript } from "./threadChecklistTranscript.ts";
+import {
+  buildChecklistTranscript,
+  buildChecklistTranscriptWithSources,
+} from "./threadChecklistTranscript.ts";
 
 type Message = Parameters<typeof buildChecklistTranscript>[0][number];
 
@@ -41,6 +44,22 @@ describe("buildChecklistTranscript", () => {
       "[2] AGENT 2026-10-11 08:00: Fixed: the lockfile was stale.",
       "[3] USER 2026-10-11 08:00: Thanks. Also bump the version.",
       "[4] AGENT 2026-10-11 08:00: Bumped to 1.2.0.",
+    ]);
+  });
+
+  it("says which message each numbered entry came from", () => {
+    const ask = message("user", "Fix the build.", "run:1");
+    const interim = message("assistant", "Looking at it.", "run:1");
+    const closing = message("assistant", "Fixed.", "run:1");
+    const { transcript, messageIdOfEntry } = buildChecklistTranscriptWithSources(
+      [ask, interim, closing],
+      10_000,
+    );
+    expect(transcript.split("\n")).toHaveLength(2);
+    // Entry 2 is the turn's closing reply, not the interim one.
+    expect([...messageIdOfEntry]).toEqual([
+      [1, ask.id],
+      [2, closing.id],
     ]);
   });
 

@@ -22,7 +22,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { isOpenThread } from "./OpenThreadModelOverride.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
-import { buildChecklistTranscript } from "./threadChecklistTranscript.ts";
+import { buildChecklistTranscriptWithSources } from "./threadChecklistTranscript.ts";
 
 const CHECKLIST_DIRECTORY = "thread-checklists";
 /** Fits the context of every model offered for text generation, with room for the reply. */
@@ -60,7 +60,10 @@ export const make = Effect.gen(function* () {
     const records = yield* threads.getThreadRecords(threadId, ["messages"]);
     const shell = yield* threads.getThreadShell(threadId);
     const previous = yield* read(threadId);
-    const transcript = buildChecklistTranscript(records.messages, TRANSCRIPT_BUDGET);
+    const { transcript, messageIdOfEntry } = buildChecklistTranscriptWithSources(
+      records.messages,
+      TRANSCRIPT_BUDGET,
+    );
     const generated =
       transcript === ""
         ? { items: [] }
@@ -76,11 +79,15 @@ export const make = Effect.gen(function* () {
       threadId,
       generatedAt: DateTime.formatIso(yield* DateTime.now),
       basedOnRunId: shell?.latestRunId ?? null,
-      items: generated.items.map((item) => ({
-        text: item.text,
-        status: item.status,
-        ...(item.note === undefined ? {} : { note: item.note }),
-      })),
+      items: generated.items.map((item) => {
+        const messageId = item.entry === undefined ? undefined : messageIdOfEntry.get(item.entry);
+        return {
+          text: item.text,
+          status: item.status,
+          ...(item.note === undefined ? {} : { note: item.note }),
+          ...(messageId === undefined ? {} : { messageId }),
+        };
+      }),
     };
     yield* fileSystem.makeDirectory(directory, { recursive: true });
     yield* fileSystem.writeFileString(fileOf(threadId), encodeChecklist(checklist));

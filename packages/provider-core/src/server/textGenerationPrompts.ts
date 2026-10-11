@@ -508,6 +508,7 @@ Rules:
 - Something the agent claimed as done but later turned out wrong is "open", not "done".
 - A question the user has already answered is not "attention" any more.
 - For "attention" and for "open" items that are stuck, add a "note" of at most 140 characters saying what exactly is needed. Every other item has "note": null.
+- Every item has an "entry": the number in square brackets of the thread entry where the point was raised or, for "done", where it was reported finished. Use null only when no single entry fits.
 - Order: "attention" first, then "open", then "backlog", then "done" with the most recent first.
 - At most 40 items. Merge small finished steps into one "done" item rather than listing each.
 - If a previous checklist is given, keep the wording of items that are still valid and only move their status; drop items that no longer matter.`;
@@ -530,6 +531,7 @@ export function buildThreadChecklistPrompt(input: ThreadChecklistPromptInput) {
         status: Schema.Literals(["done", "open", "backlog", "attention"]),
         // Required and nullable: providers with strict schemas refuse optional keys.
         note: Schema.NullOr(Schema.String),
+        entry: Schema.NullOr(Schema.Number),
       }),
     ),
   });

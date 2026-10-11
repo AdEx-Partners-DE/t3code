@@ -191,7 +191,14 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
           .map((item) => {
             const text = item.text.replace(/\s+/g, " ").trim().slice(0, 160);
             const note = item.note?.replace(/\s+/g, " ").trim().slice(0, 240) ?? "";
-            return { text, status: item.status, ...(note === "" ? {} : { note }) };
+            return {
+              text,
+              status: item.status,
+              ...(note === "" ? {} : { note }),
+              ...(typeof item.entry === "number" && Number.isInteger(item.entry)
+                ? { entry: item.entry }
+                : {}),
+            };
           })
           .filter((item) => item.text !== "")
           .slice(0, 40),

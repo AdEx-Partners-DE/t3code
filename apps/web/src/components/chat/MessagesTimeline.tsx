@@ -19,6 +19,7 @@ import {
   resolveTimelineMinimapPreview,
   type TimelineMinimapItem,
 } from "./timelineMinimapItems";
+import { registerTimelineReveal } from "./timelineReveal";
 import {
   COMPOSER_CONTEXT_KINDS,
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
@@ -944,6 +945,22 @@ const ConversationTimeline = memo(function ConversationTimeline({
   // must not change with them or every timeline row re-renders per event.
   const runs = useStableHandoffRuns(runsProp);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
+  useEffect(
+    () =>
+      registerTimelineReveal((messageId) => {
+        const index = rows.findIndex(
+          (row) =>
+            (row.kind === "message" || row.kind === "assistant-meta") &&
+            row.message.id === messageId,
+        );
+        if (index === -1) return false;
+        onManualNavigation();
+        // A jump, not a glide: the target can be far away.
+        void listRef.current?.scrollToIndex({ index, animated: false, viewOffset: 24 });
+        return true;
+      }),
+    [listRef, onManualNavigation, rows],
+  );
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
   );

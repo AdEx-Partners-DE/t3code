@@ -127,6 +127,8 @@ export interface ThreadChecklistGenerationResult {
     status: ThreadChecklistItemStatus;
     /** Why the item needs the user, or what is missing. */
     note?: string | undefined;
+    /** Number of the transcript entry where the point was raised or last settled. */
+    entry?: number | undefined;
   }>;
 }
 

@@ -17,10 +17,15 @@ import {
   CircleAlertIcon,
   CircleDashedIcon,
   CircleIcon,
+  CopyIcon,
+  CornerDownLeftIcon,
+  LocateFixedIcon,
   RefreshCwIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { resolveComposerDraftKey, useComposerDraftStore } from "../../composerDraftStore";
+import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useEnvironmentQuery } from "../../state/query";
 import { useThreadShell } from "../../state/entities";
@@ -28,10 +33,12 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
 import { relativeLabel } from "../settings/ScheduledTasksSettings";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
+import { revealInTimeline } from "./timelineReveal";
 
 const AUTO_REFRESH_KEY = "t3code:thread-checklist:auto";
 /** A stale checklist is rewritten on its own at most this often; each rewrite is a model call. */
@@ -45,6 +52,11 @@ export const CHECKLIST_STATUS_LABEL: Record<ThreadChecklistItem["status"], strin
   backlog: "Backlog",
   done: "Done",
 };
+
+/** An item as plain text: its line and, if it has one, the note below. */
+export function checklistItemText(item: ThreadChecklistItem): string {
+  return item.note ? `${item.text}\n${item.note}` : item.text;
+}
 
 export function ChecklistStatusIcon({
   status,
@@ -129,6 +141,30 @@ export function ThreadChecklistPanel(props: {
     // `run` closes over the same values this effect lists.
   }, [allowed, auto, busy, checklist, hasRun, loaded, latestRunId, stale, working]);
 
+  const showInThread = (item: ThreadChecklistItem) => {
+    if (item.messageId !== undefined && revealInTimeline(item.messageId)) return;
+    toastManager.add(
+      stackedThreadToast({
+        type: "info",
+        title: "That part of the thread is not loaded",
+        description: "Scroll up to load earlier turns, then try again.",
+      }),
+    );
+  };
+  // Quotes the point into the message being written, so the user only adds what to do with it.
+  const takeUp = (item: ThreadChecklistItem) => {
+    const threadRef = scopeThreadRef(environmentId, threadId);
+    const store = useComposerDraftStore.getState();
+    const key = resolveComposerDraftKey(store, threadRef);
+    const existing = (key ? store.draftsByThreadKey[key]?.prompt : undefined) ?? "";
+    const quote = checklistItemText(item)
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    const before = existing.trim() === "" ? "" : `${existing.trimEnd()}\n\n`;
+    store.setPrompt(threadRef, `${before}${quote}\n\n`);
+  };
+
   const groups = CHECKLIST_STATUS_ORDER.map((status) => ({
     status,
     items: (checklist?.items ?? []).filter((item) => item.status === status),
@@ -209,24 +245,58 @@ export function ThreadChecklistPanel(props: {
               </div>
               <ul className="flex flex-col gap-1">
                 {shown.map((item) => (
-                  <li key={`${item.status}:${item.text}`} className="flex gap-1.5">
-                    <ChecklistStatusIcon status={item.status} />
-                    <div className="min-w-0">
-                      <div
-                        className={cn(
-                          "break-words",
-                          item.status === "done" && "text-muted-foreground",
-                          item.status === "attention" && "font-medium",
-                        )}
+                  <li key={`${item.status}:${item.text}`}>
+                    <Menu>
+                      <MenuTrigger
+                        render={
+                          <button
+                            type="button"
+                            className="-mx-1 flex w-[calc(100%+0.5rem)] cursor-pointer gap-1.5 rounded-sm px-1 py-0.5 text-left hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset data-popup-open:bg-accent"
+                          />
+                        }
                       >
-                        {item.text}
-                      </div>
-                      {item.note ? (
-                        <div className="break-words text-2xs text-muted-foreground">
-                          {item.note}
-                        </div>
-                      ) : null}
-                    </div>
+                        <ChecklistStatusIcon status={item.status} />
+                        <span className="min-w-0">
+                          <span
+                            className={cn(
+                              "block break-words",
+                              item.status === "done" && "text-muted-foreground",
+                              item.status === "attention" && "font-medium",
+                            )}
+                          >
+                            {item.text}
+                          </span>
+                          {item.note ? (
+                            <span className="block break-words text-2xs text-muted-foreground">
+                              {item.note}
+                            </span>
+                          ) : null}
+                        </span>
+                      </MenuTrigger>
+                      <MenuPopup align="start">
+                        <MenuItem
+                          disabled={item.messageId === undefined}
+                          onClick={() => showInThread(item)}
+                        >
+                          <LocateFixedIcon />
+                          {item.messageId === undefined
+                            ? "No place in the thread recorded"
+                            : "Show in thread"}
+                        </MenuItem>
+                        <MenuItem onClick={() => takeUp(item)}>
+                          <CornerDownLeftIcon />
+                          Take up in the composer
+                        </MenuItem>
+                        <MenuItem
+                          onClick={() =>
+                            void writeTextToClipboard(checklistItemText(item), "checklist item")
+                          }
+                        >
+                          <CopyIcon />
+                          Copy
+                        </MenuItem>
+                      </MenuPopup>
+                    </Menu>
                   </li>
                 ))}
               </ul>
