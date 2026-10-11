@@ -34,6 +34,49 @@ const decodeConsumeRateLimitResetCreditResponse = Schema.decodeUnknownEffect(
   CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimitResetCredit/consume"],
 );
 
+const lineFramings = [
+  { label: "LF", frame: (line: string) => [`${line}\n`] },
+  { label: "CRLF", frame: (line: string) => [`${line}\r\n`] },
+  { label: "CRLF split across chunks", frame: (line: string) => [`${line}\r`, "\n"] },
+  { label: "CRLF split by an empty chunk", frame: (line: string) => [`${line}\r`, "", "\n"] },
+];
+
+const makeLimitedProtocol = (maxIncomingMessageBytes: number) =>
+  Effect.gen(function* () {
+    const { stdio, input, output } = yield* makeInMemoryStdio();
+    const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
+    const terminations: Array<CodexError.CodexAppServerError> = [];
+    const notifications: Array<CodexProtocol.CodexAppServerIncomingNotification> = [];
+    const events: Array<CodexProtocol.CodexAppServerProtocolLogEvent> = [];
+    const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+      stdio,
+      maxIncomingMessageBytes,
+      logIncoming: true,
+      logger: (event) =>
+        Effect.sync(() => {
+          events.push(event);
+        }),
+      onNotification: (notification) =>
+        Effect.sync(() => {
+          notifications.push(notification);
+        }),
+      onTermination: (error) =>
+        Effect.sync(() => terminations.push(error)).pipe(
+          Effect.andThen(Deferred.succeed(termination, error)),
+          Effect.asVoid,
+        ),
+    });
+    return { input, output, transport, termination, terminations, notifications, events };
+  });
+
+const awaitMessageLimitFailure = (termination: Deferred.Deferred<CodexError.CodexAppServerError>) =>
+  Effect.gen(function* () {
+    const error = yield* Deferred.await(termination);
+    assert.instanceOf(error, CodexError.CodexAppServerTransportError);
+    assert.equal(error.operation, "read-input-stream");
+    return error;
+  });
+
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
   it.effect("maps account usage responses to the upstream token usage schema", () =>
     Effect.gen(function* () {
@@ -322,6 +365,198 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
 
       assert.deepEqual(yield* Fiber.join(response), { ok: true });
       assert.deepEqual(notifications, [notification]);
+    }),
+  );
+
+  it.effect.each(lineFramings)(
+    "accepts a message exactly at the byte limit with $label framing",
+    ({ frame }) =>
+      Effect.gen(function* () {
+        const message = { method: "x/limit", params: { text: "at the limit" } };
+        const line = encodeUnknownJsonString(message);
+        const { input, termination, notifications } = yield* makeLimitedProtocol(
+          encoder.encode(line).length,
+        );
+
+        for (const chunk of frame(line)) {
+          yield* Queue.offer(input, encoder.encode(chunk));
+        }
+        yield* Queue.end(input);
+
+        assert.instanceOf(
+          yield* Deferred.await(termination),
+          CodexError.CodexAppServerInputStreamEndedError,
+        );
+        assert.deepEqual(notifications, [message]);
+      }),
+  );
+
+  it.effect.each(lineFramings)(
+    "rejects a message one byte over the limit with $label framing",
+    ({ frame }) =>
+      Effect.gen(function* () {
+        const line = encodeUnknownJsonString({ method: "x/over", params: { text: "one over" } });
+        const { input, output, transport, termination, terminations, notifications, events } =
+          yield* makeLimitedProtocol(encoder.encode(line).length - 1);
+        const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
+        yield* Queue.take(output);
+
+        for (const chunk of frame(line)) {
+          yield* Queue.offer(input, encoder.encode(chunk));
+        }
+        yield* Queue.end(input);
+
+        const error = yield* awaitMessageLimitFailure(termination);
+        const pendingError = yield* Fiber.join(pending).pipe(
+          Effect.match({
+            onFailure: (failure) => failure,
+            onSuccess: () => assert.fail("Expected the oversized message to fail the request"),
+          }),
+        );
+        assert.strictEqual(pendingError, error);
+        assert.lengthOf(terminations, 1);
+        assert.strictEqual(terminations[0], error);
+        assert.deepEqual(notifications, []);
+        assert.deepEqual(events, []);
+      }),
+  );
+
+  it.effect("rejects an over-limit message from small fragments before its newline arrives", () =>
+    Effect.gen(function* () {
+      const { input, output, transport, termination, notifications, events } =
+        yield* makeLimitedProtocol(1024);
+      const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+
+      yield* Queue.offer(input, encoder.encode('{"method":"x/huge","params":{"text":"'));
+      for (let index = 0; index < 512; index++) {
+        yield* Queue.offer(input, encoder.encode("xxxxxxxx"));
+      }
+
+      const error = yield* awaitMessageLimitFailure(termination);
+      const pendingError = yield* Fiber.join(pending).pipe(
+        Effect.match({
+          onFailure: (failure) => failure,
+          onSuccess: () => assert.fail("Expected the oversized message to fail the request"),
+        }),
+      );
+      assert.strictEqual(pendingError, error);
+      assert.deepEqual(notifications, []);
+      assert.deepEqual(events, []);
+    }),
+  );
+
+  it.effect("routes an unterminated final message at the byte limit when input ends", () =>
+    Effect.gen(function* () {
+      const message = { method: "x/final", params: { text: "no newline" } };
+      const line = encodeUnknownJsonString(message);
+      const { input, termination, notifications } = yield* makeLimitedProtocol(
+        encoder.encode(line).length,
+      );
+
+      yield* Queue.offer(input, encoder.encode(line));
+      yield* Queue.end(input);
+
+      assert.instanceOf(
+        yield* Deferred.await(termination),
+        CodexError.CodexAppServerInputStreamEndedError,
+      );
+      assert.deepEqual(notifications, [message]);
+    }),
+  );
+
+  it.effect.each([
+    { label: "an unterminated final message", suffix: "" },
+    { label: "a final message ending in a bare \\r", suffix: "\r" },
+  ])("rejects $label one byte over the limit when input ends", ({ suffix }) =>
+    Effect.gen(function* () {
+      const line = encodeUnknownJsonString({ method: "x/final", params: { text: "no newline" } });
+      const { input, termination, notifications, events } = yield* makeLimitedProtocol(
+        encoder.encode(line).length + suffix.length - 1,
+      );
+
+      yield* Queue.offer(input, encoder.encode(`${line}${suffix}`));
+      yield* Queue.end(input);
+
+      yield* awaitMessageLimitFailure(termination);
+      assert.deepEqual(notifications, []);
+      assert.deepEqual(events, []);
+    }),
+  );
+
+  it.effect.each([1, 7])(
+    "counts UTF-8 bytes of characters split across %i-byte input chunks",
+    (chunkSize) =>
+      Effect.gen(function* () {
+        const message = { method: "x/unicode", params: { text: "最後🙂🙂最後" } };
+        const line = encodeUnknownJsonString(message);
+        const bytes = encoder.encode(`${line}\n`);
+        const lineBytes = bytes.length - 1;
+        // Counting UTF-16 code units instead of bytes would accept the over-limit message.
+        assert.isBelow(line.length, lineBytes - 1);
+
+        const atLimit = yield* makeLimitedProtocol(lineBytes);
+        const overLimit = yield* makeLimitedProtocol(lineBytes - 1);
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+          yield* Queue.offer(atLimit.input, bytes.subarray(offset, offset + chunkSize));
+          yield* Queue.offer(overLimit.input, bytes.subarray(offset, offset + chunkSize));
+        }
+        yield* Queue.end(atLimit.input);
+        yield* Queue.end(overLimit.input);
+
+        assert.instanceOf(
+          yield* Deferred.await(atLimit.termination),
+          CodexError.CodexAppServerInputStreamEndedError,
+        );
+        assert.deepEqual(atLimit.notifications, [message]);
+        yield* awaitMessageLimitFailure(overLimit.termination);
+        assert.deepEqual(overLimit.notifications, []);
+        assert.deepEqual(overLimit.events, []);
+      }),
+  );
+
+  it.effect("keeps an over-limit message out of protocol logs and the termination error", () =>
+    Effect.gen(function* () {
+      const secret = "codex-oversized-secret-sentinel";
+      const small = { method: "x/small", params: {} };
+      const { input, termination, notifications, events } = yield* makeLimitedProtocol(64);
+
+      yield* Queue.offer(input, encodeJsonl(small));
+      yield* Queue.offer(input, encodeJsonl({ method: "x/huge", params: { text: secret } }));
+      yield* Queue.end(input);
+
+      const error = yield* awaitMessageLimitFailure(termination);
+      assert.deepEqual(notifications, [small]);
+      assert.deepEqual(
+        events.map(({ stage }) => stage),
+        ["raw", "decoded"],
+      );
+      assert.notInclude(encodeUnknownJsonString(events), secret);
+      assert.notInclude(error.message, secret);
+      assert.notInclude(String(error.cause), secret);
+    }),
+  );
+
+  it.effect.each([
+    { label: "a terminated", newline: "\n" },
+    { label: "an unterminated", newline: "" },
+  ])("dispatches complete lines that precede $label over-limit line in one chunk", ({ newline }) =>
+    Effect.gen(function* () {
+      const first = { method: "x/first", params: { index: 1 } };
+      const second = { method: "x/second", params: { index: 2 } };
+      const oversized = { method: "x/huge", params: { text: "y".repeat(64) } };
+      const { input, termination, notifications } = yield* makeLimitedProtocol(64);
+
+      yield* Queue.offer(
+        input,
+        encoder.encode(
+          `${[first, second, oversized].map((message) => encodeUnknownJsonString(message)).join("\n")}${newline}`,
+        ),
+      );
+      yield* Queue.end(input);
+
+      yield* awaitMessageLimitFailure(termination);
+      assert.deepEqual(notifications, [first, second]);
     }),
   );
 
