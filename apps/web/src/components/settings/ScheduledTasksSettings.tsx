@@ -120,6 +120,8 @@ const EMPTY_DRAFT: DraftState = {
   enabled: true,
   scheduleMode: "fixed",
   intervalMinutes: "15",
+  idleMaxRuns: "5",
+  idlePauseMinutes: "1",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
@@ -877,10 +879,21 @@ function ScheduledTaskEditorDialog({
     }
     const schedule = scheduleFromDraft(draft);
     if (schedule === null) {
-      reportFailure(
-        "Invalid age limit",
-        `Enter whole minutes from 1 to ${MAX_WEBHOOK_DELIVERY_AGE_MINUTES}, or leave it blank.`,
-      );
+      if (draft.scheduleMode === "idle") {
+        reportFailure(
+          "Invalid run limit",
+          "Enter a whole number of runs from 1 to 500 and a wait of 0 minutes or more.",
+        );
+      } else {
+        reportFailure(
+          "Invalid age limit",
+          `Enter whole minutes from 1 to ${MAX_WEBHOOK_DELIVERY_AGE_MINUTES}, or leave it blank.`,
+        );
+      }
+      return;
+    }
+    if (schedule.type === "idle" && !draft.threadId) {
+      reportFailure("Choose a thread", "A task that runs when a thread is idle needs a thread.");
       return;
     }
     if (
@@ -1154,7 +1167,12 @@ function ScheduledTaskEditorDialog({
                   value={[draft.scheduleMode]}
                   onValueChange={(values) => {
                     const mode = values[0] as ScheduleMode | undefined;
-                    if (mode === "fixed" || mode === "interval" || mode === "webhook")
+                    if (
+                      mode === "fixed" ||
+                      mode === "interval" ||
+                      mode === "webhook" ||
+                      mode === "idle"
+                    )
                       setDraft((current) => ({
                         ...current,
                         scheduleMode: mode,
@@ -1168,6 +1186,7 @@ function ScheduledTaskEditorDialog({
                   <Toggle value="fixed">At a time</Toggle>
                   <Toggle value="interval">Every interval</Toggle>
                   <Toggle value="webhook">On webhook</Toggle>
+                  <Toggle value="idle">When idle</Toggle>
                 </ToggleGroup>
               </div>
 
@@ -1319,6 +1338,47 @@ function ScheduledTaskEditorDialog({
                       </Toggle>
                     ))}
                   </ToggleGroup>
+                </div>
+              ) : draft.scheduleMode === "idle" ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Label htmlFor="scheduled-task-idle-runs">Run up to</Label>
+                    <Input
+                      type="number"
+                      id="scheduled-task-idle-runs"
+                      nativeInput
+                      min={1}
+                      max={500}
+                      step={1}
+                      className="w-20"
+                      value={draft.idleMaxRuns}
+                      onChange={(event) =>
+                        setDraft((current) => ({ ...current, idleMaxRuns: event.target.value }))
+                      }
+                    />
+                    <span className="text-xs text-muted-foreground">times, waiting at least</span>
+                    <Input
+                      type="number"
+                      aria-label="Minutes to wait after a run ends"
+                      nativeInput
+                      min={0}
+                      step="any"
+                      className="w-20"
+                      value={draft.idlePauseMinutes}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          idlePauseMinutes: event.target.value,
+                        }))
+                      }
+                    />
+                    <span className="text-xs text-muted-foreground">minutes after each run</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Sends the prompt each time the chosen thread finishes and nothing waits on you.
+                    The task turns itself off after the last run; saving or enabling it starts the
+                    count again. Needs a thread.
+                  </p>
                 </div>
               ) : (
                 <div className="flex items-center gap-2">

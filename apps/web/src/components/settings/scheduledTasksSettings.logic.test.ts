@@ -169,6 +169,28 @@ describe("editing scheduled task branch settings", () => {
   });
 });
 
+describe("idle scheduled tasks", () => {
+  const idleTask: ScheduledTask = {
+    ...legacyTask,
+    schedule: { type: "idle", maxRuns: 4, minPauseMs: 90_000, runsUsed: 3 },
+    nextRunAt: null,
+  };
+
+  it("opens and saves as an idle task, without the server's run counter", () => {
+    const draft = taskToDraft(idleTask);
+    expect(draft.scheduleMode).toBe("idle");
+    expect(scheduleFromDraft(draft)).toEqual({ type: "idle", maxRuns: 4, minPauseMs: 90_000 });
+  });
+
+  it("refuses a missing or unbounded run limit", () => {
+    const draft = taskToDraft(idleTask);
+    expect(scheduleFromDraft({ ...draft, idleMaxRuns: "" })).toBeNull();
+    expect(scheduleFromDraft({ ...draft, idleMaxRuns: "0" })).toBeNull();
+    expect(scheduleFromDraft({ ...draft, idleMaxRuns: "2.5" })).toBeNull();
+    expect(scheduleFromDraft({ ...draft, idlePauseMinutes: "-1" })).toBeNull();
+  });
+});
+
 describe("webhook scheduled tasks", () => {
   const signature = { header: "x-signature", encoding: "base64", prefix: "" } as const;
   const webhookTask: ScheduledTask = {

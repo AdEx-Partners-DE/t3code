@@ -45,7 +45,7 @@ export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
   };
 }
 
-export type ScheduleMode = "fixed" | "interval" | "webhook";
+export type ScheduleMode = "fixed" | "interval" | "webhook" | "idle";
 export type WorkspaceMode = "root" | "worktree" | "existing_worktree";
 
 export interface DraftState {
@@ -55,6 +55,10 @@ export interface DraftState {
   readonly enabled: boolean;
   readonly scheduleMode: ScheduleMode;
   readonly intervalMinutes: string;
+  /** Idle tasks: how many times the prompt may run before the task turns itself off. */
+  readonly idleMaxRuns: string;
+  /** Idle tasks: shortest wait after a run ends, in minutes as typed. */
+  readonly idlePauseMinutes: string;
   readonly timeOfDay: string;
   readonly weekdays: ReadonlySet<number>;
   readonly projectId: string;
@@ -113,6 +117,14 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
     const everyMs = Math.round(Number(draft.intervalMinutes) * 60_000);
     return { type: "interval", everyMs };
   }
+  if (draft.scheduleMode === "idle") {
+    const maxRuns = Number(draft.idleMaxRuns);
+    const pauseMinutes = Number(draft.idlePauseMinutes);
+    // A run limit is what keeps an idle task from answering itself forever.
+    if (!Number.isInteger(maxRuns) || maxRuns < 1 || maxRuns > 500) return null;
+    if (!Number.isFinite(pauseMinutes) || pauseMinutes < 0) return null;
+    return { type: "idle", maxRuns, minPauseMs: Math.round(pauseMinutes * 60_000) };
+  }
   const selectedEveryDay = draft.weekdays.size === 0 || draft.weekdays.size === 7;
   return {
     type: "fixed_time",
@@ -133,7 +145,15 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     prompt: task.prompt,
     enabled: task.enabled,
     scheduleMode:
-      schedule.type === "interval" ? "interval" : schedule.type === "webhook" ? "webhook" : "fixed",
+      schedule.type === "interval"
+        ? "interval"
+        : schedule.type === "webhook"
+          ? "webhook"
+          : schedule.type === "idle"
+            ? "idle"
+            : "fixed",
+    idleMaxRuns: schedule.type === "idle" ? String(schedule.maxRuns) : "5",
+    idlePauseMinutes: schedule.type === "idle" ? String(schedule.minPauseMs / 60_000) : "1",
     intervalMinutes:
       schedule.type === "interval" ? String(Math.max(1, schedule.everyMs / 60_000)) : "15",
     timeOfDay: schedule.type === "fixed_time" ? schedule.timeOfDay : "09:00",
