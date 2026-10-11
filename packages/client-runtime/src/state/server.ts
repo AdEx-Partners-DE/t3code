@@ -999,6 +999,14 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    refreshThreadChecklist: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:refresh-thread-checklist",
+      tag: ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+      },
+    }),
     clearAllQueues: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:clear-all-queues",
       tag: ORCHESTRATION_V2_WS_METHODS.clearAllQueues,
@@ -1119,6 +1127,11 @@ export function createServerEnvironmentAtoms<R, E>(
     scheduledTasksLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
+    }),
+    threadChecklist: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-checklist",
+      tag: ORCHESTRATION_V2_WS_METHODS.getThreadChecklist,
+      staleTimeMs: 60_000,
     }),
     usageLimitHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:usage-limit-history",

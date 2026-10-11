@@ -249,6 +249,7 @@ import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitHistory from "./usage/UsageLimitHistory.ts";
 import * as OpenThreadModelOverride from "./orchestration-v2/OpenThreadModelOverride.ts";
 import * as OpenThreadNudge from "./orchestration-v2/OpenThreadNudge.ts";
+import * as ThreadChecklist from "./orchestration-v2/ThreadChecklist.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1252,6 +1253,7 @@ const layerWsRpc = (
       const usageLimitHistory = yield* UsageLimitHistory.UsageLimitHistory;
       const openThreadModelOverride = yield* OpenThreadModelOverride.make;
       const openThreadNudge = yield* OpenThreadNudge.make;
+      const threadChecklist = yield* ThreadChecklist.make;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
@@ -1990,6 +1992,23 @@ const layerWsRpc = (
                   commandId: input.commandId,
                   commandType: "message.dispatch",
                   message: "Failed to nudge the open threads",
+                  cause,
+                }),
+            ),
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.getThreadChecklist]: (input) =>
+          threadChecklist.read(input.threadId).pipe(Effect.map((checklist) => ({ checklist }))),
+        [ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist]: (input) =>
+          threadChecklist.refresh(input.threadId).pipe(
+            Effect.map((checklist) => ({ checklist })),
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetThreadProjectionError({
+                  threadId: input.threadId,
+                  message:
+                    "detail" in cause && typeof cause.detail === "string"
+                      ? cause.detail
+                      : "Could not write the checklist for this thread",
                   cause,
                 }),
             ),

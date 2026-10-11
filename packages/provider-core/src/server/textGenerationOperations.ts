@@ -18,6 +18,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildThreadChecklistPrompt,
   buildThreadTitlePrompt,
 } from "./textGenerationPrompts.ts";
 import {
@@ -148,10 +149,31 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     };
   });
 
+  const generateThreadChecklist: NonNullable<ProviderTextGeneration["generateThreadChecklist"]> =
+    Effect.fn(`${name}.generateThreadChecklist`)(function* (input) {
+      const generated = yield* run({
+        operation: "generateThreadChecklist",
+        cwd: input.cwd,
+        modelSelection: input.modelSelection,
+        ...buildThreadChecklistPrompt({ transcript: input.transcript, previous: input.previous }),
+      });
+      return {
+        items: generated.items
+          .map((item) => {
+            const text = item.text.replace(/\s+/g, " ").trim().slice(0, 160);
+            const note = item.note?.replace(/\s+/g, " ").trim().slice(0, 240) ?? "";
+            return { text, status: item.status, ...(note === "" ? {} : { note }) };
+          })
+          .filter((item) => item.text !== "")
+          .slice(0, 40),
+      };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateThreadChecklist,
   } satisfies ProviderTextGeneration;
 }
