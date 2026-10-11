@@ -51,11 +51,6 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { isTaskHeldByPause } from "@t3tools/contracts";
 
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-
-import * as ServerConfig from "../config.ts";
-import { alignThreadWithStandingOverride } from "../orchestration-v2/StandingModelOverride.ts";
 import { decideIdleTrigger, saysStopPhrase, underUsageBudget } from "./idleTrigger.ts";
 import { planPortfolioNudge } from "./portfolioNudge.ts";
 import { recordDecision } from "../decisionLog.ts";
@@ -441,26 +436,6 @@ export const layer = Layer.effect(
     // Optional, so harnesses that build this service without settings still work.
     const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
-    // A model set on all open threads holds for the threads tasks post to as
-    // well, also when such a thread was not open at the time.
-    const standingOverrideServices = {
-      fileSystem: yield* Effect.serviceOption(FileSystem.FileSystem),
-      path: yield* Effect.serviceOption(Path.Path),
-      config: yield* Effect.serviceOption(ServerConfig.ServerConfig),
-    };
-    const sendToThreadAligned = (
-      input: Parameters<typeof threadManagement.sendToThread>[0],
-    ): ReturnType<typeof threadManagement.sendToThread> =>
-      (Option.isSome(standingOverrideServices.fileSystem) &&
-      Option.isSome(standingOverrideServices.path) &&
-      Option.isSome(standingOverrideServices.config)
-        ? alignThreadWithStandingOverride(threadManagement, input.threadId, "scheduled task").pipe(
-            Effect.provideService(FileSystem.FileSystem, standingOverrideServices.fileSystem.value),
-            Effect.provideService(Path.Path, standingOverrideServices.path.value),
-            Effect.provideService(ServerConfig.ServerConfig, standingOverrideServices.config.value),
-          )
-        : Effect.void
-      ).pipe(Effect.andThen(threadManagement.sendToThread(input)));
     // "Pause all tasks" holds every task except the ones the user has switched
     // back on by hand since. A manual "run now" is the user asking, and still runs.
     const isHeldByPause = (taskId: string) =>
@@ -1010,7 +985,7 @@ export const layer = Layer.effect(
                 }),
               )
             : yield* Effect.exit(
-                sendToThreadAligned({
+                threadManagement.sendToThread({
                   projectId: active.projectId,
                   commandId,
                   threadId: ThreadId.make(active.threadId),
@@ -1401,7 +1376,7 @@ export const layer = Layer.effect(
               }
               const fireKey = `${task.id}:${nowMs}:portfolio:${thread.id}`;
               const sent = yield* Effect.exit(
-                sendToThreadAligned({
+                threadManagement.sendToThread({
                   projectId: thread.projectId,
                   commandId: CommandId.make(`scheduled-task:${fireKey}`),
                   threadId: thread.id,

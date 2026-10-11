@@ -37,18 +37,22 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import * as ServerConfig from "../config.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { limitAccountSwitchSelection } from "./LimitAccountSwitch.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { recordDecision } from "../decisionLog.ts";
 import { startsWithoutTheUser } from "./QueuePauseHold.ts";
+import { alignThreadWithStandingOverride } from "./StandingModelOverride.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
@@ -666,8 +670,41 @@ const make = Effect.gen(function* () {
           ),
         );
 
+  // A model set on all open threads holds for every thread that gets work
+  // without the user: a task's message, an agent's, the server's own. The
+  // thread is brought in line before the message goes on, so one that was not
+  // open when the model was set follows too. A message that names its own
+  // model keeps it.
+  const standingOverrideServices = {
+    fileSystem: yield* Effect.serviceOption(FileSystem.FileSystem),
+    path: yield* Effect.serviceOption(Path.Path),
+    config: yield* Effect.serviceOption(ServerConfig.ServerConfig),
+  };
+  const alignWithStandingOverride = (
+    command: Parameters<ThreadManagementServiceShape["dispatch"]>[0],
+  ) =>
+    command.type !== "message.dispatch" ||
+    command.modelSelection !== undefined ||
+    !startsWithoutTheUser(command) ||
+    Option.isNone(standingOverrideServices.fileSystem) ||
+    Option.isNone(standingOverrideServices.path) ||
+    Option.isNone(standingOverrideServices.config) ||
+    Option.isNone(providerRegistry)
+      ? Effect.void
+      : alignThreadWithStandingOverride(
+          { getThreadShell: orchestrator.getThreadShell, dispatch: orchestrator.dispatch },
+          command.threadId,
+          command.scheduledTaskId === undefined ? command.creationSource : "scheduled task",
+        ).pipe(
+          Effect.provideService(FileSystem.FileSystem, standingOverrideServices.fileSystem.value),
+          Effect.provideService(Path.Path, standingOverrideServices.path.value),
+          Effect.provideService(ServerConfig.ServerConfig, standingOverrideServices.config.value),
+          Effect.provideService(ProviderRegistry.ProviderRegistry, providerRegistry.value),
+        );
+
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>
     ensureCommandTranscripts(command).pipe(
+      Effect.andThen(alignWithStandingOverride(command)),
       Effect.andThen(withLimitAccountSwitch(command)),
       Effect.flatMap(withQueuePauseHold),
       Effect.flatMap((routed) => orchestrator.dispatch(routed)),
