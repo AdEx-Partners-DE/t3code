@@ -1178,6 +1178,12 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   if (thread.hasPendingUserInput) {
     return "input";
   }
+  // "queued" with no run under way is a queue that waits behind a hold or a
+  // pause, for as long as that lasts: the thread stands still. Calling it
+  // working would show an agent at work where none is.
+  if (thread.runtime?.status === "queued" && thread.runtime.activeRunId === null) {
+    return "ready";
+  }
   if (
     thread.runtime !== null &&
     ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)

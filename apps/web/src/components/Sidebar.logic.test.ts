@@ -1013,6 +1013,18 @@ describe("resolveSidebarThreadStatus", () => {
 
   const idle = { hasPendingApprovals: false, hasPendingUserInput: false, runtime: null };
 
+  it("does not call a thread working whose queue only waits behind a hold or a pause", () => {
+    const heldQueue = { ...runtime, status: "queued" as const, activeRunId: null };
+    expect(resolveSidebarThreadStatus({ ...idle, runtime: heldQueue })).toBe("ready");
+    // A queued message behind a run under way is still work in flight.
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        runtime: { ...heldQueue, activeRunId: RunId.make("run:active") },
+      }),
+    ).toBe("working");
+  });
+
   it("prioritizes approval over a running runtime", () => {
     expect(resolveSidebarThreadStatus({ ...idle, hasPendingApprovals: true, runtime })).toBe(
       "approval",

@@ -160,7 +160,11 @@ import {
   useProjects,
   useThreadShells,
 } from "../state/entities";
-import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
+import {
+  environmentServerConfigsAtom,
+  primaryServerKeybindingsAtom,
+  serverEnvironment,
+} from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
@@ -329,6 +333,40 @@ const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new M
 // give the sidebar list a new identity.
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 const NO_THREAD_KEYS: ReadonlySet<string> = new Set();
+const QUEUE_STALE_MS = 60 * 60_000;
+const NO_WAITING_QUEUES: ReadonlyMap<string, { count: number; since: string }> = new Map();
+const EMPTY_QUERY_INPUT = {};
+
+/**
+ * Reads which threads have a waiting queue, once for the whole list, and
+ * hands the result up. Its own component so the list need not have an
+ * environment to render.
+ */
+function WaitingQueuesSource(props: {
+  environmentId: EnvironmentId;
+  onChange: (queues: ReadonlyMap<string, { count: number; since: string }>) => void;
+}) {
+  const { onChange } = props;
+  const queues = useEnvironmentQuery(
+    serverEnvironment.threadChecklists({
+      environmentId: props.environmentId,
+      input: EMPTY_QUERY_INPUT,
+    }),
+  ).data?.waitingQueues;
+  useEffect(() => {
+    onChange(
+      queues === undefined || queues.length === 0
+        ? NO_WAITING_QUEUES
+        : new Map(
+            queues.map((queue) => [
+              queue.threadId,
+              { count: queue.waiting, since: queue.oldestQueuedAt },
+            ]),
+          ),
+    );
+  }, [onChange, queues]);
+  return null;
+}
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -1211,6 +1249,10 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
+  // Messages waiting in the thread's queue and when the oldest was queued.
+  // A queue behind a pause or a hold is otherwise invisible on the row.
+  queuedCount: number;
+  queuedSince: string | null;
   // Settled rows un-settle, snoozed rows wake, and cards settle.
   variantAction: SidebarSweepAction;
   // False on environments whose server predates thread.settle/unsettle:
@@ -1402,7 +1444,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Status hues follow the system-wide convention set by sidebar v1 and the
   // mobile Live Activity/widgets (amber approval, indigo input, sky working)
   // so a thread reads the same color everywhere it surfaces.
-  const topStatus =
+  const runStatus =
     status === "working"
       ? {
           // A native /goal keeps the agent going across turns until it is met.
@@ -1459,6 +1501,20 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         className: "text-success",
                       }
                     : null;
+  // A standing thread with nothing else to say shows its waiting queue,
+  // in warning colour once the oldest message has waited an hour.
+  const topStatus =
+    runStatus ??
+    (props.queuedCount > 0 && props.queuedSince !== null
+      ? {
+          label: `${props.queuedCount} queued · ${compactSidebarTimeLabel(formatRelativeTimeLabel(props.queuedSince))}`,
+          icon: null,
+          className:
+            Date.now() - Date.parse(props.queuedSince) >= QUEUE_STALE_MS
+              ? "text-warning"
+              : "text-muted-foreground",
+        }
+      : null);
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -3071,6 +3127,7 @@ export default function Sidebar() {
   const [queueFilterThreadIds, setQueueFilterThreadIds] = useState<ReadonlySet<string> | null>(
     null,
   );
+  const [waitingQueues, setWaitingQueues] = useState(NO_WAITING_QUEUES);
   const listIsFiltered = openThreadFilter !== null || queueFilterThreadIds !== null;
   const draggableThreadKeys = listIsFiltered ? NO_THREAD_KEYS : allDraggableThreadKeys;
   const activeReorderableThreadKeys = listIsFiltered
@@ -5571,6 +5628,12 @@ export default function Sidebar() {
         }
       >
         <SidebarGroup className="flex-1" role="presentation">
+          {serverConfigs.size > 0 ? (
+            <WaitingQueuesSource
+              environmentId={serverConfigs.keys().next().value!}
+              onChange={setWaitingQueues}
+            />
+          ) : null}
           {isSearchingThreads ? null : (
             <SidebarCockpit
               summary={openThreadSummary}
@@ -5763,6 +5826,8 @@ export default function Sidebar() {
                             key={`${threadKey}:${rowVariant}`}
                             thread={thread}
                             variant={rowVariant}
+                            queuedCount={waitingQueues.get(thread.id)?.count ?? 0}
+                            queuedSince={waitingQueues.get(thread.id)?.since ?? null}
                             // Snoozed rows wake, settled rows un-settle, and cards settle.
                             variantAction={
                               section === "snoozed"
