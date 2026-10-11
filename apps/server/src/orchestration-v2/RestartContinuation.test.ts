@@ -936,12 +936,74 @@ it.effect.each([
       const held =
         alreadyHeld ||
         events.some((event) => event.type === "run.updated" && event.payload.queueHeld === true);
-      assert.equal(held, !enabled || alreadyHeld || extraQueue);
+      // With continuing enabled a restart holds nothing: the extra message
+      // waits its turn in the queue instead of being parked.
+      assert.equal(held, !enabled || alreadyHeld);
       assert.lengthOf(
         effects,
         trigger === "startup" && enabled && !alreadyHeld && !extraQueue ? 1 : 0,
       );
       if (effects.length > 0) assert.equal(effects[0]!.request.type, "provider-runtime.continue");
+    }),
+);
+
+it.effect(
+  "continues a cut turn although an earlier thread's recovery already stopped the shared session",
+  () =>
+    Effect.gen(function* () {
+      // Threads share one provider session. Recovery walks them in turn, and
+      // the first one marks the session stopped before the cut thread is read.
+      const cut = makeProjection();
+      const otherThreadId = ThreadId.make("thread:shares-the-session");
+      const other = {
+        ...cut,
+        thread: { ...cut.thread, id: otherThreadId },
+        runs: [],
+        attempts: [],
+        providerThreads: [],
+        providerTurns: [],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const cutAsStoredAfterTheFirstThread = {
+        ...cut,
+        providerSessions: cut.providerSessions.map((session) => ({
+          ...session,
+          status: "stopped",
+        })),
+      } as unknown as OrchestrationV2ThreadProjection;
+      const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = [];
+      const recovery = yield* ProviderRuntimeRecovery.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true }),
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getRecoveryThreadIds: () => Effect.succeed([otherThreadId, threadId]),
+              getRuntimeRecoveryProjection: (id) =>
+                Effect.succeed(id === otherThreadId ? other : cutAsStoredAfterTheFirstThread),
+            }),
+            Layer.mock(EventSink.EventSinkV2)({
+              writeWithEffects: (input) => {
+                effects.push(...input.effects);
+                return Effect.succeed([]);
+              },
+              commitCommand: (input) => {
+                effects.push(...input.effects);
+                return Effect.succeed({ committed: true, cancelledEffectCount: 0 } as never);
+              },
+            }),
+            IdAllocator.layer,
+            Layer.mock(EffectOutbox.EffectOutboxV2)({
+              cancelUnsettled: () => Effect.succeed([]),
+              signalCancellations: () => Effect.void,
+              reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
+            }),
+          ),
+        ),
+      );
+      yield* recovery.reconcile("startup");
+      assert.deepEqual(
+        effects.map((effect) => effect.request),
+        [{ type: "provider-runtime.continue", sourceRunId: cut.runs[0]!.id }],
+      );
     }),
 );
 

@@ -199,6 +199,13 @@ export const make = Effect.gen(function* () {
       projection: ProjectionStore.ProjectionRuntimeRecoveryState,
       trigger: "startup" | "shutdown",
       continueAfterRestart: boolean,
+      /**
+       * The projection with every provider session as it stood before this
+       * reconciliation began. Threads share a provider session; the first
+       * thread reconciled marks it stopped, and without this every later
+       * thread would read its own cut turn as having had no live session.
+       */
+      asRecoveryBegan: ProjectionStore.ProjectionRuntimeRecoveryState = projection,
     ) {
       const now = yield* DateTime.now;
       const runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
@@ -658,7 +665,7 @@ export const make = Effect.gen(function* () {
       }
       const continuationRun =
         continueAfterRestart && trigger === "startup"
-          ? (handoffContinuation ?? restartContinuationRun(projection, now))
+          ? (handoffContinuation ?? restartContinuationRun(asRecoveryBegan, now))
           : undefined;
       // Why a cut turn was or was not continued is asked days later; the
       // trace log is long gone by then. Record the facts, not a verdict, so the
@@ -668,7 +675,7 @@ export const make = Effect.gen(function* () {
         const providerThread = projection.providerThreads.find(
           (candidate) => candidate.id === cut.providerThreadId,
         );
-        const session = projection.providerSessions.find(
+        const session = asRecoveryBegan.providerSessions.find(
           (candidate) => candidate.id === providerThread?.providerSessionId,
         );
         yield* recordDecision({
@@ -773,12 +780,12 @@ export const make = Effect.gen(function* () {
         stoppedSessions,
         closedRequests: requests.length,
         retiredEffects,
-        // A thread with a cut run gets its queue moving again when that run's
-        // continuation ends; only a thread that stood still needs a start.
+        // A continued run gets the queue moving again when it ends. Without
+        // a continuation nothing would: the thread stood still, or its cut
+        // run could not be continued.
         queueToResume:
           continueAfterRestart &&
           trigger === "startup" &&
-          runs.length === 0 &&
           continuationRun === undefined &&
           queuedRuns.some((run) => run.queueHeld !== true),
       };
@@ -802,6 +809,7 @@ export const make = Effect.gen(function* () {
       let closedRequests = 0;
       let retiredEffects = 0;
       const queuesToResume: Array<ThreadId> = [];
+      const sessionStatusAsRecoveryBegan = new Map<string, string>();
       for (const threadId of threadIds) {
         const projection = yield* projections.getRuntimeRecoveryProjection(threadId).pipe(
           Effect.mapError(
@@ -817,7 +825,19 @@ export const make = Effect.gen(function* () {
           continueAfterRestart !== null &&
           resolveProjectSettings(continueAfterRestart, projection.thread.projectId).settings
             .continueThreadsAfterServerUpdate;
-        const result = yield* reconcileProjection(projection, trigger, enabled);
+        // The first sight of a session is before anything here wrote to it.
+        const asRecoveryBegan = {
+          ...projection,
+          providerSessions: projection.providerSessions.map((session) => {
+            const before = sessionStatusAsRecoveryBegan.get(session.id);
+            if (before === undefined) {
+              sessionStatusAsRecoveryBegan.set(session.id, session.status);
+              return session;
+            }
+            return { ...session, status: before as typeof session.status };
+          }),
+        };
+        const result = yield* reconcileProjection(projection, trigger, enabled, asRecoveryBegan);
         terminalizedRuns += result.terminalizedRuns;
         stoppedSessions += result.stoppedSessions;
         closedRequests += result.closedRequests;
