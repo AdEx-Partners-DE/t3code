@@ -61,6 +61,8 @@ export interface DraftState {
   readonly idlePauseMinutes: string;
   /** Idle tasks: text in the thread's last reply that ends the task early. Empty for none. */
   readonly idleStopPhrase: string;
+  /** Idle tasks: stop when the account has less than this percent left. Empty for no budget. */
+  readonly idleMinRemainingPercent: string;
   readonly timeOfDay: string;
   readonly weekdays: ReadonlySet<number>;
   readonly projectId: string;
@@ -127,11 +129,21 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
     if (!Number.isFinite(pauseMinutes) || pauseMinutes < 0) return null;
     const stopPhrase = draft.idleStopPhrase.trim();
     if (stopPhrase !== "" && (stopPhrase.length < 3 || stopPhrase.length > 80)) return null;
+    const budget = draft.idleMinRemainingPercent.trim();
+    const minRemainingPercent = budget === "" ? null : Number(budget);
+    if (
+      minRemainingPercent !== null &&
+      (!Number.isInteger(minRemainingPercent) ||
+        minRemainingPercent < 1 ||
+        minRemainingPercent > 99)
+    )
+      return null;
     return {
       type: "idle",
       maxRuns,
       minPauseMs: Math.round(pauseMinutes * 60_000),
       ...(stopPhrase === "" ? {} : { stopPhrase }),
+      ...(minRemainingPercent === null ? {} : { minRemainingPercent }),
     };
   }
   const selectedEveryDay = draft.weekdays.size === 0 || draft.weekdays.size === 7;
@@ -164,6 +176,10 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     idleMaxRuns: schedule.type === "idle" ? String(schedule.maxRuns) : "5",
     idlePauseMinutes: schedule.type === "idle" ? String(schedule.minPauseMs / 60_000) : "1",
     idleStopPhrase: schedule.type === "idle" ? (schedule.stopPhrase ?? "") : "",
+    idleMinRemainingPercent:
+      schedule.type === "idle" && schedule.minRemainingPercent !== undefined
+        ? String(schedule.minRemainingPercent)
+        : "",
     intervalMinutes:
       schedule.type === "interval" ? String(Math.max(1, schedule.everyMs / 60_000)) : "15",
     timeOfDay: schedule.type === "fixed_time" ? schedule.timeOfDay : "09:00",

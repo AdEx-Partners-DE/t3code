@@ -41,13 +41,15 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { usageHeadroomPercent } from "@t3tools/shared/usageLimitSwitch";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
-import { decideIdleTrigger, saysStopPhrase } from "./idleTrigger.ts";
+import { decideIdleTrigger, saysStopPhrase, underUsageBudget } from "./idleTrigger.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -425,6 +427,7 @@ export const layer = Layer.effect(
     const scheduler = yield* Scheduler.Scheduler;
     // Optional, so harnesses that build this service without settings still work.
     const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+    const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
     // The environment-wide pause. A manual "run now" is the user asking, and still runs.
     const tasksPaused = Option.isNone(serverSettings)
       ? Effect.succeed(false)
@@ -1097,6 +1100,18 @@ export const layer = Layer.effect(
               ),
             );
 
+    /** Headroom of the account a thread runs on; null when it is not known. */
+    const remainingPercentOf = (instanceId: string) =>
+      Option.isNone(providerRegistry)
+        ? Effect.succeed(null)
+        : providerRegistry.value.getProviders.pipe(
+            Effect.map((providers) => {
+              const provider = providers.find((candidate) => candidate.instanceId === instanceId);
+              return provider === undefined ? null : usageHeadroomPercent(provider);
+            }),
+            Effect.orElseSucceed(() => null),
+          );
+
     const runIdleTasks = Effect.fn("ScheduledTaskService.runIdleTasks")(function* () {
       if (yield* tasksPaused) return;
       const rows = yield* sql<ScheduledTaskRow>`
@@ -1135,7 +1150,23 @@ export const layer = Layer.effect(
                 task.schedule.stopPhrase,
                 yield* lastReplyText(ThreadId.make(task.threadId), thread.latestRunId),
               );
-            if (decision.type === "fire" && !stopped) {
+            const remainingPercent =
+              decision.type === "fire" &&
+              !stopped &&
+              task.schedule.minRemainingPercent !== undefined
+                ? yield* remainingPercentOf(thread.modelSelection.instanceId)
+                : null;
+            if (underUsageBudget(task.schedule.minRemainingPercent, remainingPercent)) {
+              // Say why in the task's last error, so the list shows it.
+              yield* sql`
+                UPDATE scheduled_tasks
+                SET enabled = 0,
+                    updated_at = ${iso(now)},
+                    last_run_error = ${`Stopped at the usage budget: ${remainingPercent}% left, the task needs ${task.schedule.minRemainingPercent}%.`}
+                WHERE task_id = ${task.id}
+              `;
+              yield* notifyChanged;
+            } else if (decision.type === "fire" && !stopped) {
               yield* runTask(task, "idle");
             } else if (decision.type === "exhausted" || stopped) {
               yield* sql`

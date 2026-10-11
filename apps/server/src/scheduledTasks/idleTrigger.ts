@@ -38,6 +38,19 @@ export function saysStopPhrase(stopPhrase: string | undefined, lastReply: string
 }
 
 /**
+ * Whether the account has dropped under the task's budget. `remainingPercent`
+ * is the headroom of the account's tightest usage window, or null when the
+ * account reports none; an unknown headroom never stops a task.
+ */
+export function underUsageBudget(
+  minRemainingPercent: number | undefined,
+  remainingPercent: number | null,
+): boolean {
+  if (minRemainingPercent === undefined || remainingPercent === null) return false;
+  return remainingPercent < minRemainingPercent;
+}
+
+/**
  * `armedAtMs` is when the task was last enabled or edited: a run that ended
  * before that does not count, so arming a task on a thread that has been
  * quiet for a day does not fire it at once. `lastRunAtMs` is the task's own

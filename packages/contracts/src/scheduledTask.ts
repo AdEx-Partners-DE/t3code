@@ -143,6 +143,12 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
     description:
       "The task turns itself off instead of running when the thread's last reply contains this text, ignoring case.",
   }),
+  minRemainingPercent: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 99 })),
+  ).annotate({
+    description:
+      "The task turns itself off instead of running when the thread's account has less than this much of its tightest usage window left.",
+  }),
   /** Runs since the task was last armed. Kept by the server; saving or enabling resets it. */
   runsUsed: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }).annotate({

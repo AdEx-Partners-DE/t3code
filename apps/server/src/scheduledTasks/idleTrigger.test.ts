@@ -2,7 +2,12 @@ import { describe, expect, it } from "@effect/vitest";
 import { RunId, RuntimeRequestId, type ScheduledTaskIdleSchedule } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { decideIdleTrigger, saysStopPhrase, type IdleTriggerThread } from "./idleTrigger.ts";
+import {
+  decideIdleTrigger,
+  saysStopPhrase,
+  underUsageBudget,
+  type IdleTriggerThread,
+} from "./idleTrigger.ts";
 
 const at = (iso: string) => Date.parse(iso);
 const ARMED = at("2026-10-11T08:00:00.000Z");
@@ -109,5 +114,22 @@ describe("saysStopPhrase", () => {
   it("never stops a task that has no phrase", () => {
     expect(saysStopPhrase(undefined, "ALL DONE")).toBe(false);
     expect(saysStopPhrase("   ", "anything")).toBe(false);
+  });
+});
+
+describe("underUsageBudget", () => {
+  it("stops once the account has less left than the task needs", () => {
+    expect(underUsageBudget(20, 19)).toBe(true);
+    expect(underUsageBudget(20, 0)).toBe(true);
+  });
+
+  it("keeps going at or above the budget", () => {
+    expect(underUsageBudget(20, 20)).toBe(false);
+    expect(underUsageBudget(20, 75)).toBe(false);
+  });
+
+  it("never stops without a budget or without a known headroom", () => {
+    expect(underUsageBudget(undefined, 0)).toBe(false);
+    expect(underUsageBudget(20, null)).toBe(false);
   });
 });

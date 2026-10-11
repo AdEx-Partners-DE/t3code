@@ -65,7 +65,8 @@ export function isSameSchedule(a: ScheduledTaskSchedule, b: ScheduledTaskSchedul
       b.type === "idle" &&
       a.maxRuns === b.maxRuns &&
       a.minPauseMs === b.minPauseMs &&
-      (a.stopPhrase ?? null) === (b.stopPhrase ?? null)
+      (a.stopPhrase ?? null) === (b.stopPhrase ?? null) &&
+      (a.minRemainingPercent ?? null) === (b.minRemainingPercent ?? null)
     );
   }
   if (b.type !== "fixed_time") return false;

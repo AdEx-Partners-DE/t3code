@@ -202,6 +202,27 @@ describe("idle scheduled tasks", () => {
     expect(scheduleFromDraft({ ...draft, idleStopPhrase: "ok" })).toBeNull();
   });
 
+  it("keeps a usage budget through open and save, and refuses one out of range", () => {
+    const draft = taskToDraft({
+      ...idleTask,
+      schedule: { type: "idle", maxRuns: 4, minPauseMs: 90_000, minRemainingPercent: 25 },
+    });
+    expect(draft.idleMinRemainingPercent).toBe("25");
+    expect(scheduleFromDraft(draft)).toEqual({
+      type: "idle",
+      maxRuns: 4,
+      minPauseMs: 90_000,
+      minRemainingPercent: 25,
+    });
+    expect(scheduleFromDraft({ ...draft, idleMinRemainingPercent: "" })).toEqual({
+      type: "idle",
+      maxRuns: 4,
+      minPauseMs: 90_000,
+    });
+    expect(scheduleFromDraft({ ...draft, idleMinRemainingPercent: "100" })).toBeNull();
+    expect(scheduleFromDraft({ ...draft, idleMinRemainingPercent: "2.5" })).toBeNull();
+  });
+
   it("refuses a missing or unbounded run limit", () => {
     const draft = taskToDraft(idleTask);
     expect(scheduleFromDraft({ ...draft, idleMaxRuns: "" })).toBeNull();
