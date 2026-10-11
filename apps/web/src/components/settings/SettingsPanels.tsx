@@ -650,6 +650,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.switchAccountAtUsageLimit !== DEFAULT_UNIFIED_SETTINGS.switchAccountAtUsageLimit
         ? ["Switch account at usage limit"]
         : []),
+      ...(settings.threadQueuesPaused !== DEFAULT_UNIFIED_SETTINGS.threadQueuesPaused
+        ? ["Pause all queues"]
+        : []),
       ...(settings.continueThreadsAfterServerUpdate !==
       DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
         ? ["Continue threads after restarts"]
@@ -727,6 +730,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.persistComposerContextStrip,
       settings.enableProviderUpdateChecks,
       settings.switchAccountAtUsageLimit,
+      settings.threadQueuesPaused,
       settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
@@ -848,6 +852,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       switchAccountAtUsageLimit: DEFAULT_UNIFIED_SETTINGS.switchAccountAtUsageLimit,
+      threadQueuesPaused: DEFAULT_UNIFIED_SETTINGS.threadQueuesPaused,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
@@ -3056,6 +3061,35 @@ export function GeneralSettingsPanel() {
                 updateSettings({ switchAccountAtUsageLimit: Boolean(checked) })
               }
               aria-label="Switch account at usage limit"
+            />
+          }
+        />
+
+        <SettingsRow
+          serverScoped
+          settingKeys={["threadQueuesPaused"]}
+          {...searchableSetting("pause-all-queues")}
+          description="Hold every thread's queue. Runs under way finish; queued messages wait until you turn this off."
+          resetAction={
+            settings.threadQueuesPaused !== DEFAULT_UNIFIED_SETTINGS.threadQueuesPaused ? (
+              <SettingResetButton
+                label="pause all queues"
+                onClick={() =>
+                  updateSettings({
+                    threadQueuesPaused: DEFAULT_UNIFIED_SETTINGS.threadQueuesPaused,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <ScopedSwitch
+              settingKeys={["threadQueuesPaused"]}
+              checked={settings.threadQueuesPaused}
+              onCheckedChange={(checked) =>
+                updateSettings({ threadQueuesPaused: Boolean(checked) })
+              }
+              aria-label="Pause all queues"
             />
           }
         />

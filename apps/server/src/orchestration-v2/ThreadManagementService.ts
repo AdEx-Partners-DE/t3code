@@ -37,6 +37,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -459,6 +460,32 @@ const make = Effect.gen(function* () {
   // Optional, so harnesses that build this service without providers still work.
   const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
+  // Lifting the environment-wide queue pause must start the queues that
+  // waited: nothing else would, because a queue only moves when a run ends.
+  if (Option.isSome(serverSettings)) {
+    const wasPaused = yield* Ref.make(
+      yield* serverSettings.value.getSettings.pipe(
+        Effect.map((settings) => settings.threadQueuesPaused),
+        Effect.orElseSucceed(() => false),
+      ),
+    );
+    yield* Stream.runForEach(serverSettings.value.streamChanges, (settings) =>
+      Ref.getAndSet(wasPaused, settings.threadQueuesPaused).pipe(
+        Effect.flatMap((before) =>
+          before && !settings.threadQueuesPaused
+            ? orchestrator.resumeQueuedRuns.pipe(
+                Effect.tap((resumed) =>
+                  Effect.logInfo("Thread queues resumed", { threads: resumed }),
+                ),
+                Effect.catch((cause) =>
+                  Effect.logWarning("Could not resume thread queues", { cause }),
+                ),
+              )
+            : Effect.void,
+        ),
+      ),
+    ).pipe(Effect.forkIn(layerScope));
+  }
 
   const ensureLegacyTranscript = Effect.fn(
     "orchestrationV2.threadManagement.ensureLegacyTranscript",

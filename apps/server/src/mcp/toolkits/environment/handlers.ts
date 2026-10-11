@@ -15,6 +15,7 @@ export function preferences(settings: ServerSettings) {
     enableProviderUpdateChecks,
     switchAccountAtUsageLimit,
     scheduledTasksPaused,
+    threadQueuesPaused,
     backgroundActivity,
     sourceControlWritingStyle,
   } = settings;
@@ -25,6 +26,7 @@ export function preferences(settings: ServerSettings) {
     enableProviderUpdateChecks,
     switchAccountAtUsageLimit,
     scheduledTasksPaused,
+    threadQueuesPaused,
     backgroundActivity: { profile: backgroundActivity.profile },
     sourceControlWritingStyle: {
       ...sourceControlWritingStyle,

@@ -65,6 +65,7 @@ import {
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -809,6 +810,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
+  // Optional, so harnesses that build the orchestrator without settings still work.
+  const queueSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  // The environment-wide queue pause. Starting a queued run is the one place
+  // every queue passes through, so the pause is read here and nowhere else.
+  const threadQueuesPaused = Option.isNone(queueSettings)
+    ? Effect.succeed(false)
+    : queueSettings.value.getSettings.pipe(
+        Effect.map((settings) => settings.threadQueuesPaused),
+        Effect.orElseSucceed(() => false),
+      );
   const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
   const nextTurnItemOrdinal = (
     projection: Pick<OrchestrationV2ThreadProjection, "thread"> &
@@ -1274,6 +1285,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     options?: { readonly failedRunId?: RunId; readonly endedRunId?: RunId },
   ) =>
     Effect.gen(function* () {
+      if (yield* threadQueuesPaused) return;
       // Every terminal run checks the queue. Only a deliverable queued run
       // needs the transcript for provider handoff and legacy import context.
       if (!(yield* projectionStore.canStartQueuedRun(threadId))) return;

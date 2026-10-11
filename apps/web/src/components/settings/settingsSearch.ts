@@ -495,6 +495,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["quota limit credits second account subscription automatic fallback weekly"],
   },
   {
+    id: "pause-all-queues",
+    title: "Pause all queues",
+    to: "/settings/general",
+    searchTerms: ["queue hold stop waiting messages global pause queued automation"],
+  },
+  {
     id: "continue-threads-after-server-update",
     title: "Continue threads after restarts",
     to: "/settings/general",

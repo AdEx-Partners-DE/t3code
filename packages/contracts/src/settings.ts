@@ -1128,6 +1128,12 @@ export const ServerSettings = Schema.Struct({
    * its own enabled state, so resuming restores exactly what was running.
    */
   scheduledTasksPaused: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * Holds every thread's queue in this environment: a run that is under way
+   * finishes, but no queued message starts until this is turned off again.
+   * Messages can still be queued, edited and removed meanwhile.
+   */
+  threadQueuesPaused: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // Retain the update-era key; recovery now needs an environment-owned opt-in.
   continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -1481,6 +1487,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   switchAccountAtUsageLimit: Schema.optionalKey(Schema.Boolean),
   scheduledTasksPaused: Schema.optionalKey(Schema.Boolean),
+  threadQueuesPaused: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
