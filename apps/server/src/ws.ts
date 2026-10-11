@@ -1992,7 +1992,12 @@ const layerWsRpc = (
         [ORCHESTRATION_V2_WS_METHODS.listThreadChecklists]: (input) =>
           Effect.gen(function* () {
             if (input.threadId !== undefined) {
-              return { checklists: [], checklist: yield* threadChecklist.read(input.threadId) };
+              const checklist = yield* threadChecklist.read(input.threadId);
+              return {
+                checklists: [],
+                checklist,
+                turnsBehind: yield* threadChecklist.turnsBehind(input.threadId, checklist),
+              };
             }
             return {
               checklists: yield* threadChecklist.listOpen,
@@ -2009,7 +2014,7 @@ const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist]: (input) =>
-          threadChecklist.refresh(input.threadId).pipe(
+          threadChecklist.refresh(input.threadId, input.trigger).pipe(
             Effect.map((checklist) => ({ checklist })),
             Effect.mapError(
               (cause) =>

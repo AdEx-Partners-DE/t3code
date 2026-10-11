@@ -5,6 +5,7 @@ import * as DateTime from "effect/DateTime";
 import {
   buildChecklistTranscript,
   buildChecklistTranscriptWithSources,
+  turnsFinishedSince,
 } from "./threadChecklistTranscript.ts";
 
 type Message = Parameters<typeof buildChecklistTranscript>[0][number];
@@ -105,5 +106,25 @@ describe("buildChecklistTranscript", () => {
     expect(transcript.length).toBeLessThan(1_300);
     // Entry numbers stay those of the full thread, so a gap shows something was left out.
     expect(transcript).toContain("[5] USER");
+  });
+});
+
+describe("turnsFinishedSince", () => {
+  const runs = [
+    { id: "run:1", ordinal: 1, status: "completed" },
+    { id: "run:2", ordinal: 2, status: "failed" },
+    { id: "run:3", ordinal: 3, status: "completed" },
+    { id: "run:4", ordinal: 4, status: "running" },
+    { id: "run:5", ordinal: 5, status: "queued" },
+  ];
+
+  it("counts the turns that ended after the run the checklist was written from", () => {
+    expect(turnsFinishedSince(runs, "run:1")).toBe(2);
+    expect(turnsFinishedSince(runs, "run:3")).toBe(0);
+  });
+
+  it("counts every finished turn when there is no checklist or its run is gone", () => {
+    expect(turnsFinishedSince(runs, null)).toBe(3);
+    expect(turnsFinishedSince(runs, "run:deleted")).toBe(3);
   });
 });

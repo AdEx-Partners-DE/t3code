@@ -16,6 +16,28 @@ type TranscriptMessage = Pick<
   "id" | "role" | "text" | "runId" | "createdAt" | "scheduledTaskId" | "notification"
 >;
 
+/**
+ * How many turns have finished after the run a checklist was written from.
+ * Without that run (no checklist yet, or the run is gone) every finished turn
+ * counts. Queued and running turns have nothing to add yet.
+ */
+export function turnsFinishedSince(
+  runs: ReadonlyArray<{ readonly id: string; readonly ordinal: number; readonly status: string }>,
+  basedOnRunId: string | null,
+): number {
+  const finished = runs.filter(
+    (run) =>
+      run.status === "completed" ||
+      run.status === "failed" ||
+      run.status === "interrupted" ||
+      run.status === "cancelled",
+  );
+  const basis = basedOnRunId === null ? undefined : runs.find((run) => run.id === basedOnRunId);
+  return basis === undefined
+    ? finished.length
+    : finished.filter((run) => run.ordinal > basis.ordinal).length;
+}
+
 const USER_LIMIT = 1_500;
 const REPLY_LIMIT = 2_400;
 /** Replies in the older part of an over-long thread are cut to this. */

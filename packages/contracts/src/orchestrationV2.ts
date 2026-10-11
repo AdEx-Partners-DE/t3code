@@ -3895,6 +3895,12 @@ export const OrchestrationV2RpcSchemas = {
       activeRuns: Schema.optional(
         Schema.Array(Schema.Struct({ threadId: ThreadId, lastEventAt: IsoDateTime })),
       ),
+      /**
+       * With `threadId`: how many turns the thread has finished since its
+       * checklist was written (all of them when there is none yet). Clients
+       * rewrite on their own only after a few turns, not after every one.
+       */
+      turnsBehind: Schema.optional(NonNegativeInt),
       /** Set when one thread was asked for; null when it has no checklist yet. */
       checklist: Schema.optional(Schema.NullOr(ThreadChecklist)),
       waitingQueues: Schema.optional(
@@ -3911,7 +3917,11 @@ export const OrchestrationV2RpcSchemas = {
   },
   /** Has a model write the checklist anew; this costs a model call. */
   refreshThreadChecklist: {
-    input: Schema.Struct({ threadId: ThreadId }),
+    input: Schema.Struct({
+      threadId: ThreadId,
+      /** What asked for the rewrite; kept with the cost record of the call. */
+      trigger: Schema.optional(Schema.Literals(["auto", "manual", "batch"])),
+    }),
     output: Schema.Struct({ checklist: ThreadChecklist }),
   },
   /**

@@ -22,7 +22,11 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { isOpenThread } from "./OpenThreadModelOverride.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
-import { buildChecklistTranscriptWithSources } from "./threadChecklistTranscript.ts";
+import { recordDecision } from "../decisionLog.ts";
+import {
+  buildChecklistTranscriptWithSources,
+  turnsFinishedSince,
+} from "./threadChecklistTranscript.ts";
 
 const CHECKLIST_DIRECTORY = "thread-checklists";
 /** Fits the context of every model offered for text generation, with room for the reply. */
@@ -56,7 +60,21 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => null),
     );
 
-  const refresh = Effect.fn("ThreadChecklist.refresh")(function* (threadId: ThreadId) {
+  /** Turns finished since the checklist was written; all of them when there is none. */
+  const turnsBehind = Effect.fn("ThreadChecklist.turnsBehind")(function* (
+    threadId: ThreadId,
+    checklist: Checklist | null,
+  ) {
+    const { runs } = yield* threads.getThreadRecords(threadId, ["runs"]);
+    return turnsFinishedSince(runs, checklist?.basedOnRunId ?? null);
+  });
+
+  const refresh = Effect.fn("ThreadChecklist.refresh")(function* (
+    threadId: ThreadId,
+    trigger: "auto" | "manual" | "batch" = "manual",
+  ) {
+    const startedAt = yield* DateTime.now;
+    const modelSelection = (yield* settings.getSettings).textGenerationModelSelection;
     const records = yield* threads.getThreadRecords(threadId, ["messages"]);
     const shell = yield* threads.getThreadShell(threadId);
     const previous = yield* read(threadId);
@@ -73,7 +91,7 @@ export const make = Effect.gen(function* () {
             cwd: config.stateDir,
             transcript,
             previous: previous?.items.map((item) => ({ text: item.text, status: item.status })),
-            modelSelection: (yield* settings.getSettings).textGenerationModelSelection,
+            modelSelection,
           });
     const checklist: Checklist = {
       threadId,
@@ -90,7 +108,34 @@ export const make = Effect.gen(function* () {
       }),
     };
     yield* fileSystem.makeDirectory(directory, { recursive: true });
-    yield* fileSystem.writeFileString(fileOf(threadId), encodeChecklist(checklist));
+    const encoded = encodeChecklist(checklist);
+    yield* fileSystem.writeFileString(fileOf(threadId), encoded);
+    // What each rewrite cost and what it produced, so the model for this job
+    // can be judged from numbers later. Characters stand in for tokens: the
+    // text generation layer does not report usage.
+    const count = (status: string) =>
+      checklist.items.filter((item) => item.status === status).length;
+    yield* recordDecision({
+      kind: "checklist-generated",
+      threadId,
+      outcome: transcript === "" ? "empty-thread" : "written",
+      facts: {
+        trigger,
+        instanceId: modelSelection.instanceId,
+        model: modelSelection.model,
+        promptChars: transcript.length,
+        replyChars: encoded.length,
+        durationMs: DateTime.toEpochMillis(yield* DateTime.now) - DateTime.toEpochMillis(startedAt),
+        messages: records.messages.length,
+        items: checklist.items.length,
+        attention: count("attention"),
+        open: count("open"),
+        backlog: count("backlog"),
+        done: count("done"),
+        itemsWithPlace: checklist.items.filter((item) => item.messageId !== undefined).length,
+        hadPrevious: previous !== null,
+      },
+    });
     return checklist;
   });
 
@@ -109,6 +154,8 @@ export const make = Effect.gen(function* () {
     /** The stored checklists of all open threads; threads without one are left out. */
     listOpen,
     /** Writes the checklist anew from the thread as it stands and stores it. */
-    refresh: (threadId: ThreadId) => lock.withPermits(1)(refresh(threadId)),
+    refresh: (threadId: ThreadId, trigger?: "auto" | "manual" | "batch") =>
+      lock.withPermits(1)(refresh(threadId, trigger)),
+    turnsBehind,
   };
 });

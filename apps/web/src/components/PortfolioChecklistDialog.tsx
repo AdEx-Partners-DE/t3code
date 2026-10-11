@@ -100,7 +100,7 @@ export function PortfolioChecklistDialog({
     setProgress({ done: 0, total: batch.length });
     try {
       for (const [index, row] of batch.entries()) {
-        await refresh({ environmentId, input: { threadId: row.thread.id } });
+        await refresh({ environmentId, input: { threadId: row.thread.id, trigger: "batch" } });
         setProgress({ done: index + 1, total: batch.length });
       }
     } finally {

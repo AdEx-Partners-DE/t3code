@@ -44,6 +44,8 @@ import { revealInTimeline } from "./timelineReveal";
 const AUTO_REFRESH_KEY = "t3code:thread-checklist:auto";
 /** A stale checklist is rewritten on its own at most this often; each rewrite is a model call. */
 const AUTO_REFRESH_MIN_AGE_MS = 15 * 60_000;
+/** Turns a thread must have finished since its checklist before Auto rewrites it. */
+const AUTO_REFRESH_MIN_TURNS = 3;
 const DONE_SHOWN = 5;
 
 export const CHECKLIST_STATUS_ORDER = ["attention", "open", "backlog", "done"] as const;
@@ -178,7 +180,10 @@ export function ThreadChecklistPanel(props: {
     if (busy) return;
     setBusy(true);
     try {
-      const result = await refresh({ environmentId, input: { threadId } });
+      const result = await refresh({
+        environmentId,
+        input: { threadId, trigger: quiet ? "auto" : "manual" },
+      });
       if (result._tag === "Success") {
         setFresh(result.value.checklist);
       } else if (!quiet && !isAtomCommandInterrupted(result)) {
@@ -195,20 +200,31 @@ export function ThreadChecklistPanel(props: {
     }
   };
 
+  // How far the checklist is behind is the server's count; ask again when a
+  // turn has ended, or the number read on opening the thread would stand.
+  const turnsBehind = stored.data?.turnsBehind ?? 0;
+  const refreshStored = stored.refresh;
+  useEffect(() => {
+    if (auto && latestRunId !== null && !working) refreshStored();
+  }, [auto, latestRunId, refreshStored, working]);
+
   // Rewrite on its own once the thread has moved on and stands still. One
   // attempt per run, so a failing model is not asked again and again.
   const attemptedForRun = useRef<string | null>(null);
   useEffect(() => {
     if (!auto || !allowed || !loaded || !hasRun || working || busy) return;
     if (latestRunId === null || attemptedForRun.current === latestRunId) return;
+    // Not after every turn: a rewrite is a model call. A thread gets its
+    // first checklist once it has a few turns, and a new one after a few more.
     const needed =
-      checklist === null ||
-      (stale && Date.now() - Date.parse(checklist.generatedAt) >= AUTO_REFRESH_MIN_AGE_MS);
+      turnsBehind >= AUTO_REFRESH_MIN_TURNS &&
+      (checklist === null ||
+        (stale && Date.now() - Date.parse(checklist.generatedAt) >= AUTO_REFRESH_MIN_AGE_MS));
     if (!needed) return;
     attemptedForRun.current = latestRunId;
     void run(true);
     // `run` closes over the same values this effect lists.
-  }, [allowed, auto, busy, checklist, hasRun, loaded, latestRunId, stale, working]);
+  }, [allowed, auto, busy, checklist, hasRun, loaded, latestRunId, stale, turnsBehind, working]);
 
   const showInThread = (item: ThreadChecklistItem) => {
     if (item.messageId !== undefined && revealInTimeline(item.messageId)) return;
@@ -254,7 +270,7 @@ export function ThreadChecklistPanel(props: {
             />
             <TooltipPopup>
               {auto
-                ? "Rewritten by a model when the thread has moved on, at most every 15 minutes."
+                ? "While this thread is open: rewritten by a model once it has finished 3 more turns and stands still, at most every 15 minutes. Threads you are not looking at are never rewritten on their own."
                 : "Rewritten only when you press update."}
             </TooltipPopup>
           </Tooltip>
