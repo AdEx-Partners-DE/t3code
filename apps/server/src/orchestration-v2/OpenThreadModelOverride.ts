@@ -25,6 +25,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import { forgetStandingOverride, rememberStandingOverride } from "./StandingModelOverride.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export const MODEL_OVERRIDE_FILE_NAME = "open-thread-model-override.json";
@@ -135,6 +136,12 @@ export const make = Effect.gen(function* () {
     if (changed > 0) {
       yield* fileSystem.writeFileString(filePath, encodeSaved(saved as SavedSelections));
     }
+    // Threads that open again later, or that an automation wakes, follow too.
+    yield* rememberStandingOverride(input.override).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(ServerConfig.ServerConfig, config),
+    );
     yield* Effect.logInfo("Model set on open threads", { threads: changed });
     return { threads: changed, changed: selections };
   });
@@ -170,6 +177,11 @@ export const make = Effect.gen(function* () {
       if (set) restored.push({ threadId: thread.id, modelSelection: entry.previous });
     }
     yield* fileSystem.remove(filePath).pipe(Effect.ignore);
+    yield* forgetStandingOverride.pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(ServerConfig.ServerConfig, config),
+    );
     yield* Effect.logInfo("Previous models restored on open threads", {
       threads: restored.length,
     });
