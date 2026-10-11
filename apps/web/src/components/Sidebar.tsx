@@ -217,8 +217,10 @@ import {
   sidebarListItemId,
   sidebarMarkerId,
   sidebarThreadKeyAtY,
+  countWaitingThreads,
   orderInboxThreads,
   resolveNextWaitingThread,
+  type WaitingThreadKind,
   sidebarProjectPriorityKey,
   sortInboxThreadsByReturn,
   sortPinnedThreadsForSidebar,
@@ -860,6 +862,13 @@ function SidebarSectionHeader(props: {
     </SortableSidebarMarker>
   );
 }
+
+const WAITING_COUNT_LABELS: Record<WaitingThreadKind, string> = {
+  blocked: "need an answer",
+  failed: "failed",
+  limited: "at a limit",
+  unread: "finished",
+};
 
 // Names the project above its block of rows when the inbox is ordered by
 // project. Not a sortable marker: that order is automatic, so rows never
@@ -5030,13 +5039,14 @@ export default function Sidebar() {
   // replaced, not stacked, when the command is repeated.
   const nothingWaitingToastRef = useRef<string | null>(null);
   const openNextWaitingThread = useCallback(
-    (request: { quiet: boolean } = { quiet: false }) => {
+    (request: { quiet: boolean; kind?: WaitingThreadKind } = { quiet: false }) => {
       const keyOf = (thread: EnvironmentThreadShell) =>
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       const target = resolveNextWaitingThread(
         [...pinnedThreads, ...activeThreads, ...workingThreads],
         projectPriorities,
         (thread) => keyOf(thread) === routeThreadKey,
+        request.kind,
       );
       if (nothingWaitingToastRef.current !== null) {
         toastManager.close(nothingWaitingToastRef.current);
@@ -5062,6 +5072,10 @@ export default function Sidebar() {
     ],
   );
   useEffect(() => subscribeNextWaitingThread(openNextWaitingThread), [openNextWaitingThread]);
+  const waitingCounts = useMemo(
+    () => countWaitingThreads([...pinnedThreads, ...activeThreads, ...workingThreads]),
+    [activeThreads, pinnedThreads, workingThreads],
+  );
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
@@ -5402,6 +5416,24 @@ export default function Sidebar() {
         }
       >
         <SidebarGroup className="flex-1" role="presentation">
+          {!isSearchingThreads && waitingCounts.length > 0 ? (
+            <div
+              data-testid="sidebar-waiting-counts"
+              className="mx-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2 pb-1 text-2xs text-muted-foreground"
+            >
+              {waitingCounts.map(({ kind, count }) => (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => openNextWaitingThread({ quiet: true, kind })}
+                  className="cursor-pointer rounded-sm tabular-nums hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+                >
+                  <span className="font-medium text-sidebar-foreground">{count}</span>{" "}
+                  {WAITING_COUNT_LABELS[kind]}
+                </button>
+              ))}
+            </div>
+          ) : null}
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
