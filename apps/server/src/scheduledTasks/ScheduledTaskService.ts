@@ -759,7 +759,7 @@ export const layer = Layer.effect(
         if (webhook !== undefined) {
           return yield* new WebhookDeliverySkipped({ reason: "Scheduled tasks are paused." });
         }
-        return task;
+        return { task, threadId: null };
       }
       const reserved = yield* Ref.modify(activeRuns, (active) => {
         if (active.has(task.id)) return [false, active] as const;
@@ -798,7 +798,7 @@ export const layer = Layer.effect(
         // The idle poll read this task a moment ago: it may have been paused
         // or given another trigger since.
         if (trigger === "idle" && (!active.enabled || active.schedule.type !== "idle")) {
-          return active;
+          return { task: active, threadId: null };
         }
         // A next_run_at corrupted between the poll read and this re-read must
         // not defect the poll; an unparseable value is treated as not due.
@@ -859,7 +859,7 @@ export const layer = Layer.effect(
               ),
             );
             yield* notifyChanged;
-            return { ...active, nextRunAt: next };
+            return { task: { ...active, nextRunAt: next }, threadId: null };
           }
         }
 
