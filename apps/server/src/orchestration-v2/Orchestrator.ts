@@ -1292,10 +1292,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   const startNextQueuedRun = (
     threadId: ThreadId,
-    options?: { readonly failedRunId?: RunId; readonly endedRunId?: RunId },
+    options?: {
+      readonly failedRunId?: RunId;
+      readonly endedRunId?: RunId;
+      /** The user asked for this thread's next message despite the global pause. */
+      readonly despiteQueuePause?: boolean;
+    },
   ) =>
     Effect.gen(function* () {
-      if (yield* threadQueuesPaused) return;
+      if (options?.despiteQueuePause !== true && (yield* threadQueuesPaused)) return;
       // Every terminal run checks the queue. Only a deliverable queued run
       // needs the transcript for provider handoff and legacy import context.
       if (!(yield* projectionStore.canStartQueuedRun(threadId))) return;
@@ -11116,7 +11121,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
       if (command.type === "queue.resume") {
-        yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
+        yield* mapDispatchError(command)(
+          startNextQueuedRun(command.threadId, {
+            despiteQueuePause: command.startNextDespitePause === true,
+          }),
+        );
       }
       return {
         sequence: receipt.resultSequence,
@@ -11254,7 +11263,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     if (command.type === "queue.resume") {
-      yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
+      yield* mapDispatchError(command)(
+        startNextQueuedRun(command.threadId, {
+          despiteQueuePause: command.startNextDespitePause === true,
+        }),
+      );
     }
     if (command.type === "notification.delivery.accept") {
       yield* mapDispatchError(command)(offerDelegatedCompletionDeliveries(command.threadId));

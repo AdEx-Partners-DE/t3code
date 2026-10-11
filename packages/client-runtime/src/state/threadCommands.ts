@@ -340,7 +340,8 @@ export function createThreadEnvironmentAtoms<R, E>(
     }),
     resumeThreadQueue: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:resume-queue",
-      execute: (input: ThreadCommandInput) => resumeThreadQueue(input),
+      execute: (input: ThreadCommandInput & { readonly startNextDespitePause?: boolean }) =>
+        resumeThreadQueue(input),
       scheduler,
       concurrency,
     }),

@@ -3043,6 +3043,11 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("queue.resume"),
     commandId: CommandId,
     threadId: ThreadId,
+    /**
+     * Start this thread's next queued message even while all queues are
+     * paused. Only that one starts; the rest waits for the pause to end.
+     */
+    startNextDespitePause: Schema.optional(Schema.Boolean),
   }),
   /**
    * Holds the thread's queue without touching the run under way: it finishes,

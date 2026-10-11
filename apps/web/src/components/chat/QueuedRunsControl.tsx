@@ -20,7 +20,7 @@ import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from 
 
 import { useAssetUrls } from "../../assets/assetUrls";
 import { ensureLocalApi } from "../../localApi";
-import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useThreadProjection } from "../../state/entities";
@@ -100,6 +100,7 @@ export function QueuedRunsControl({
   const canReorder = workflow?.canReorder === true;
   const queueHeld = workflow?.isHeld === true;
   // The environment-wide pause holds this queue too, whatever the thread says.
+  const updateEnvironmentSettings = useUpdateEnvironmentSettings(props.environmentId);
   const allQueuesPaused = useEnvironmentSettings(
     props.environmentId,
     (settings) => settings.threadQueuesPaused,
@@ -296,24 +297,49 @@ export function QueuedRunsControl({
               <ComposerBanner.Row render={<li />}>
                 <ComposerBanner.Content className="text-muted-foreground">
                   {allQueuesPaused
-                    ? "All queues are paused in Settings → General. Nothing starts until that is turned off."
+                    ? "All queues are paused, in every thread. Nothing here starts until you resume them."
                     : queueHeld
                       ? "Nothing here starts until you resume."
                       : "Pausing lets the current run finish and holds the rest."}
                 </ComposerBanner.Content>
                 <ComposerBanner.Actions>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={() =>
-                      void (queueHeld ? resumeQueue : holdQueue)({
-                        environmentId: props.environmentId,
-                        input: { threadId: props.threadId },
-                      })
-                    }
-                  >
-                    {queueHeld ? "Resume queue" : "Pause queue"}
-                  </Button>
+                  {allQueuesPaused ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      disabled={activeRun !== null}
+                      onClick={() =>
+                        void resumeQueue({
+                          environmentId: props.environmentId,
+                          input: { threadId: props.threadId, startNextDespitePause: true },
+                        })
+                      }
+                    >
+                      Start next now
+                    </Button>
+                  ) : null}
+                  {allQueuesPaused ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => updateEnvironmentSettings({ threadQueuesPaused: false })}
+                    >
+                      Resume all queues
+                    </Button>
+                  ) : (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() =>
+                        void (queueHeld ? resumeQueue : holdQueue)({
+                          environmentId: props.environmentId,
+                          input: { threadId: props.threadId },
+                        })
+                      }
+                    >
+                      {queueHeld ? "Resume queue" : "Pause queue"}
+                    </Button>
+                  )}
                   <Button
                     size="xs"
                     variant="ghost"

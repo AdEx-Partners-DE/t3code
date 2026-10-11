@@ -981,12 +981,13 @@ export const mergeThreadBack = Effect.fn("EnvironmentCommands.mergeThreadBack")(
 });
 
 export const resumeThreadQueue = Effect.fn("EnvironmentCommands.resumeThreadQueue")(function* (
-  input: ThreadCommandInput,
+  input: ThreadCommandInput & { readonly startNextDespitePause?: boolean },
 ) {
   return yield* dispatch({
     type: "queue.resume",
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
+    ...(input.startNextDespitePause ? { startNextDespitePause: true } : {}),
   });
 });
 
