@@ -206,7 +206,9 @@ export function ThreadAutomationsPanel(props: {
                 {!task.enabled
                   ? " · off"
                   : allTasksPaused
-                    ? " · held, all tasks are paused"
+                    ? task.nextRunAt !== null && Date.parse(task.nextRunAt) <= Date.now()
+                      ? ` · held, all tasks are paused, due since ${relativeLabel(task.nextRunAt)}`
+                      : " · held, all tasks are paused"
                     : task.nextRunAt !== null
                       ? ` · next ${relativeLabel(task.nextRunAt)}`
                       : ""}

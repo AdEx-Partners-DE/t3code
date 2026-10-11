@@ -1,9 +1,11 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
+import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
+import { relativeLabel } from "./settings/ScheduledTasksSettings";
 
 /**
  * One line in the sidebar saying what runs without the user: how many
@@ -28,12 +30,21 @@ export function SidebarAutomationStatus({
     (settings) => settings.threadQueuesPaused,
   );
   const enabledCount = tasks?.filter((task) => task.enabled).length ?? 0;
+  // How long the pause has kept work back: the run that has been due longest.
+  useNowMinute();
+  const oldestDue = tasksPaused
+    ? (tasks ?? [])
+        .filter((task) => task.enabled && task.nextRunAt !== null)
+        .map((task) => task.nextRunAt!)
+        .filter((at) => Date.parse(at) <= Date.now())
+        .toSorted()[0]
+    : undefined;
   if (enabledCount === 0 && !tasksPaused && !queuesPaused) return null;
   const parts = [
     ...(enabledCount > 0 || tasksPaused
       ? [
           tasksPaused
-            ? `${enabledCount} ${enabledCount === 1 ? "automation is" : "automations are"} on but held: all tasks paused`
+            ? `${enabledCount} ${enabledCount === 1 ? "automation is" : "automations are"} on but held: all tasks paused${oldestDue === undefined ? "" : `, a run has been due since ${relativeLabel(oldestDue)}`}`
             : `${enabledCount} ${enabledCount === 1 ? "automation" : "automations"} on`,
         ]
       : []),
