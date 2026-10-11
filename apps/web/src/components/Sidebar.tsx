@@ -5146,8 +5146,17 @@ export default function Sidebar() {
   // falling back to the top project) — same resolution the command palette
   // uses. The command palette already offers a "New thread in..." submenu
   // for multi-project setups.
+  // With the list filtered to one project, a new thread belongs there: no picker.
+  const startThreadInScopedProject = useCallback(() => {
+    const projectRef = scopedProjectGroup?.memberProjectRefs[0];
+    if (!projectRef) return false;
+    if (isMobile) setOpenMobile(false);
+    void handleNewThreadRef.current(projectRef);
+    return true;
+  }, [isMobile, scopedProjectGroup, setOpenMobile]);
   const handleNewThreadClick = useCallback(
     (event?: ReactMouseEvent) => {
+      if (startThreadInScopedProject()) return;
       // One project: nothing to pick, create immediately. Shift+click creates
       // directly in the current project even with several projects, skipping
       // the palette picker.
@@ -5164,7 +5173,7 @@ export default function Sidebar() {
       if (isMobile) setOpenMobile(false);
       openCommandPalette({ open: "new-thread-in" });
     },
-    [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
+    [isMobile, newThreadContext, projectGroups.length, setOpenMobile, startThreadInScopedProject],
   );
 
   // The button mirrors chat.new: in multi-project setups both route through
@@ -5847,7 +5856,17 @@ export default function Sidebar() {
                   </button>
                 </>
               ) : scopedProjectGroup ? (
-                `No threads in ${scopedProjectGroup.displayName} yet`
+                <>
+                  <span>{`No threads in ${scopedProjectGroup.displayName} yet`}</span>
+                  <button
+                    type="button"
+                    onClick={startThreadInScopedProject}
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-sidebar-border px-2.5 py-1 text-2xs font-medium text-sidebar-muted-foreground transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
+                    <PlusIcon className="-mx-0.5 size-3" />
+                    New thread
+                  </button>
+                </>
               ) : (
                 "No threads yet"
               )}
