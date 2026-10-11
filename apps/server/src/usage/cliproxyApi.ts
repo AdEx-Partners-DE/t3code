@@ -347,13 +347,10 @@ export const makeCliproxyApi = Effect.gen(function* () {
     config: UsageLimitSourceConfig,
   ): Effect.fn.Return<ReadonlyArray<UsageLimitSourceAccount>, UsageLimitSourceError> {
     const accounts = yield* authFiles(config).pipe(
-      Effect.mapError(
-        (error) =>
-          new UsageLimitSourceError({
-            detail: isUsageLimitSourceError(error)
-              ? `The hub could not list accounts. ${error.detail}`
-              : "The hub could not list accounts.",
-          }),
+      Effect.mapError((error) =>
+        isUsageLimitSourceError(error)
+          ? error
+          : new UsageLimitSourceError({ detail: "The hub could not list accounts." }),
       ),
     );
     return yield* Effect.forEach(

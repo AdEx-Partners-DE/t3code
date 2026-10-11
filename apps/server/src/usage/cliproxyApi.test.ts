@@ -147,7 +147,6 @@ describe("CLIProxyAPI hub failures", () => {
           }),
       );
       const error = yield* Effect.flip(api.readAccounts(config));
-      expect(error.detail).toContain("could not list accounts");
       expect(error.detail).toContain("UNABLE_TO_GET_ISSUER_CERT_LOCALLY");
       expect(error.detail).toContain("NODE_EXTRA_CA_CERTS");
     }),
