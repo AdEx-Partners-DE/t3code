@@ -103,7 +103,7 @@ const UNTRUSTED_CERTIFICATE_CODES = new Set([
 const nodeErrorCode = (cause: unknown) => {
   for (let error = cause, depth = 0; error instanceof Error && depth < 3; depth += 1) {
     const code = (error as { readonly code?: unknown }).code;
-    if (typeof code === "string" && /^[A-Z0-9_]+$/.test(code)) return code;
+    if (typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code)) return code;
     error = error.cause;
   }
   return undefined;

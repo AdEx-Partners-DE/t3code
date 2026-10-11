@@ -152,6 +152,22 @@ describe("CLIProxyAPI hub failures", () => {
     }),
   );
 
+  it.effect("ignores a transport code that is not a short Node error code", () =>
+    Effect.gen(function* () {
+      const api = yield* unreachableHub(
+        (request) =>
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({
+              request,
+              cause: Object.assign(new Error("odd"), { code: "X".repeat(200) }),
+            }),
+          }),
+      );
+      const error = yield* Effect.flip(api.readAccounts(config));
+      expect(error.detail).toBe("The hub management request failed.");
+    }),
+  );
+
   it.effect("names the status, not the body, when the hub rejects the request", () =>
     Effect.gen(function* () {
       const test = HttpClient.make((request) =>
