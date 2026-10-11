@@ -1082,6 +1082,11 @@ export function threadsWaitingOnAnswer<T extends InboxOrderInput>(
   );
 }
 
+/** Whether the thread needs the user: an answer, a look at a failure, a limit, or an unread result. */
+export function isWaitingOnUser(thread: InboxOrderInput): boolean {
+  return WAITING_THREAD_KINDS[inboxStatusTier(thread)] !== undefined;
+}
+
 /** How many threads wait on the user, by reason. Kinds with none are left out. */
 export function countWaitingThreads(
   threads: ReadonlyArray<InboxOrderInput>,

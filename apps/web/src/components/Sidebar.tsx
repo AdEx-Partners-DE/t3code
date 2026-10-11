@@ -219,6 +219,7 @@ import {
   sidebarMarkerId,
   sidebarThreadKeyAtY,
   countWaitingThreads,
+  isWaitingOnUser,
   threadsWaitingOnAnswer,
   orderInboxThreads,
   resolveNextWaitingThread,
@@ -868,6 +869,10 @@ function SidebarSectionHeader(props: {
   );
 }
 
+const COLLAPSED_PROJECT_GROUPS_KEY = "t3code:sidebar:collapsed-project-groups";
+const CollapsedProjectGroups = Schema.Array(Schema.String);
+const EMPTY_COLLAPSED_PROJECT_GROUPS: ReadonlyArray<string> = [];
+
 const WAITING_COUNT_LABELS: Record<WaitingThreadKind, string> = {
   blocked: "need an answer",
   failed: "failed",
@@ -882,18 +887,36 @@ function SidebarProjectGroupHeader(props: {
   project: ProjectFaviconProject | null;
   name: string;
   count: number;
+  collapsed: boolean;
+  /** Threads of this project that wait on the user; shown while collapsed. */
+  waitingCount: number;
+  onToggle: () => void;
 }) {
   return (
-    <div
+    <button
+      type="button"
       data-testid="sidebar-project-group-header"
-      className="mx-0.5 flex h-6 items-center gap-1.5 px-2 pt-1 text-2xs font-medium text-muted-foreground"
+      aria-expanded={!props.collapsed}
+      onClick={props.onToggle}
+      className="mx-0.5 flex h-6 w-[calc(100%-0.25rem)] cursor-pointer items-center gap-1.5 rounded-sm px-2 pt-1 text-left text-2xs font-medium text-muted-foreground hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
     >
       {props.project ? (
         <ProjectFavicon project={props.project} className="size-3 shrink-0" />
       ) : null}
       <span className="min-w-0 truncate">{props.name}</span>
       <span className="shrink-0 tabular-nums opacity-60">{props.count}</span>
-    </div>
+      {props.collapsed ? (
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {props.waitingCount > 0 ? (
+            <span
+              className="size-1.5 rounded-full bg-primary"
+              aria-label={`${props.waitingCount} waiting on you`}
+            />
+          ) : null}
+          <span className="opacity-60">hidden</span>
+        </span>
+      ) : null}
+    </button>
   );
 }
 
@@ -3125,6 +3148,21 @@ export default function Sidebar() {
   const showMoreSettled = useCallback(
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
     [],
+  );
+  // Project blocks the user folded away in the by-project order.
+  const [collapsedProjectKeys, setCollapsedProjectKeys] = useLocalStorage(
+    COLLAPSED_PROJECT_GROUPS_KEY,
+    EMPTY_COLLAPSED_PROJECT_GROUPS,
+    CollapsedProjectGroups,
+  );
+  const toggleProjectGroup = useCallback(
+    (projectKey: string) =>
+      setCollapsedProjectKeys((keys) =>
+        keys.includes(projectKey)
+          ? keys.filter((key) => key !== projectKey)
+          : [...keys, projectKey],
+      ),
+    [setCollapsedProjectKeys],
   );
   const [settledShelfExpanded, setSettledShelfExpanded] = useLocalStorage(
     SETTLED_SHELF_EXPANDED_KEY,
@@ -5774,6 +5812,7 @@ export default function Sidebar() {
                       ];
                       const groupByProject = inboxOrder === "project" && from === null;
                       const activeCountByProject = new Map<string, number>();
+                      const waitingCountByProject = new Map<string, number>();
                       if (groupByProject) {
                         for (const thread of activeThreads) {
                           const projectKey = sidebarProjectPriorityKey(thread);
@@ -5781,6 +5820,12 @@ export default function Sidebar() {
                             projectKey,
                             (activeCountByProject.get(projectKey) ?? 0) + 1,
                           );
+                          if (isWaitingOnUser(thread)) {
+                            waitingCountByProject.set(
+                              projectKey,
+                              (waitingCountByProject.get(projectKey) ?? 0) + 1,
+                            );
+                          }
                         }
                       }
                       let lastGroupProjectKey: string | null = null;
@@ -5798,9 +5843,18 @@ export default function Sidebar() {
                                   project={projectByKey.get(projectKey) ?? null}
                                   name={projectDisplayNameByKey.get(projectKey) ?? "No project"}
                                   count={activeCountByProject.get(projectKey) ?? 0}
+                                  collapsed={collapsedProjectKeys.includes(projectKey)}
+                                  waitingCount={waitingCountByProject.get(projectKey) ?? 0}
+                                  onToggle={() => toggleProjectGroup(projectKey)}
                                 />,
                               );
                             }
+                            // A folded block still shows the thread that is open.
+                            if (
+                              collapsedProjectKeys.includes(projectKey) &&
+                              item.key !== routeThreadKey
+                            )
+                              continue;
                           }
                           items.push(renderThreadRow(thread, item.section));
                           continue;
