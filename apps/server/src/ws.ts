@@ -1997,6 +1997,7 @@ const layerWsRpc = (
             return {
               checklists: yield* threadChecklist.listOpen,
               waitingQueues: yield* queueOverview.read,
+              activeRuns: yield* queueOverview.readActiveRuns,
             };
           }).pipe(
             Effect.mapError(

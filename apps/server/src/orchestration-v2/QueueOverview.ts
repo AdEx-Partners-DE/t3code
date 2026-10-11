@@ -32,6 +32,12 @@ interface QueuedRow {
   readonly oldest: string;
 }
 
+export interface ActiveRun {
+  readonly threadId: ThreadId;
+  /** When anything last happened in the thread; a visit by the user does not count. */
+  readonly lastEventAt: string;
+}
+
 /** Keeps the rows of open threads, the longest wait first. */
 export function waitingQueuesOf(
   rows: ReadonlyArray<QueuedRow>,
@@ -70,8 +76,32 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  // A run that is under way but whose thread has gone silent looks exactly
+  // like one that works. The time of the last event tells them apart.
+  const readActiveRuns = Effect.gen(function* () {
+    const rows = yield* sql<{ readonly thread_id: string; readonly last_event_at: string | null }>`
+      SELECT
+        runs.thread_id,
+        (
+          SELECT MAX(events.occurred_at)
+          FROM orchestration_events AS events
+          WHERE events.stream_id = runs.thread_id AND events.event_type <> 'thread.visited'
+        ) AS last_event_at
+      FROM orchestration_v2_projection_runs AS runs
+      WHERE runs.status IN ('preparing', 'starting', 'running')
+      GROUP BY runs.thread_id
+    `;
+    return rows.flatMap((row): ReadonlyArray<ActiveRun> =>
+      row.last_event_at === null
+        ? []
+        : [{ threadId: row.thread_id as ThreadId, lastEventAt: row.last_event_at }],
+    );
+  });
+
   return {
     /** The open threads with a waiting queue, the longest wait first. */
     read,
+    /** Every thread with a run under way and when it last showed a sign of life. */
+    readActiveRuns,
   };
 });

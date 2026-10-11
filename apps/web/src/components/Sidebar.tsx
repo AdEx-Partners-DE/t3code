@@ -335,6 +335,9 @@ const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 const NO_THREAD_KEYS: ReadonlySet<string> = new Set();
 const QUEUE_STALE_MS = 60 * 60_000;
 const NO_WAITING_QUEUES: ReadonlyMap<string, { count: number; since: string }> = new Map();
+const NO_ACTIVE_RUNS: ReadonlyMap<string, string> = new Map();
+/** A turn under way with no event for this long is called quiet on its row. */
+const QUIET_RUN_MS = 5 * 60_000;
 const EMPTY_QUERY_INPUT = {};
 
 /**
@@ -345,14 +348,24 @@ const EMPTY_QUERY_INPUT = {};
 function WaitingQueuesSource(props: {
   environmentId: EnvironmentId;
   onChange: (queues: ReadonlyMap<string, { count: number; since: string }>) => void;
+  onActiveRuns: (lastEventAtByThread: ReadonlyMap<string, string>) => void;
 }) {
-  const { onChange } = props;
-  const queues = useEnvironmentQuery(
+  const { onChange, onActiveRuns } = props;
+  const data = useEnvironmentQuery(
     serverEnvironment.threadChecklists({
       environmentId: props.environmentId,
       input: EMPTY_QUERY_INPUT,
     }),
-  ).data?.waitingQueues;
+  ).data;
+  const queues = data?.waitingQueues;
+  const activeRuns = data?.activeRuns;
+  useEffect(() => {
+    onActiveRuns(
+      activeRuns === undefined || activeRuns.length === 0
+        ? NO_ACTIVE_RUNS
+        : new Map(activeRuns.map((run) => [run.threadId, run.lastEventAt])),
+    );
+  }, [activeRuns, onActiveRuns]);
   useEffect(() => {
     onChange(
       queues === undefined || queues.length === 0
@@ -1253,6 +1266,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // A queue behind a pause or a hold is otherwise invisible on the row.
   queuedCount: number;
   queuedSince: string | null;
+  // When anything last happened in a thread with a run under way; null when
+  // unknown. A run that has gone silent otherwise reads as plain "Working".
+  lastEventAt: string | null;
   // Settled rows un-settle, snoozed rows wake, and cards settle.
   variantAction: SidebarSweepAction;
   // False on environments whose server predates thread.settle/unsettle:
@@ -1441,6 +1457,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     isActive: props.isActive,
     isSelected,
   });
+  // Minutes without any event while a run is under way: a long tool call, or
+  // a provider that has stopped answering. The row says so either way.
+  const quietMs =
+    status === "working" && props.lastEventAt !== null
+      ? Date.now() - Date.parse(props.lastEventAt)
+      : 0;
+  const quietFor =
+    quietMs >= QUIET_RUN_MS && props.lastEventAt !== null
+      ? ` · quiet ${compactSidebarTimeLabel(formatRelativeTimeLabel(props.lastEventAt))}`
+      : "";
   // Status hues follow the system-wide convention set by sidebar v1 and the
   // mobile Live Activity/widgets (amber approval, indigo input, sky working)
   // so a thread reads the same color everywhere it surfaces.
@@ -1448,7 +1474,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     status === "working"
       ? {
           // A native /goal keeps the agent going across turns until it is met.
-          label: thread.goal?.status === "active" ? "Goal" : "Working",
+          label: `${thread.goal?.status === "active" ? "Goal" : "Working"}${quietFor}`,
           icon: "working" as const,
           // No shimmer: a label that animates forever is noise in a sidebar
           // full of them (and repaints every vsync on high-refresh displays).
@@ -3128,6 +3154,7 @@ export default function Sidebar() {
     null,
   );
   const [waitingQueues, setWaitingQueues] = useState(NO_WAITING_QUEUES);
+  const [activeRunLastEventAt, setActiveRunLastEventAt] = useState(NO_ACTIVE_RUNS);
   const listIsFiltered = openThreadFilter !== null || queueFilterThreadIds !== null;
   const draggableThreadKeys = listIsFiltered ? NO_THREAD_KEYS : allDraggableThreadKeys;
   const activeReorderableThreadKeys = listIsFiltered
@@ -5632,6 +5659,7 @@ export default function Sidebar() {
             <WaitingQueuesSource
               environmentId={serverConfigs.keys().next().value!}
               onChange={setWaitingQueues}
+              onActiveRuns={setActiveRunLastEventAt}
             />
           ) : null}
           {isSearchingThreads ? null : (
@@ -5828,6 +5856,7 @@ export default function Sidebar() {
                             variant={rowVariant}
                             queuedCount={waitingQueues.get(thread.id)?.count ?? 0}
                             queuedSince={waitingQueues.get(thread.id)?.since ?? null}
+                            lastEventAt={activeRunLastEventAt.get(thread.id) ?? null}
                             // Snoozed rows wake, settled rows un-settle, and cards settle.
                             variantAction={
                               section === "snoozed"

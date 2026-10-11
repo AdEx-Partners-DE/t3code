@@ -177,6 +177,8 @@ function CockpitStat(props: {
 }
 
 const STALE_QUEUE_MS = 60 * 60_000;
+/** A run under way with no event for this long is called out. */
+const QUIET_RUN_MS = 5 * 60_000;
 
 function waitLabel(ms: number): string {
   const minutes = Math.max(0, Math.round(ms / 60_000));
@@ -204,33 +206,56 @@ function CockpitWaitingQueues({
   const input = useMemo(() => ({}), []);
   const result = useAtomValue(serverEnvironment.threadChecklists({ environmentId, input }));
   const queues = Option.getOrNull(AsyncResult.value(result))?.waitingQueues ?? [];
-  if (queues.length === 0) {
-    return filterOn ? (
+  const quiet = (Option.getOrNull(AsyncResult.value(result))?.activeRuns ?? []).filter(
+    (run) => nowMs - Date.parse(run.lastEventAt) >= QUIET_RUN_MS,
+  );
+  const quietLine =
+    quiet.length === 0 ? null : (
       <button
         type="button"
-        onClick={() => onFilter(null)}
-        className="cursor-pointer self-start rounded-sm underline underline-offset-2 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+        data-testid="sidebar-cockpit-quiet"
+        onClick={() => onFilter(new Set(quiet.map((run) => run.threadId)))}
+        className="cursor-pointer self-start rounded-sm text-left font-medium tabular-nums text-warning hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
       >
-        No queue waits any more · show all
+        {quiet.length} running {quiet.length === 1 ? "turn" : "turns"} without a sign of life for{" "}
+        {waitLabel(nowMs - Math.min(...quiet.map((run) => Date.parse(run.lastEventAt))))}
       </button>
-    ) : null;
+    );
+  if (queues.length === 0) {
+    return (
+      <>
+        {quietLine}
+        {filterOn ? (
+          <button
+            type="button"
+            onClick={() => onFilter(null)}
+            className="cursor-pointer self-start rounded-sm underline underline-offset-2 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+          >
+            List shows selected threads only · show all
+          </button>
+        ) : null}
+      </>
+    );
   }
   const waiting = queues.reduce((total, queue) => total + queue.waiting, 0);
   const oldestMs = nowMs - Date.parse(queues[0]!.oldestQueuedAt);
   return (
-    <button
-      type="button"
-      data-testid="sidebar-cockpit-queues"
-      aria-pressed={filterOn}
-      onClick={() => onFilter(filterOn ? null : new Set(queues.map((queue) => queue.threadId)))}
-      className="cursor-pointer self-start rounded-sm text-left tabular-nums hover:text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
-    >
-      <span className={oldestMs >= STALE_QUEUE_MS ? "font-medium text-warning" : undefined}>
-        {waiting} {waiting === 1 ? "message waits" : "messages wait"} in {queues.length}{" "}
-        {queues.length === 1 ? "thread" : "threads"}, oldest {waitLabel(oldestMs)}
-      </span>
-      {filterOn ? " · show all" : ""}
-    </button>
+    <>
+      {quietLine}
+      <button
+        type="button"
+        data-testid="sidebar-cockpit-queues"
+        aria-pressed={filterOn}
+        onClick={() => onFilter(filterOn ? null : new Set(queues.map((queue) => queue.threadId)))}
+        className="cursor-pointer self-start rounded-sm text-left tabular-nums hover:text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      >
+        <span className={oldestMs >= STALE_QUEUE_MS ? "font-medium text-warning" : undefined}>
+          {waiting} {waiting === 1 ? "message waits" : "messages wait"} in {queues.length}{" "}
+          {queues.length === 1 ? "thread" : "threads"}, oldest {waitLabel(oldestMs)}
+        </span>
+        {filterOn ? " · show all" : ""}
+      </button>
+    </>
   );
 }
 

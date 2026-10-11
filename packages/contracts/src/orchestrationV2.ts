@@ -3888,6 +3888,13 @@ export const OrchestrationV2RpcSchemas = {
     input: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
     output: Schema.Struct({
       checklists: Schema.Array(ThreadChecklist),
+      /**
+       * Threads with a run under way and when anything last happened in them,
+       * so a run that has gone silent can be told from one that works.
+       */
+      activeRuns: Schema.optional(
+        Schema.Array(Schema.Struct({ threadId: ThreadId, lastEventAt: IsoDateTime })),
+      ),
       /** Set when one thread was asked for; null when it has no checklist yet. */
       checklist: Schema.optional(Schema.NullOr(ThreadChecklist)),
       waitingQueues: Schema.optional(
