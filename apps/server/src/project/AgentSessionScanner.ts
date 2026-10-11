@@ -704,7 +704,11 @@ export const make = Effect.gen(function* () {
   const readGitIdentity = Effect.fn("AgentSessionScanner.readGitIdentity")(function* (
     directory: string,
   ): Effect.fn.Return<
-    | { readonly _tag: "Repository"; readonly git: AgentSessionProjectGit | null }
+    | {
+        readonly _tag: "Repository";
+        readonly gitDir: string;
+        readonly git: AgentSessionProjectGit | null;
+      }
     | { readonly _tag: "Worktree"; readonly gitDir: string }
     | { readonly _tag: "NotGit" }
   > {
@@ -729,6 +733,7 @@ export const make = Effect.gen(function* () {
     const originUrl = parseOriginUrlFromGitConfig(configText);
     return {
       _tag: "Repository",
+      gitDir,
       git: {
         remoteKey: originUrl === null ? null : normalizeGitRemoteUrl(originUrl),
         repository: parseGitHubRepositoryNameWithOwnerFromRemoteUrl(originUrl),
@@ -1384,14 +1389,11 @@ export const make = Effect.gen(function* () {
     const root = path.resolve(expandHomePath(workspaceRoot, homeDir));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
     if (isExcludedProjectPath(root) || isExcludedProjectPath(realRoot)) return Stream.empty;
-    const rootGitDir = path.join(root, ".git");
-    const rootGitDirStats = yield* statOption(rootGitDir);
+    const rootGit = yield* readGitIdentity(root);
     const project = {
       identity: yield* directoryIdentity(root),
       gitDirIdentity:
-        Option.isSome(rootGitDirStats) && rootGitDirStats.value.type === "Directory"
-          ? yield* directoryIdentity(rootGitDir, rootGitDirStats.value)
-          : null,
+        rootGit._tag === "Repository" ? yield* directoryIdentity(rootGit.gitDir) : null,
     };
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     const cutoffMs = nowMs - RECENT_THREAD_WINDOW_MS;
