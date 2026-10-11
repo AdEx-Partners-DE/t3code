@@ -117,6 +117,12 @@ export function useThreadShell(ref: ScopedThreadRef | null): EnvironmentThreadSh
   );
 }
 
+export function useChildThreadInputs(ref: ScopedThreadRef | null) {
+  return useAtomValue(
+    ref === null ? EMPTY_THREAD_SHELLS_ATOM : environmentThreadShells.childThreadInputsAtom(ref),
+  );
+}
+
 export function useThreadProjection(ref: ScopedThreadRef | null): EnvironmentThread | null {
   return useAtomValue(
     ref === null ? EMPTY_THREAD_PROJECTION_ATOM : environmentThreadDetails.threadAtom(ref),
@@ -199,6 +205,23 @@ export function waitForThreadShell(ref: ScopedThreadRef, timeoutMs = 5_000): Pro
     predicate: (thread) => thread !== null,
     timeoutMs,
   });
+}
+
+/** Whether the environment hosts preview tabs in its own browser (`runtime: "server"`),
+    so clients without Electron can still use the Browser panel. */
+export function useEnvironmentSupportsServerBrowser(environmentId: EnvironmentId | null): boolean {
+  const configs = useServerConfigs();
+  return (
+    environmentId !== null &&
+    configs.get(environmentId)?.environment.capabilities.serverBrowser === true
+  );
+}
+
+export function readEnvironmentSupportsServerBrowser(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .serverBrowser === true
+  );
 }
 
 export function readEnvironmentSupportsTitleRegeneration(environmentId: EnvironmentId): boolean {
