@@ -64,6 +64,10 @@ export interface DraftState {
   readonly idleStopPhrase: string;
   /** Idle tasks: the other thread to wait for. Empty waits for the task's own thread. */
   readonly idleWatchThreadId: string;
+  /** Send to every open thread that stands still instead of `threadId`. */
+  readonly idleAllOpenThreads: boolean;
+  /** With `idleAllOpenThreads`: how many threads may be at work at once. */
+  readonly idleMaxParallel: string;
   /** Idle tasks: stop when the account has less than this percent left. Empty for no budget. */
   readonly idleMinRemainingPercent: string;
   readonly timeOfDay: string;
@@ -141,12 +145,20 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
         minRemainingPercent > 99)
     )
       return null;
-    return {
-      type: "idle",
+    const base = {
+      type: "idle" as const,
       maxRuns,
       minPauseMs: Math.round(pauseMinutes * 60_000),
       ...(stopPhrase === "" ? {} : { stopPhrase }),
       ...(minRemainingPercent === null ? {} : { minRemainingPercent }),
+    };
+    if (draft.idleAllOpenThreads) {
+      const maxParallel = Number(draft.idleMaxParallel);
+      if (!Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 10) return null;
+      return { ...base, allOpenThreads: true, maxParallel };
+    }
+    return {
+      ...base,
       ...(draft.idleWatchThreadId === "" || draft.idleWatchThreadId === draft.threadId
         ? {}
         : { watchThreadId: ThreadId.make(draft.idleWatchThreadId) }),
@@ -183,6 +195,8 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     idlePauseMinutes: schedule.type === "idle" ? String(schedule.minPauseMs / 60_000) : "1",
     idleStopPhrase: schedule.type === "idle" ? (schedule.stopPhrase ?? "") : "",
     idleWatchThreadId: schedule.type === "idle" ? (schedule.watchThreadId ?? "") : "",
+    idleAllOpenThreads: schedule.type === "idle" && schedule.allOpenThreads === true,
+    idleMaxParallel: schedule.type === "idle" ? String(schedule.maxParallel ?? 2) : "2",
     idleMinRemainingPercent:
       schedule.type === "idle" && schedule.minRemainingPercent !== undefined
         ? String(schedule.minRemainingPercent)

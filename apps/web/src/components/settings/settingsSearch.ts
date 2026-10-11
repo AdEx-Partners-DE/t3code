@@ -510,7 +510,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "model-for-all-open-threads",
-    title: "Model for all open threads",
+    title: "Set model on all open threads",
     to: "/settings/general",
     searchTerms: [
       "global override model thinking effort reasoning all threads sessions switch bulk",
