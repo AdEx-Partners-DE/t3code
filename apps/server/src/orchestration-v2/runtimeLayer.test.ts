@@ -3954,6 +3954,83 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("moves a waiting message to the thread's new model only when asked to", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-queued-model-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-queued-model-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-queued-model-project"),
+        title: "Queued model",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-queued-model",
+      });
+      for (const [suffix, dispatchMode] of [
+        ["active", { type: "start_immediately" }],
+        ["queued", { type: "queue_after_active" }],
+      ] as const) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`runtime-layer-queued-model-${suffix}`),
+          threadId,
+          messageId: MessageId.make(`runtime-layer-queued-model-${suffix}`),
+          text: `Message ${suffix}.`,
+          attachments: [],
+          modelSelection,
+          dispatchMode,
+        });
+      }
+      const queuedModel = Effect.map(
+        orchestrator.getThreadProjection(threadId),
+        (projection) => projection.runs.find((run) => run.status === "queued")?.modelSelection,
+      );
+      const low = {
+        ...modelSelection,
+        options: [{ id: "reasoningEffort", value: "low" }],
+      } as typeof modelSelection;
+      const high = {
+        ...modelSelection,
+        options: [{ id: "reasoningEffort", value: "high" }],
+      } as typeof modelSelection;
+
+      // A plain change is for the thread's next message: what already waits keeps its own.
+      yield* orchestrator.dispatch({
+        type: "thread.model-selection.set",
+        commandId: CommandId.make("runtime-layer-queued-model-plain"),
+        threadId,
+        modelSelection: low,
+      });
+      assert.deepEqual(yield* queuedModel, modelSelection);
+
+      // "Set on all open threads" asks for the waiting messages too, or each
+      // would move the thread back when it starts.
+      yield* orchestrator.dispatch({
+        type: "thread.model-selection.set",
+        commandId: CommandId.make("runtime-layer-queued-model-included"),
+        threadId,
+        modelSelection: high,
+        includeQueuedRuns: true,
+      });
+      assert.deepEqual(yield* queuedModel, high);
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(after.thread.modelSelection, high);
+      // The run under way is not touched.
+      assert.deepEqual(
+        after.runs.find((run) => run.status !== "queued")?.modelSelection,
+        modelSelection,
+      );
+    }),
+  );
+
   it.effect("cancels queued work when a thread is archived", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
