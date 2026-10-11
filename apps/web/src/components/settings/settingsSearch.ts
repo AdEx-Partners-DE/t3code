@@ -495,6 +495,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["quota limit credits second account subscription automatic fallback weekly"],
   },
   {
+    id: "retry-instant-failures",
+    title: "Retry turns that fail to start",
+    to: "/settings/general",
+    searchTerms: ["retry failed turn error automatic again session process exited transport"],
+  },
+  {
     id: "pause-all-queues",
     title: "Pause all queues",
     to: "/settings/general",

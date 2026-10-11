@@ -1,3 +1,4 @@
+import * as InstantFailureRetry from "./InstantFailureRetry.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Layer from "effect/Layer";
@@ -352,6 +353,7 @@ export const layerProduction = Layer.mergeAll(
   UsageLimitRecoveryWorker.layer.pipe(
     Layer.provide(Layer.mergeAll(ProjectionStore.layer, layerThreadManagementProvided)),
   ),
+  InstantFailureRetry.layer.pipe(Layer.provide(layerThreadManagementProvided)),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),

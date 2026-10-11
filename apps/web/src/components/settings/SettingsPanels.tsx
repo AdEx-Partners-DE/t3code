@@ -651,6 +651,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.switchAccountAtUsageLimit !== DEFAULT_UNIFIED_SETTINGS.switchAccountAtUsageLimit
         ? ["Switch account at usage limit"]
         : []),
+      ...(settings.retryInstantFailures !== DEFAULT_UNIFIED_SETTINGS.retryInstantFailures
+        ? ["Retry turns that fail to start"]
+        : []),
       ...(settings.threadQueuesPaused !== DEFAULT_UNIFIED_SETTINGS.threadQueuesPaused
         ? ["Pause all queues"]
         : []),
@@ -731,6 +734,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.persistComposerContextStrip,
       settings.enableProviderUpdateChecks,
       settings.switchAccountAtUsageLimit,
+      settings.retryInstantFailures,
       settings.threadQueuesPaused,
       settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleAfterDays,
@@ -853,6 +857,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       switchAccountAtUsageLimit: DEFAULT_UNIFIED_SETTINGS.switchAccountAtUsageLimit,
+      retryInstantFailures: DEFAULT_UNIFIED_SETTINGS.retryInstantFailures,
       threadQueuesPaused: DEFAULT_UNIFIED_SETTINGS.threadQueuesPaused,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
@@ -3062,6 +3067,35 @@ export function GeneralSettingsPanel() {
                 updateSettings({ switchAccountAtUsageLimit: Boolean(checked) })
               }
               aria-label="Switch account at usage limit"
+            />
+          }
+        />
+
+        <SettingsRow
+          serverScoped
+          settingKeys={["retryInstantFailures"]}
+          {...searchableSetting("retry-instant-failures")}
+          description="When a turn fails within seconds because the provider session did not open, the provider process exited or the connection dropped, send the message again once. Usage limits and sign-in problems are not retried."
+          resetAction={
+            settings.retryInstantFailures !== DEFAULT_UNIFIED_SETTINGS.retryInstantFailures ? (
+              <SettingResetButton
+                label="retry turns that fail to start"
+                onClick={() =>
+                  updateSettings({
+                    retryInstantFailures: DEFAULT_UNIFIED_SETTINGS.retryInstantFailures,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <ScopedSwitch
+              settingKeys={["retryInstantFailures"]}
+              checked={settings.retryInstantFailures}
+              onCheckedChange={(checked) =>
+                updateSettings({ retryInstantFailures: Boolean(checked) })
+              }
+              aria-label="Retry turns that fail to start"
             />
           }
         />

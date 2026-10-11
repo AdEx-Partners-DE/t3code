@@ -1123,6 +1123,12 @@ export const ServerSettings = Schema.Struct({
    */
   switchAccountAtUsageLimit: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
+   * Send a message again, once, when its turn failed within seconds on a
+   * start failure (session did not open, provider process exited, connection
+   * dropped) and produced nothing.
+   */
+  retryInstantFailures: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
    * Holds every scheduled task in this environment: nothing starts on a timer,
    * on idle or from a webhook until it is turned off again. Each task keeps
    * its own enabled state, so resuming restores exactly what was running.
@@ -1486,6 +1492,7 @@ export const ServerSettingsPatch = Schema.Struct({
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   switchAccountAtUsageLimit: Schema.optionalKey(Schema.Boolean),
+  retryInstantFailures: Schema.optionalKey(Schema.Boolean),
   scheduledTasksPaused: Schema.optionalKey(Schema.Boolean),
   threadQueuesPaused: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
