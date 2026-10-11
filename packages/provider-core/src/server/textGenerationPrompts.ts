@@ -344,3 +344,45 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+const THREAD_CHECKLIST_PROMPT = `You keep the checklist for a long working thread between a user and a coding agent. The user cannot read every turn: automations and long replies bury things. Your checklist is how they keep the overview.
+
+Read the thread and return its checklist as JSON. Each item is one short line (at most 90 characters) in the language the user writes in, saying a concrete piece of work or a concrete thing the user must do or know. No headings, no duplicates, no vague items.
+
+Status of an item:
+- "done": the work is finished, and the thread shows it (a result, a verification, a merged change).
+- "open": identified or started in the thread, not finished yet, and the agent can go on by itself.
+- "backlog": mentioned as an idea or a later step; nobody is working on it.
+- "attention": the user personally has to act, decide or know: a question asked of them, a decision left to them, a warning, a risk, a blocker, a credential or approval only they can give. Use this also when such a point was raised earlier and never answered, even if many turns have passed since. These buried points matter most.
+
+Rules:
+- Something the agent claimed as done but later turned out wrong is "open", not "done".
+- A question the user has already answered is not "attention" any more.
+- For "attention" and for "open" items that are stuck, add a "note" of at most 140 characters saying what exactly is needed. Every other item has "note": null.
+- Order: "attention" first, then "open", then "backlog", then "done" with the most recent first.
+- At most 40 items. Merge small finished steps into one "done" item rather than listing each.
+- If a previous checklist is given, keep the wording of items that are still valid and only move their status; drop items that no longer matter.`;
+
+export interface ThreadChecklistPromptInput {
+  readonly transcript: string;
+  readonly previous?: ReadonlyArray<{ readonly text: string; readonly status: string }> | undefined;
+}
+
+export function buildThreadChecklistPrompt(input: ThreadChecklistPromptInput) {
+  const previous =
+    input.previous === undefined || input.previous.length === 0
+      ? ""
+      : `\n\nPrevious checklist:\n${input.previous.map((item) => `- [${item.status}] ${item.text}`).join("\n")}`;
+  const prompt = `${THREAD_CHECKLIST_PROMPT}${previous}\n\nThread, oldest first:\n${input.transcript}`;
+  const outputSchema = Schema.Struct({
+    items: Schema.Array(
+      Schema.Struct({
+        text: Schema.String,
+        status: Schema.Literals(["done", "open", "backlog", "attention"]),
+        // Required and nullable: providers with strict schemas refuse optional keys.
+        note: Schema.NullOr(Schema.String),
+      }),
+    ),
+  });
+  return { prompt, outputSchema };
+}

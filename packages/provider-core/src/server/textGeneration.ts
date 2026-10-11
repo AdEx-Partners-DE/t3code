@@ -74,6 +74,27 @@ export interface ThreadTitleGenerationResult {
   needsRefinement?: boolean | undefined;
 }
 
+export type ThreadChecklistItemStatus = "done" | "open" | "backlog" | "attention";
+
+export interface ThreadChecklistGenerationInput {
+  cwd: string;
+  /** The thread so far, oldest first, already cut to what a prompt can carry. */
+  transcript: string;
+  /** The checklist from the last run, so items keep their wording as their status moves. */
+  previous?: ReadonlyArray<{ text: string; status: ThreadChecklistItemStatus }> | undefined;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+export interface ThreadChecklistGenerationResult {
+  items: ReadonlyArray<{
+    text: string;
+    status: ThreadChecklistItemStatus;
+    /** Why the item needs the user, or what is missing. */
+    note?: string | undefined;
+  }>;
+}
+
 /** Commit, change request, branch, and title generation backed by one provider instance. */
 export interface ProviderTextGeneration {
   /**
@@ -101,4 +122,13 @@ export interface ProviderTextGeneration {
   readonly generateThreadTitle: (
     input: ThreadTitleGenerationInput,
   ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+  /**
+   * Boil a thread down to a checklist of what is done, open, parked, and
+   * waiting on the user. Optional: a provider without it cannot be chosen for
+   * checklists.
+   */
+  readonly generateThreadChecklist?: (
+    input: ThreadChecklistGenerationInput,
+  ) => Effect.Effect<ThreadChecklistGenerationResult, TextGenerationError>;
 }

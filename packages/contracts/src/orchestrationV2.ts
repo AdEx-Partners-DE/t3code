@@ -3256,9 +3256,32 @@ export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalComma
 /** Everything the server's orchestrator accepts: client commands plus internal ones. */
 export type OrchestrationV2ServerCommand = OrchestrationV2Command | OrchestrationV2InternalCommand;
 
+/**
+ * One line of a thread's checklist. `attention` is something the user has to
+ * do, decide or know; `open` is work the agent can carry on by itself;
+ * `backlog` is parked; `done` is finished and shown to be.
+ */
+export const ThreadChecklistItem = Schema.Struct({
+  text: TrimmedNonEmptyString,
+  status: Schema.Literals(["done", "open", "backlog", "attention"]),
+  note: Schema.optional(Schema.String),
+});
+export type ThreadChecklistItem = typeof ThreadChecklistItem.Type;
+
+/** A model's short view of a thread, and the run it was written after. */
+export const ThreadChecklist = Schema.Struct({
+  threadId: ThreadId,
+  generatedAt: IsoDateTime,
+  basedOnRunId: Schema.NullOr(RunId),
+  items: Schema.Array(ThreadChecklistItem),
+});
+export type ThreadChecklist = typeof ThreadChecklist.Type;
+
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   clearAllQueues: "orchestration.clearAllQueues",
+  getThreadChecklist: "orchestration.getThreadChecklist",
+  refreshThreadChecklist: "orchestration.refreshThreadChecklist",
   nudgeIdleThreads: "orchestration.nudgeIdleThreads",
   overrideOpenThreadModels: "orchestration.overrideOpenThreadModels",
   restoreOpenThreadModels: "orchestration.restoreOpenThreadModels",
@@ -3823,6 +3846,15 @@ export const OrchestrationV2RpcSchemas = {
       limit: PositiveInt.check(Schema.isLessThanOrEqualTo(50)),
     }),
     output: Schema.Struct({ sent: NonNegativeInt, still: NonNegativeInt }),
+  },
+  getThreadChecklist: {
+    input: Schema.Struct({ threadId: ThreadId }),
+    output: Schema.Struct({ checklist: Schema.NullOr(ThreadChecklist) }),
+  },
+  /** Has a model write the checklist anew; this costs a model call. */
+  refreshThreadChecklist: {
+    input: Schema.Struct({ threadId: ThreadId }),
+    output: Schema.Struct({ checklist: ThreadChecklist }),
   },
   clearAllQueues: {
     input: Schema.Struct({ commandId: CommandId }),
