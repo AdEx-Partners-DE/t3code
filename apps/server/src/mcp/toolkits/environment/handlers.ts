@@ -14,6 +14,7 @@ export function preferences(settings: ServerSettings) {
     newWorktreesStartFromOrigin,
     enableProviderUpdateChecks,
     switchAccountAtUsageLimit,
+    scheduledTasksPaused,
     backgroundActivity,
     sourceControlWritingStyle,
   } = settings;
@@ -23,6 +24,7 @@ export function preferences(settings: ServerSettings) {
     newWorktreesStartFromOrigin,
     enableProviderUpdateChecks,
     switchAccountAtUsageLimit,
+    scheduledTasksPaused,
     backgroundActivity: { profile: backgroundActivity.profile },
     sourceControlWritingStyle: {
       ...sourceControlWritingStyle,

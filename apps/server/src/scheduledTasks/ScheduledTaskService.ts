@@ -44,6 +44,7 @@ import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { decideIdleTrigger } from "./idleTrigger.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
@@ -398,6 +399,15 @@ export const layer = Layer.effect(
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
+    // Optional, so harnesses that build this service without settings still work.
+    const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+    // The environment-wide pause. A manual "run now" is the user asking, and still runs.
+    const tasksPaused = Option.isNone(serverSettings)
+      ? Effect.succeed(false)
+      : serverSettings.value.getSettings.pipe(
+          Effect.map((settings) => settings.scheduledTasksPaused),
+          Effect.orElseSucceed(() => false),
+        );
     const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
     // Webhook deliveries for one task dispatch in arrival order rather than
     // being dropped while an earlier delivery is still dispatching.
@@ -714,6 +724,12 @@ export const layer = Layer.effect(
       trigger: "scheduled" | "manual" | "webhook" | "idle",
       webhook?: { readonly deliveryId: string; readonly prompt: string },
     ) {
+      if (trigger !== "manual" && (yield* tasksPaused)) {
+        if (webhook !== undefined) {
+          return yield* new WebhookDeliverySkipped({ reason: "Scheduled tasks are paused." });
+        }
+        return task;
+      }
       const reserved = yield* Ref.modify(activeRuns, (active) => {
         if (active.has(task.id)) return [false, active] as const;
         const next = new Set(active);
@@ -923,6 +939,7 @@ export const layer = Layer.effect(
     });
 
     const runDueTasks = Effect.fn("ScheduledTaskService.runDueTasks")(function* () {
+      if (yield* tasksPaused) return;
       const now = yield* localNow;
       const tasks = yield* listDueTasks(now).pipe(
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
@@ -1006,6 +1023,7 @@ export const layer = Layer.effect(
     // gone quiet. The thread is read here, on the server, right before the
     // prompt is sent; a prompt that still meets a new run queues behind it.
     const runIdleTasks = Effect.fn("ScheduledTaskService.runIdleTasks")(function* () {
+      if (yield* tasksPaused) return;
       const rows = yield* sql<ScheduledTaskRow>`
         SELECT * FROM scheduled_tasks
         WHERE enabled = 1 AND next_run_at IS NULL AND thread_id IS NOT NULL

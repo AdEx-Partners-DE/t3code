@@ -18,6 +18,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
@@ -350,4 +351,58 @@ it.effect(
         }),
       );
     }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("holds every due task while scheduled tasks are paused, and runs them once resumed", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-09-09T12:00:00.000Z";
+    yield* insertRow(sql, { id: "due", next: now, status: "never", enabled: 1 }, now);
+    yield* TestClock.setTime(Date.parse(now) + 1_000);
+
+    const dispatched = yield* Ref.make(0);
+    const launched = yield* Deferred.make<void>();
+    const serviceWith = (paused: boolean) =>
+      Layer.provideMerge(
+        ScheduledTaskService.layer,
+        Layer.mergeAll(
+          Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+            launch: () =>
+              Ref.update(dispatched, (n) => n + 1).pipe(
+                Effect.andThen(Deferred.succeed(launched, undefined)),
+                Effect.andThen(Effect.die(new Error("test launch failure"))),
+              ),
+          }),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          ServerSettings.layerTest({ scheduledTasksPaused: paused }),
+          NodeCrypto.layer,
+          Scheduler.layer,
+        ),
+      );
+
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(serviceWith(true));
+        // Two polls pass; a paused environment dispatches nothing in either.
+        yield* TestClock.adjust("6 seconds");
+        yield* TestClock.adjust("6 seconds");
+        assert.equal(yield* Ref.get(dispatched), 0);
+        const rows = yield* sql<{ run_count: number; last_run_status: string }>`
+          SELECT run_count, last_run_status FROM scheduled_tasks WHERE task_id = 'due'
+        `;
+        assert.equal(rows[0]?.run_count, 0);
+        assert.equal(rows[0]?.last_run_status, "never");
+      }),
+    );
+
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(serviceWith(false));
+        yield* TestClock.adjust("6 seconds");
+        yield* Deferred.await(launched);
+        assert.equal(yield* Ref.get(dispatched), 1);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

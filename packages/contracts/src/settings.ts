@@ -1122,6 +1122,12 @@ export const ServerSettings = Schema.Struct({
    * limit or spending paid credits.
    */
   switchAccountAtUsageLimit: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * Holds every scheduled task in this environment: nothing starts on a timer,
+   * on idle or from a webhook until it is turned off again. Each task keeps
+   * its own enabled state, so resuming restores exactly what was running.
+   */
+  scheduledTasksPaused: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // Retain the update-era key; recovery now needs an environment-owned opt-in.
   continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -1474,6 +1480,7 @@ export const ServerSettingsPatch = Schema.Struct({
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   switchAccountAtUsageLimit: Schema.optionalKey(Schema.Boolean),
+  scheduledTasksPaused: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(

@@ -36,7 +36,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 
 import { formatRelativeTime } from "../../timestampFormat";
-import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -346,6 +346,12 @@ function ScheduledTaskEnvironmentSection({
   const tasks = tasksQuery.data?.tasks.filter((task) =>
     matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
   );
+  const paused = useEnvironmentSettings(
+    environment.environmentId,
+    (settings) => settings.scheduledTasksPaused,
+  );
+  const updateEnvironmentSettings = useUpdateEnvironmentSettings(environment.environmentId);
+  const enabledCount = tasks?.filter((task) => task.enabled).length ?? 0;
   const linkedTask = tasks?.find((task) => task.id === taskId);
   const openedLink = useRef(false);
   useEffect(() => {
@@ -384,6 +390,23 @@ function ScheduledTaskEnvironmentSection({
               role="status"
             />
           ) : null}
+          <SettingsRow
+            title={paused ? "All tasks are paused" : "Pause all tasks"}
+            description={
+              paused
+                ? `Nothing starts on a timer, on idle or from a webhook. ${enabledCount} ${enabledCount === 1 ? "task resumes" : "tasks resume"} when you turn this off.`
+                : `Holds every task in this environment without changing which ones are enabled. ${enabledCount} of ${tasks.length} enabled.`
+            }
+            control={
+              <Switch
+                checked={paused}
+                onCheckedChange={(checked) =>
+                  updateEnvironmentSettings({ scheduledTasksPaused: Boolean(checked) })
+                }
+                aria-label="Pause all scheduled tasks"
+              />
+            }
+          />
           {tasks.length === 0 ? (
             <SettingsRow
               title="No scheduled tasks"
