@@ -17,6 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -590,6 +591,174 @@ it.effect("does not queue another prompt while the task's last one still waits i
         yield* TestClock.adjust("6 seconds");
         yield* Deferred.await(delivered);
         assert.equal(yield* Ref.get(sent), 1);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+// The idle poll reads the watched thread, the last reply and the account's
+// headroom before it sends. One harness, three ways a task ends instead.
+const idleHarness = (input: {
+  readonly schedule: Record<string, unknown>;
+  readonly lastReply: string;
+  readonly usedPercent?: number;
+}) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const armed = "2026-09-09T11:00:00.000Z";
+    const now = "2026-09-09T12:00:00.000Z";
+    yield* insertRow(
+      sql,
+      {
+        id: "idle",
+        next: null,
+        status: "never",
+        enabled: 1,
+        scheduleJson: JSON.stringify({
+          type: "idle",
+          maxRuns: 3,
+          minPauseMs: 0,
+          ...input.schedule,
+        }),
+      },
+      armed,
+    );
+    yield* sql`UPDATE scheduled_tasks SET thread_id = 'thread:own' WHERE task_id = 'idle'`;
+    yield* TestClock.setTime(Date.parse(now));
+
+    const sent = yield* Ref.make(0);
+    const shellsRead = yield* Ref.make<ReadonlyArray<string>>([]);
+    const delivered = yield* Deferred.make<void>();
+    const layer = Layer.provideMerge(
+      ScheduledTaskService.layer,
+      Layer.mergeAll(
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: ((threadId: string) =>
+            Ref.update(shellsRead, (ids) => [...ids, threadId]).pipe(
+              Effect.as({
+                id: threadId,
+                activeRunId: null,
+                activityRunStatus: null,
+                pendingRuntimeRequest: null,
+                latestRunId: "run:1",
+                // Finished after the task was armed, so the thread counts as idle.
+                latestRunCompletedAt: DateTime.makeUnsafe("2026-09-09T11:30:00.000Z"),
+                modelSelection: { instanceId: "codex", model: "gpt-5" },
+              }),
+            )) as never,
+          getThreadRecords: (() =>
+            Effect.succeed({
+              messages: [{ role: "assistant", text: input.lastReply, runId: "run:1" }],
+            })) as never,
+          getProjectThreadRecords: (() => Effect.succeed({ runs: [] })) as never,
+          sendToThread: () =>
+            Ref.update(sent, (n) => n + 1).pipe(
+              Effect.andThen(Deferred.succeed(delivered, undefined)),
+              Effect.andThen(Effect.die(new Error("test send failure"))),
+            ),
+        }),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed(
+            input.usedPercent === undefined
+              ? []
+              : [
+                  {
+                    instanceId: "codex",
+                    usageLimits: {
+                      windows: [
+                        {
+                          id: "weekly",
+                          kind: "weekly",
+                          label: "Weekly",
+                          usedPercent: input.usedPercent,
+                        },
+                      ],
+                    },
+                  },
+                ],
+          ) as never,
+        }),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        NodeCrypto.layer,
+        Scheduler.layer,
+      ),
+    );
+    const row = sql<{ enabled: number; last_run_error: string | null }>`
+      SELECT enabled, last_run_error FROM scheduled_tasks WHERE task_id = 'idle'
+    `.pipe(Effect.map((rows) => rows[0]!));
+    return { layer, sent, shellsRead, delivered, row };
+  });
+
+it.effect(
+  "turns an idle task off instead of sending when the last reply holds its stop phrase",
+  () =>
+    Effect.gen(function* () {
+      const harness = yield* idleHarness({
+        schedule: { stopPhrase: "ALL DONE" },
+        lastReply: "Nothing is left. All done.",
+      });
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Layer.build(harness.layer);
+          yield* TestClock.adjust("6 seconds");
+          assert.equal(yield* Ref.get(harness.sent), 0);
+          assert.equal((yield* harness.row).enabled, 0);
+        }),
+      );
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("sends an idle task's prompt when the reply does not hold the stop phrase", () =>
+  Effect.gen(function* () {
+    const harness = yield* idleHarness({
+      schedule: { stopPhrase: "ALL DONE" },
+      lastReply: "Two items are still open.",
+    });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(harness.layer);
+        yield* TestClock.adjust("6 seconds");
+        yield* Deferred.await(harness.delivered);
+        assert.equal(yield* Ref.get(harness.sent), 1);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("turns an idle task off at its usage budget and says why", () =>
+  Effect.gen(function* () {
+    const harness = yield* idleHarness({
+      schedule: { minRemainingPercent: 20 },
+      lastReply: "Carry on.",
+      usedPercent: 90,
+    });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(harness.layer);
+        yield* TestClock.adjust("6 seconds");
+        const row = yield* harness.row;
+        assert.equal(yield* Ref.get(harness.sent), 0);
+        assert.equal(row.enabled, 0);
+        assert.include(row.last_run_error ?? "", "10% left");
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("judges idleness by the thread an idle task watches, not the one it posts to", () =>
+  Effect.gen(function* () {
+    const harness = yield* idleHarness({
+      schedule: { watchThreadId: "thread:watched" },
+      lastReply: "Finished.",
+    });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(harness.layer);
+        yield* TestClock.adjust("6 seconds");
+        yield* Deferred.await(harness.delivered);
+        assert.include(yield* Ref.get(harness.shellsRead), "thread:watched");
+        assert.notInclude(yield* Ref.get(harness.shellsRead), "thread:own");
       }),
     );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
