@@ -28,6 +28,7 @@ const RPC_AGGREGATES = {
   [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.clearAllQueues]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.restoreOpenThreadModels]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.subscribeArchivedShell]: "orchestration",

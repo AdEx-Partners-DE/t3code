@@ -994,6 +994,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: ORCHESTRATION_V2_WS_METHODS.restoreOpenThreadModels,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    nudgeIdleThreads: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:nudge-idle-threads",
+      tag: ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     clearAllQueues: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:clear-all-queues",
       tag: ORCHESTRATION_V2_WS_METHODS.clearAllQueues,

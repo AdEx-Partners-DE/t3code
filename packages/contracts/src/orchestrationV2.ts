@@ -3259,6 +3259,7 @@ export type OrchestrationV2ServerCommand = OrchestrationV2Command | Orchestratio
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   clearAllQueues: "orchestration.clearAllQueues",
+  nudgeIdleThreads: "orchestration.nudgeIdleThreads",
   overrideOpenThreadModels: "orchestration.overrideOpenThreadModels",
   restoreOpenThreadModels: "orchestration.restoreOpenThreadModels",
   getTurnDiff: "orchestration.getTurnDiff",
@@ -3810,6 +3811,18 @@ export const OrchestrationV2RpcSchemas = {
   restoreOpenThreadModels: {
     input: Schema.Struct({ commandId: CommandId }),
     output: Schema.Struct({ threads: NonNegativeInt }),
+  },
+  /**
+   * Starts a turn with one message in open threads that stand still, up to
+   * `limit` of them. `still` is how many stood still, `sent` how many started.
+   */
+  nudgeIdleThreads: {
+    input: Schema.Struct({
+      commandId: CommandId,
+      text: TrimmedNonEmptyString,
+      limit: PositiveInt.check(Schema.isLessThanOrEqualTo(50)),
+    }),
+    output: Schema.Struct({ sent: NonNegativeInt, still: NonNegativeInt }),
   },
   clearAllQueues: {
     input: Schema.Struct({ commandId: CommandId }),

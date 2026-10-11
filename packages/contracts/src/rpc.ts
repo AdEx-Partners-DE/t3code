@@ -1712,6 +1712,15 @@ const WsOrchestrationV2RestoreOpenThreadModelsRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationV2NudgeIdleThreadsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads,
+  {
+    payload: OrchestrationV2RpcSchemas.nudgeIdleThreads.input,
+    success: OrchestrationV2RpcSchemas.nudgeIdleThreads.output,
+    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2ClearAllQueuesRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.clearAllQueues, {
   payload: OrchestrationV2RpcSchemas.clearAllQueues.input,
   success: OrchestrationV2RpcSchemas.clearAllQueues.output,
@@ -2085,6 +2094,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2ClearAllQueuesRpc,
+  WsOrchestrationV2NudgeIdleThreadsRpc,
   WsOrchestrationV2OverrideOpenThreadModelsRpc,
   WsOrchestrationV2RestoreOpenThreadModelsRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,

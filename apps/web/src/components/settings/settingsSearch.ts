@@ -517,6 +517,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "nudge-idle-threads",
+    title: "Nudge all idle threads",
+    to: "/settings/general",
+    searchTerms: ["continue go on refresh all threads sessions idle prompt broadcast bulk message"],
+  },
+  {
     id: "clear-all-queues",
     title: "Clear all queues",
     to: "/settings/general",
