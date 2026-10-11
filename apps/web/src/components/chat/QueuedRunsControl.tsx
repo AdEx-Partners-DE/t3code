@@ -220,10 +220,35 @@ export function QueuedRunsControl({
     }
   };
 
+  // With no run under way there is nothing to steer: the message starts as
+  // the thread's next turn instead, also while the queue is held or all queues
+  // are paused. Whatever else waits stays under the global pause.
+  const sendNow = async (queuedRunId: RunId) => {
+    if (activeRun !== null || steerInFlightRef.current) return;
+    steerInFlightRef.current = true;
+    try {
+      const first = queued[0]?.run.id;
+      if (first !== undefined && first !== queuedRunId) await move(queuedRunId, first);
+      setBusyRunId(queuedRunId);
+      await resumeQueue({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId, startNextDespitePause: true },
+      });
+    } finally {
+      steerInFlightRef.current = false;
+      setBusyRunId(null);
+    }
+  };
+
   useImperativeHandle(ref, () => ({
     steerNext(repeat) {
       const next = queued[0];
-      if (!next || !workflow?.canPromoteToSteer) return false;
+      if (!next) return false;
+      if (activeRun === null) {
+        if (!repeat && busyRunId === null) void sendNow(next.run.id);
+        return true;
+      }
+      if (!workflow?.canPromoteToSteer) return false;
       if (!repeat && busyRunId === null) void steer(next.run.id);
       return true;
     },
@@ -297,27 +322,12 @@ export function QueuedRunsControl({
               <ComposerBanner.Row render={<li />}>
                 <ComposerBanner.Content className="text-muted-foreground">
                   {allQueuesPaused
-                    ? "All queues are paused, in every thread. Nothing here starts until you resume them."
+                    ? "All queues are paused, in every thread. Send now starts one message; Resume all queues ends the pause."
                     : queueHeld
                       ? "Nothing here starts until you resume."
                       : "Pausing lets the current run finish and holds the rest."}
                 </ComposerBanner.Content>
                 <ComposerBanner.Actions>
-                  {allQueuesPaused ? (
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      disabled={activeRun !== null}
-                      onClick={() =>
-                        void resumeQueue({
-                          environmentId: props.environmentId,
-                          input: { threadId: props.threadId, startNextDespitePause: true },
-                        })
-                      }
-                    >
-                      Start next now
-                    </Button>
-                  ) : null}
                   {allQueuesPaused ? (
                     <Button
                       size="xs"
@@ -574,21 +584,23 @@ export function QueuedRunsControl({
                               disabled={
                                 item.runId === null ||
                                 busyRunId !== null ||
-                                !workflow?.canPromoteToSteer
+                                (activeRun !== null && !workflow?.canPromoteToSteer)
                               }
                               onClick={() => {
                                 if (item.runId !== null) {
-                                  void steer(item.runId);
+                                  void (activeRun === null ? sendNow : steer)(item.runId);
                                 }
                               }}
                             >
                               <CornerUpRightIcon />
-                              Steer
+                              {activeRun === null ? "Send now" : "Steer"}
                             </Button>
                           </TooltipTrigger>
                           <TooltipPopup>
                             {activeRun === null
-                              ? "There is no active run to steer"
+                              ? allQueuesPaused
+                                ? "Start this message now. The rest waits while all queues are paused."
+                                : "Start this message now"
                               : `Send as a steer instead${item.serverIndex === 0 && props.steerShortcutLabel ? ` (${props.steerShortcutLabel})` : ""}`}
                           </TooltipPopup>
                         </Tooltip>
