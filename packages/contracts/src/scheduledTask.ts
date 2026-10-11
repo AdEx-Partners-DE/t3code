@@ -123,6 +123,29 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
 });
 
 /**
+ * Run the prompt each time the bound thread goes idle: no run active or
+ * queued, nothing waiting on the user. Both limits are required, because a
+ * prompt that answers every finished run would otherwise never stop.
+ *
+ * Not part of `ScheduledTaskSchedule` yet: the trigger is decided on the
+ * server first and joins the union once every client can show it.
+ */
+export const ScheduledTaskIdleSchedule = Schema.Struct({
+  type: Schema.Literal("idle").annotate({
+    description: "Run when the bound thread has finished and nothing waits on the user.",
+  }),
+  maxRuns: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 })).annotate({
+    description: "The task turns itself off after this many runs.",
+  }),
+  minPauseMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
+    description: "Shortest wait after a run ends before the next one may start.",
+  }),
+}).annotate({
+  description: "Run each time the bound thread goes idle, up to a fixed number of runs.",
+});
+export type ScheduledTaskIdleSchedule = typeof ScheduledTaskIdleSchedule.Type;
+
+/**
  * Read model for persisted schedules. Keep accepting legacy sub-minute rows so
  * users can list, disable, edit, or delete them after the write minimum changes.
  */
