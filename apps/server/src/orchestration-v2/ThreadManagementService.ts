@@ -293,6 +293,14 @@ export interface ThreadManagementServiceShape {
   readonly dispatch: (
     command: OrchestrationV2ServerCommand,
   ) => Effect.Effect<Orchestrator.OrchestratorV2DispatchResult, Orchestrator.OrchestratorV2Error>;
+  /**
+   * Cancels the messages waiting in every thread's queue and reports how many
+   * threads had some. Runs under way are not touched. `commandId` makes a
+   * retry safe: each thread's clear derives its own id from it.
+   */
+  readonly clearAllQueues: (input: {
+    readonly commandId: CommandId;
+  }) => Effect.Effect<{ readonly threads: number }, Orchestrator.OrchestratorV2Error>;
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
@@ -594,6 +602,28 @@ const make = Effect.gen(function* () {
       Effect.andThen(withLimitAccountSwitch(command)),
       Effect.flatMap((routed) => orchestrator.dispatch(routed)),
     );
+
+  const clearAllQueues: ThreadManagementServiceShape["clearAllQueues"] = (input) =>
+    Effect.gen(function* () {
+      const candidates = yield* orchestrator.queuedThreadCandidates;
+      let threads = 0;
+      for (const threadId of candidates) {
+        // A candidate with nothing queued rejects the clear; that is not a failure here.
+        const cleared = yield* orchestrator
+          .dispatch({
+            type: "queue.clear",
+            commandId: CommandId.make(`${input.commandId}:clear:${threadId}`),
+            threadId,
+          })
+          .pipe(
+            Effect.as(true),
+            Effect.catch(() => Effect.succeed(false)),
+          );
+        if (cleared) threads += 1;
+      }
+      yield* Effect.logInfo("Thread queues cleared", { threads });
+      return { threads };
+    });
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>
     getThreadProjection(input.threadId).pipe(
@@ -995,6 +1025,7 @@ const make = Effect.gen(function* () {
 
   return ThreadManagementService.of({
     ensureLegacyTranscript,
+    clearAllQueues,
     searchThreadStream: (input) =>
       Stream.unwrap(
         ensureProjectionTranscript(input.threadId).pipe(

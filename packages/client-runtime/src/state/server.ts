@@ -6,6 +6,7 @@ import {
   type ServerLifecycleStreamReadyEvent,
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -983,6 +984,11 @@ export function createServerEnvironmentAtoms<R, E>(
 
   return {
     configValueAtom,
+    clearAllQueues: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:clear-all-queues",
+      tag: ORCHESTRATION_V2_WS_METHODS.clearAllQueues,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",
       tag: WS_METHODS.serverRunStorageCleanup,

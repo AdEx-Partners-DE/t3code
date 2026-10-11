@@ -276,6 +276,12 @@ export interface OrchestratorV2DispatchResult {
 
 export interface OrchestratorV2Shape {
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
+  /**
+   * Threads that may have messages waiting in their queue: every thread whose
+   * queue stands with nothing running, plus every thread with a run under way.
+   * The second group is a superset; ask the thread's records to be sure.
+   */
+  readonly queuedThreadCandidates: Effect.Effect<ReadonlyArray<ThreadId>, OrchestratorV2Error>;
   /** Startup pass that settles delegated-task results and deliveries runs left behind. */
   readonly recoverDelegatedTasks: Effect.Effect<void>;
   /** Settles a delegated child whose restart continuation of `sourceRunId` declined or failed. */
@@ -471,6 +477,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "queued-message.promote-to-steer":
     case "queue.resume":
     case "queue.hold":
+    case "queue.clear":
     case "queued-run.reorder":
     case "queued-run.cancel":
     case "queued-run.edit":
@@ -1925,6 +1932,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         new OrchestratorDispatchError({
           commandId: CommandId.make("command:system:resume-queued-runs"),
           commandType: "message.dispatch",
+          cause,
+        }),
+    ),
+  );
+
+  const queuedThreadCandidates = Effect.gen(function* () {
+    const standing = yield* projectionStore.getRecoveryThreadIds("queued-runs");
+    const shell = yield* projectionStore.getShellSnapshot();
+    const working = shell.threads
+      .filter(
+        (thread) => thread.activeRunId !== null || (thread.activityRunStatus ?? null) !== null,
+      )
+      .map((thread) => thread.id);
+    return [...new Set([...standing, ...working])];
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new OrchestratorDispatchError({
+          commandId: CommandId.make("command:system:queued-thread-candidates"),
+          commandType: "queue.clear",
           cause,
         }),
     ),
@@ -7791,6 +7818,111 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     });
 
+  /** Marks one queued run, its attempt and its root node cancelled. */
+  const cancelQueuedRun = (input: {
+    readonly command: Extract<
+      OrchestrationV2Command,
+      { readonly type: "queued-run.cancel" | "queue.clear" }
+    >;
+    readonly events: Ref.Ref<Array<OrchestrationV2DomainEvent>>;
+    readonly projection: Pick<OrchestrationV2ThreadProjection, "nodes" | "attempts">;
+    readonly queuedRun: OrchestrationV2ThreadProjection["runs"][number];
+    readonly now: DateTime.Utc;
+  }) =>
+    Effect.gen(function* () {
+      const queuedRootNode =
+        input.queuedRun.rootNodeId === null
+          ? undefined
+          : input.projection.nodes.find((candidate) => candidate.id === input.queuedRun.rootNodeId);
+      const queuedAttempt =
+        input.queuedRun.activeAttemptId === null
+          ? undefined
+          : input.projection.attempts.find(
+              (candidate) => candidate.id === input.queuedRun.activeAttemptId,
+            );
+
+      const emitEvent = emit(input.events, input.command);
+      yield* emitEvent({
+        type: "run.updated",
+        threadId: input.command.threadId,
+        runId: input.queuedRun.id,
+        ...(input.queuedRun.rootNodeId === null ? {} : { nodeId: input.queuedRun.rootNodeId }),
+        providerInstanceId: input.queuedRun.providerInstanceId,
+        occurredAt: input.now,
+        payload: {
+          ...input.queuedRun,
+          status: "cancelled",
+          queuePosition: null,
+          completedAt: input.now,
+        },
+      });
+      if (queuedAttempt !== undefined && queuedRootNode !== undefined) {
+        yield* emitEvent({
+          type: "run-attempt.updated",
+          threadId: input.command.threadId,
+          runId: input.queuedRun.id,
+          nodeId: queuedRootNode.id,
+          providerInstanceId: input.queuedRun.providerInstanceId,
+          occurredAt: input.now,
+          payload: {
+            ...queuedAttempt,
+            status: "cancelled",
+            completedAt: input.now,
+          },
+        });
+      }
+      if (queuedRootNode !== undefined) {
+        yield* emitEvent({
+          type: "node.updated",
+          threadId: input.command.threadId,
+          runId: input.queuedRun.id,
+          nodeId: queuedRootNode.id,
+          providerInstanceId: input.queuedRun.providerInstanceId,
+          occurredAt: input.now,
+          payload: {
+            ...queuedRootNode,
+            status: "cancelled",
+            completedAt: input.now,
+          },
+        });
+      }
+    });
+
+  const dispatchQueueClear = (
+    command: Extract<OrchestrationV2Command, { readonly type: "queue.clear" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs", "messages", "nodes", "attempts"], {
+          messageRoles: ["user"],
+        })
+        .pipe(
+          Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
+        );
+      const delegatedMessageIds = new Set(
+        projection.messages
+          .filter((message) => message.delegatedCompletion !== undefined)
+          .map((message) => message.id),
+      );
+      const clearable = projection.runs.filter(
+        (run) =>
+          run.status === "queued" &&
+          (run.userMessageId === null || !delegatedMessageIds.has(run.userMessageId)),
+      );
+      if (clearable.length === 0) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Nothing is queued in this thread.",
+        });
+      }
+      const now = yield* DateTime.now;
+      for (const queuedRun of clearable) {
+        yield* cancelQueuedRun({ command, events, projection, queuedRun, now });
+      }
+    });
+
   const dispatchQueuedRunCancel = (
     command: Extract<OrchestrationV2Command, { readonly type: "queued-run.cancel" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -7828,61 +7960,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
         return;
       }
-      const queuedRootNode =
-        queuedRun.rootNodeId === null
-          ? undefined
-          : projection.nodes.find((candidate) => candidate.id === queuedRun.rootNodeId);
-      const queuedAttempt =
-        queuedRun.activeAttemptId === null
-          ? undefined
-          : projection.attempts.find((candidate) => candidate.id === queuedRun.activeAttemptId);
-
       const now = yield* DateTime.now;
-      const emitEvent = emit(events, command);
-      yield* emitEvent({
-        type: "run.updated",
-        threadId: command.threadId,
-        runId: queuedRun.id,
-        ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
-        providerInstanceId: queuedRun.providerInstanceId,
-        occurredAt: now,
-        payload: {
-          ...queuedRun,
-          status: "cancelled",
-          queuePosition: null,
-          completedAt: now,
-        },
-      });
-      if (queuedAttempt !== undefined && queuedRootNode !== undefined) {
-        yield* emitEvent({
-          type: "run-attempt.updated",
-          threadId: command.threadId,
-          runId: queuedRun.id,
-          nodeId: queuedRootNode.id,
-          providerInstanceId: queuedRun.providerInstanceId,
-          occurredAt: now,
-          payload: {
-            ...queuedAttempt,
-            status: "cancelled",
-            completedAt: now,
-          },
-        });
-      }
-      if (queuedRootNode !== undefined) {
-        yield* emitEvent({
-          type: "node.updated",
-          threadId: command.threadId,
-          runId: queuedRun.id,
-          nodeId: queuedRootNode.id,
-          providerInstanceId: queuedRun.providerInstanceId,
-          occurredAt: now,
-          payload: {
-            ...queuedRootNode,
-            status: "cancelled",
-            completedAt: now,
-          },
-        });
-      }
+      yield* cancelQueuedRun({ command, events, projection, queuedRun, now });
     });
 
   const dispatchQueuedRunEdit = (
@@ -10848,6 +10927,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "queued-run.reorder":
         yield* dispatchQueuedRunReorder(command, events);
         break;
+      case "queue.clear":
+        yield* dispatchQueueClear(command, events);
+        break;
       case "queued-run.cancel":
         yield* dispatchQueuedRunCancel(command, events);
         break;
@@ -11338,6 +11420,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   return OrchestratorV2.of({
     resumeQueuedRuns,
+    queuedThreadCandidates,
     recoverDelegatedTasks,
     recoverDelegatedTask,
     delegatedTaskResultPending,
@@ -11478,6 +11561,7 @@ export const layer: Layer.Layer<
 const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
   OrchestratorV2,
   OrchestratorV2.of({
+    queuedThreadCandidates: Effect.succeed([]),
     resumeQueuedRuns: Effect.fail(
       new OrchestratorDispatchError({
         commandId: CommandId.make("command:system:resume-queued-runs"),

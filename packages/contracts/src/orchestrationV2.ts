@@ -2960,6 +2960,17 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
   }),
+  /**
+   * Cancels every message waiting in the thread's queue. The run under way is
+   * not touched. Results of delegated tasks that wait in the queue stay: they
+   * are not something the user queued, and dropping them would leave their
+   * parent run without an answer.
+   */
+  Schema.Struct({
+    type: Schema.Literal("queue.clear"),
+    commandId: CommandId,
+    threadId: ThreadId,
+  }),
   Schema.Struct({
     type: Schema.Literal("queued-run.reorder"),
     commandId: CommandId,
@@ -3165,6 +3176,7 @@ export type OrchestrationV2ServerCommand = OrchestrationV2Command | Orchestratio
 
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
+  clearAllQueues: "orchestration.clearAllQueues",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
@@ -3622,6 +3634,11 @@ export const OrchestrationV2RpcSchemas = {
   launchThread: {
     input: OrchestrationV2ThreadLaunchInput,
     output: OrchestrationV2ThreadLaunchResult,
+  },
+  clearAllQueues: {
+    input: Schema.Struct({ commandId: CommandId }),
+    /** How many threads had queued messages cancelled. */
+    output: Schema.Struct({ threads: NonNegativeInt }),
   },
   subscribeArchivedShell: {
     input: Schema.Struct({}),

@@ -18,6 +18,7 @@ import {
 import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 
 import { useAssetUrls } from "../../assets/assetUrls";
+import { ensureLocalApi } from "../../localApi";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { threadEnvironment } from "../../state/threads";
 import { useThreadProjection } from "../../state/entities";
@@ -73,6 +74,7 @@ export function QueuedRunsControl({
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
   const holdQueue = useAtomCommand(threadEnvironment.holdThreadQueue, "pause queue");
   const resumeQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
+  const clearQueue = useAtomCommand(threadEnvironment.clearThreadQueue, "clear queue");
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
@@ -307,6 +309,27 @@ export function QueuedRunsControl({
                     }
                   >
                     {queueHeld ? "Resume queue" : "Pause queue"}
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => {
+                      void ensureLocalApi()
+                        .dialogs.confirm(
+                          `Remove ${queued.length === 1 ? "the queued message" : `all ${queued.length} queued messages`} from this thread? The current run goes on.`,
+                          { variant: "destructive" },
+                        )
+                        .then((confirmed) =>
+                          confirmed
+                            ? clearQueue({
+                                environmentId: props.environmentId,
+                                input: { threadId: props.threadId },
+                              })
+                            : undefined,
+                        );
+                    }}
+                  >
+                    Clear queue
                   </Button>
                 </ComposerBanner.Actions>
               </ComposerBanner.Row>

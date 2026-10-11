@@ -501,6 +501,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["queue hold stop waiting messages global pause queued automation"],
   },
   {
+    id: "clear-all-queues",
+    title: "Clear all queues",
+    to: "/settings/general",
+    searchTerms: ["queue empty remove cancel waiting messages global queued automation"],
+  },
+  {
     id: "continue-threads-after-server-update",
     title: "Continue threads after restarts",
     to: "/settings/general",

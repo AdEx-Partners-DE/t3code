@@ -3596,6 +3596,79 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("clears a queue without touching the run under way", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-clear-queue-thread");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-clear-queue-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-clear-queue-project"),
+        title: "Clear the queue",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-clear-queue",
+      });
+      const empty = yield* Effect.exit(
+        orchestrator.dispatch({
+          type: "queue.clear",
+          commandId: CommandId.make("runtime-layer-clear-queue-empty"),
+          threadId,
+        }),
+      );
+      assert.equal(empty._tag, "Failure");
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-clear-queue-active-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-clear-queue-active-message"),
+        text: "Keep the provider occupied.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      for (const name of ["first", "second"]) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`runtime-layer-clear-queue-${name}-message`),
+          threadId,
+          messageId: MessageId.make(`runtime-layer-clear-queue-${name}-message`),
+          text: `Queued ${name}.`,
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "queue_after_active" },
+        });
+      }
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const activeRun = before.runs.find((run) => run.status === "starting");
+      assert.isDefined(activeRun);
+      assert.equal(before.runs.filter((run) => run.status === "queued").length, 2);
+      // A thread with a run under way is a candidate for the clear-all pass.
+      assert.include(yield* orchestrator.queuedThreadCandidates, threadId);
+
+      yield* orchestrator.dispatch({
+        type: "queue.clear",
+        commandId: CommandId.make("runtime-layer-clear-queue-clear"),
+        threadId,
+      });
+      const cleared = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(cleared.runs.filter((run) => run.status === "queued").length, 0);
+      assert.equal(cleared.runs.filter((run) => run.status === "cancelled").length, 2);
+      assert.equal(cleared.runs.find((run) => run.id === activeRun.id)?.status, activeRun.status);
+    }),
+  );
+
   it.effect("holds a queue without touching the run under way, and resumes it", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

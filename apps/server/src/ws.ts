@@ -1946,6 +1946,18 @@ const layerWsRpc = (
                 ),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.clearAllQueues]: (input) =>
+          threadManagement.clearAllQueues(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2DispatchCommandError({
+                  commandId: input.commandId,
+                  commandType: "queue.clear",
+                  message: "Failed to clear the queues",
+                  cause,
+                }),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": input.commandId,

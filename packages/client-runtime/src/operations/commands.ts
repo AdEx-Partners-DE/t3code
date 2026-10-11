@@ -1001,6 +1001,17 @@ export const holdThreadQueue = Effect.fn("EnvironmentCommands.holdThreadQueue")(
   });
 });
 
+/** Cancels every message waiting in the thread's queue; the run under way goes on. */
+export const clearThreadQueue = Effect.fn("EnvironmentCommands.clearThreadQueue")(function* (
+  input: ThreadCommandInput,
+) {
+  return yield* dispatch({
+    type: "queue.clear",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+  });
+});
+
 export const reorderQueuedRun = Effect.fn("EnvironmentCommands.reorderQueuedRun")(function* (
   input: ReorderQueuedRunInput,
 ) {

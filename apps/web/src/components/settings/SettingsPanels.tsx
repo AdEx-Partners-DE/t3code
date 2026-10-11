@@ -86,6 +86,7 @@ import {
   useUpdateScopedSettings,
 } from "./useScopedSettings";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
+import { ClearAllQueuesButton } from "./ClearAllQueuesButton";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
@@ -3092,6 +3093,13 @@ export function GeneralSettingsPanel() {
               aria-label="Pause all queues"
             />
           }
+        />
+
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("clear-all-queues")}
+          description="Remove every message waiting in a thread's queue. Runs under way go on. This cannot be undone."
+          control={<ClearAllQueuesButton />}
         />
 
         <SettingsRow
