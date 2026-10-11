@@ -345,6 +345,18 @@ export function QueuedRunsControl({
                                     threadId: props.threadId,
                                     maxAgeMinutes: 60,
                                   },
+                                }).then((restored) => {
+                                  if (
+                                    restored._tag === "Success" &&
+                                    (restored.value.heldBack ?? 0) > 0
+                                  ) {
+                                    toastManager.add({
+                                      type: "info",
+                                      title: "Not put back yet",
+                                      description:
+                                        'All queues are paused and this thread stands still, so the messages would start at once. Turn off "Pause all queues", then use Restore cleared in Settings.',
+                                    });
+                                  }
                                 });
                               },
                             },

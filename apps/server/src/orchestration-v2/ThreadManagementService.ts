@@ -316,7 +316,7 @@ export interface ThreadManagementServiceShape {
     readonly threadId?: ThreadId | undefined;
     readonly maxAgeMinutes: number;
   }) => Effect.Effect<
-    { readonly threads: number; readonly messages: number },
+    { readonly threads: number; readonly messages: number; readonly heldBack: number },
     Orchestrator.OrchestratorV2Error
   >;
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
@@ -661,8 +661,18 @@ const make = Effect.gen(function* () {
           : (yield* orchestrator.getShellSnapshot()).threads
               .filter((thread) => thread.archivedAt === null)
               .map((thread) => thread.id);
+      // A message queued into a thread that stands still starts at once; the
+      // queue pause only stops the next one from moving up. So while all
+      // queues are paused, a standing thread gets nothing back.
+      const allQueuesPaused = Option.isNone(serverSettings)
+        ? false
+        : yield* serverSettings.value.getSettings.pipe(
+            Effect.map((settings) => settings.threadQueuesPaused),
+            Effect.orElseSucceed(() => false),
+          );
       let threads = 0;
       let messages = 0;
+      let heldBack = 0;
       for (const threadId of threadIds) {
         const { runs } = yield* orchestrator.getThreadRecords(threadId, ["runs"]);
         const cleared = runs
@@ -682,10 +692,21 @@ const make = Effect.gen(function* () {
           messageIds: [...cleared.map((run) => run.userMessageId), ...cleared.map(restoredId)],
         });
         const byId = new Map(records.messages.map((message) => [message.id, message]));
+        const working = runs.some(
+          (run) =>
+            run.status === "preparing" ||
+            run.status === "starting" ||
+            run.status === "running" ||
+            run.status === "waiting",
+        );
         let restoredHere = 0;
         for (const run of cleared) {
           const source = byId.get(run.userMessageId);
           if (source === undefined || byId.has(restoredId(run))) continue;
+          if (allQueuesPaused && !working) {
+            heldBack += 1;
+            continue;
+          }
           const queued = yield* dispatch({
             type: "message.dispatch",
             commandId: CommandId.make(`${input.commandId}:restore:${run.id}`),
@@ -716,8 +737,8 @@ const make = Effect.gen(function* () {
           messages += restoredHere;
         }
       }
-      yield* Effect.logInfo("Cleared queues restored", { threads, messages });
-      return { threads, messages };
+      yield* Effect.logInfo("Cleared queues restored", { threads, messages, heldBack });
+      return { threads, messages, heldBack };
     });
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>

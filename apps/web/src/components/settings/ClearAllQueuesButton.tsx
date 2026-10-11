@@ -88,12 +88,18 @@ export function ClearAllQueuesButton() {
           });
           if (result._tag === "Success") {
             const { threads, messages } = result.value;
+            const heldBack = result.value.heldBack ?? 0;
             toastManager.add({
               type: "success",
               title:
-                messages === 0
+                messages === 0 && heldBack === 0
                   ? `Nothing to restore on ${environment.label}`
                   : `Put back ${messages} ${messages === 1 ? "message" : "messages"} in ${threads} ${threads === 1 ? "thread" : "threads"} on ${environment.label}`,
+              ...(heldBack > 0
+                ? {
+                    description: `${heldBack} more ${heldBack === 1 ? "waits" : "wait"} in threads that stand still: they would start at once. Turn off "Pause all queues", then restore again.`,
+                  }
+                : {}),
             });
           } else if (!isAtomCommandInterrupted(result)) {
             toastManager.add({

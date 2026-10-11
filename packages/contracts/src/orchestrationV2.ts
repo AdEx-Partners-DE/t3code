@@ -3888,7 +3888,16 @@ export const OrchestrationV2RpcSchemas = {
       threadId: Schema.optional(ThreadId),
       maxAgeMinutes: PositiveInt.check(Schema.isLessThanOrEqualTo(7 * 24 * 60)),
     }),
-    output: Schema.Struct({ threads: NonNegativeInt, messages: NonNegativeInt }),
+    output: Schema.Struct({
+      threads: NonNegativeInt,
+      messages: NonNegativeInt,
+      /**
+       * Messages left out because all queues are paused and their thread
+       * stands still: put back, the first would start at once. They stay
+       * restorable.
+       */
+      heldBack: Schema.optional(NonNegativeInt),
+    }),
   },
   clearAllQueues: {
     input: Schema.Struct({ commandId: CommandId }),
