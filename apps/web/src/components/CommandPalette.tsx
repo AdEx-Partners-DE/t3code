@@ -79,6 +79,7 @@ import {
   TextSearchIcon,
 } from "lucide-react";
 import { requestThreadFindOpen } from "./chat/threadFindActionBus";
+import { requestNextWaitingThread } from "./threadNextWaitingBus";
 import {
   useCallback,
   useDeferredValue,
@@ -1829,6 +1830,18 @@ function OpenCommandPaletteDialog(props: {
       run: () => startScratchThread(scratchTargetEnvironmentId),
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "next-waiting-thread",
+    title: "Open the thread that needs you",
+    searchTerms: ["next", "waiting", "approval", "blocked", "unread", "inbox", "triage"],
+    icon: <CornerLeftUpIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "thread.nextWaiting",
+    run: async () => {
+      requestNextWaitingThread();
+    },
+  });
 
   if (activeThreadId && supportsThreadFind) {
     actionItems.push({
