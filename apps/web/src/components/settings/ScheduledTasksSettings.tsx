@@ -224,7 +224,7 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
 export function taskFactsLabel(task: ScheduledTask, threadTitle: string | null): string {
   const target =
     task.schedule.type === "idle" && task.schedule.allOpenThreads
-      ? `Up to ${task.schedule.maxParallel ?? 2} threads at work at once`
+      ? `At most ${task.schedule.maxParallel ?? 2} at work at once`
       : task.threadId === null
         ? "New thread each run"
         : threadTitle === null
@@ -1596,9 +1596,11 @@ function ScheduledTaskEditorDialog({
                     </span>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    Sends the prompt each time the chosen thread finishes and nothing waits on you.
+                    {draft.idleAllOpenThreads
+                      ? "Sends the prompt to open threads that stand still, most recently finished first, once per finished run. Runs count over all threads."
+                      : "Sends the prompt each time the chosen thread finishes and nothing waits on you. Needs a thread."}{" "}
                     The task turns itself off after the last run; saving or enabling it starts the
-                    count again. Needs a thread.
+                    count again.
                   </p>
                 </div>
               ) : (
