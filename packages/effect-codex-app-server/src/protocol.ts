@@ -20,6 +20,11 @@ const MAX_BUFFERED_RAW_MESSAGES = 32;
 // Codex diffs reach ~49M characters and grow when JSON-escaped; a line far
 // past this ceiling would exhaust the heap during join and parse.
 const MAX_INCOMING_MESSAGE_BYTES = 128 * 1024 * 1024;
+// Unfinished-message fragments shorter than this many UTF-16 code units are
+// joined into one entry once they add up to it, so a peer that sends one byte
+// per read holds one entry per block rather than one per byte. Longer reads,
+// such as 64 KiB pipe reads, are kept as they are without a copy.
+const REMAINDER_BLOCK_LENGTH = 1024;
 
 // UTF-8 size of `text.slice(start, end)` without encoding a copy. Text from a
 // streaming TextDecoder holds no lone surrogates, so each surrogate is one half
@@ -185,6 +190,8 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     const nextRequestId = yield* Ref.make(1);
     const maxIncomingMessageBytes = options.maxIncomingMessageBytes ?? MAX_INCOMING_MESSAGE_BYTES;
     const remainder: Array<string> = [];
+    const remainderTail: Array<string> = [];
+    let remainderTailLength = 0;
     let remainderBytes = 0;
     const terminationHandled = yield* Ref.make(false);
     const terminationFailure = yield* Ref.make(Option.none<CodexError.CodexAppServerError>());
@@ -416,6 +423,36 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       );
     };
 
+    // Fragments shorter than a block wait in the tail, which stays under a block
+    // of code units and so under that many entries. Packing joins the tail into
+    // one remainder entry, so a short fragment is copied here and once more when
+    // its line is joined, never again.
+    const packRemainderTail = () => {
+      if (remainderTail.length > 0) {
+        remainder.push(remainderTail.join(""));
+        remainderTail.length = 0;
+        remainderTailLength = 0;
+      }
+    };
+    const retainFragment = (fragment: string) => {
+      if (fragment.length >= REMAINDER_BLOCK_LENGTH) {
+        packRemainderTail();
+        remainder.push(fragment);
+        return;
+      }
+      remainderTail.push(fragment);
+      remainderTailLength += fragment.length;
+      if (remainderTailLength >= REMAINDER_BLOCK_LENGTH) {
+        packRemainderTail();
+      }
+    };
+    const clearRemainder = () => {
+      remainder.length = 0;
+      remainderTail.length = 0;
+      remainderTailLength = 0;
+      remainderBytes = 0;
+    };
+
     yield* options.stdio.stdin.pipe(
       Stream.interruptWhen(Deferred.await(terminationSignal)),
       Stream.decodeText(),
@@ -433,8 +470,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
               end > start &&
               bytes - (chunk.charCodeAt(end - 1) === 0x0d ? 1 : 0) > maxIncomingMessageBytes;
             if (overLimit) {
-              remainder.length = 0;
-              remainderBytes = 0;
+              clearRemainder();
               // Complete lines from earlier in this chunk are still handled, in order.
               return Effect.forEach(lines, handleLine, { discard: true }).pipe(
                 Effect.andThen(
@@ -451,14 +487,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             }
             if (newline === -1) {
               // Keep unfinished lines in fragments so each chunk is scanned only once.
-              remainder.push(chunk.slice(start));
+              retainFragment(chunk.slice(start));
               remainderBytes = bytes;
               break;
             }
+            packRemainderTail();
             remainder.push(chunk.slice(start, newline));
             lines.push(remainder.join("").replace(/\r$/, ""));
-            remainder.length = 0;
-            remainderBytes = 0;
+            clearRemainder();
             start = newline + 1;
           }
           return Effect.forEach(lines, handleLine, { discard: true });
@@ -479,13 +515,12 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
                   `Incoming message reached ${remainderBytes} bytes, over the ${maxIncomingMessageBytes}-byte limit.`,
                 ),
               });
-              remainder.length = 0;
-              remainderBytes = 0;
+              clearRemainder();
               return Effect.fail(error);
             }
+            packRemainderTail();
             const line = remainder.join("");
-            remainder.length = 0;
-            remainderBytes = 0;
+            clearRemainder();
             return handleLine(line);
           }).pipe(
             Effect.matchEffect({

@@ -41,6 +41,16 @@ const lineFramings = [
   { label: "CRLF split by an empty chunk", frame: (line: string) => [`${line}\r`, "", "\n"] },
 ];
 
+// REMAINDER_BLOCK_LENGTH in protocol.ts: unfinished fragments shorter than this
+// many UTF-16 code units are joined into one entry once they add up to it.
+const remainderBlockLength = 1024;
+
+// Text that differs by position, so a fragment kept out of order changes it.
+const positionalText = (length: number) =>
+  Array.from({ length }, (_, index) => index.toString(36))
+    .join("")
+    .slice(0, length);
+
 const makeLimitedProtocol = (maxIncomingMessageBytes: number) =>
   Effect.gen(function* () {
     const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -444,6 +454,126 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.deepEqual(notifications, []);
       assert.deepEqual(events, []);
     }),
+  );
+
+  it.effect.each([
+    { label: "LF after several blocks", length: 5 * remainderBlockLength + 300, terminator: "\n" },
+    {
+      label: "CRLF whose \\r completes a block",
+      length: 4 * remainderBlockLength - 1,
+      terminator: "\r\n",
+    },
+  ])(
+    "routes a message sent one byte per chunk at the byte limit with $label",
+    ({ length, terminator }) =>
+      Effect.gen(function* () {
+        const empty = encodeUnknownJsonString({ method: "x/bytes", params: { text: "" } });
+        const message = {
+          method: "x/bytes",
+          params: { text: positionalText(length - empty.length) },
+        };
+        const line = encodeUnknownJsonString(message);
+        assert.lengthOf(line, length);
+        const { input, termination, notifications } = yield* makeLimitedProtocol(length);
+
+        const bytes = encoder.encode(`${line}${terminator}`);
+        for (let offset = 0; offset < bytes.length; offset++) {
+          yield* Queue.offer(input, bytes.subarray(offset, offset + 1));
+        }
+        yield* Queue.end(input);
+
+        assert.instanceOf(
+          yield* Deferred.await(termination),
+          CodexError.CodexAppServerInputStreamEndedError,
+        );
+        assert.deepEqual(notifications, [message]);
+      }),
+  );
+
+  it.effect("keeps one-byte chunks in order around a chunk longer than a block", () =>
+    Effect.gen(function* () {
+      const message = {
+        method: "x/mixed",
+        params: { text: positionalText(4 * remainderBlockLength) },
+      };
+      const bytes = encodeJsonl(message);
+      const { input, termination, notifications } = yield* makeLimitedProtocol(bytes.length - 1);
+
+      const longEnd = 100 + 2 * remainderBlockLength;
+      const chunks = [
+        ...Array.from({ length: 100 }, (_, offset) => bytes.subarray(offset, offset + 1)),
+        bytes.subarray(100, longEnd),
+        ...Array.from({ length: 100 }, (_, index) =>
+          bytes.subarray(longEnd + index, longEnd + index + 1),
+        ),
+        bytes.subarray(longEnd + 100),
+      ];
+      for (const chunk of chunks) {
+        yield* Queue.offer(input, chunk);
+      }
+      yield* Queue.end(input);
+
+      assert.instanceOf(
+        yield* Deferred.await(termination),
+        CodexError.CodexAppServerInputStreamEndedError,
+      );
+      assert.deepEqual(notifications, [message]);
+    }),
+  );
+
+  it.effect(
+    "rejects an over-limit message sent one byte per chunk before its newline arrives",
+    () =>
+      Effect.gen(function* () {
+        const limit = 3 * remainderBlockLength + 5;
+        const { input, output, transport, termination, notifications, events } =
+          yield* makeLimitedProtocol(limit);
+        const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
+        yield* Queue.take(output);
+
+        const bytes = encoder.encode(`{"method":"x/huge","params":{"text":"${"x".repeat(limit)}`);
+        for (let offset = 0; offset < bytes.length; offset++) {
+          yield* Queue.offer(input, bytes.subarray(offset, offset + 1));
+        }
+
+        const error = yield* awaitMessageLimitFailure(termination);
+        const pendingError = yield* Fiber.join(pending).pipe(
+          Effect.match({
+            onFailure: (failure) => failure,
+            onSuccess: () => assert.fail("Expected the oversized message to fail the request"),
+          }),
+        );
+        assert.strictEqual(pendingError, error);
+        assert.deepEqual(notifications, []);
+        assert.deepEqual(events, []);
+      }),
+  );
+
+  it.effect.each([1, 7])(
+    "keeps multi-byte characters intact across remainder blocks with %i-byte input chunks",
+    (chunkSize) =>
+      Effect.gen(function* () {
+        const head = '{"method":"x/unicode","params":{"text":"';
+        // The emoji's surrogate pair straddles the first block edge; 3-byte
+        // characters fill the blocks after it.
+        const text = `${"é".repeat(remainderBlockLength - 1 - head.length)}🙂${"最".repeat(3 * remainderBlockLength)}`;
+        const message = { method: "x/unicode", params: { text } };
+        const line = encodeUnknownJsonString(message);
+        assert.strictEqual(line.indexOf("🙂"), remainderBlockLength - 1);
+        const bytes = encoder.encode(`${line}\n`);
+        const { input, termination, notifications } = yield* makeLimitedProtocol(bytes.length - 1);
+
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+          yield* Queue.offer(input, bytes.subarray(offset, offset + chunkSize));
+        }
+        yield* Queue.end(input);
+
+        assert.instanceOf(
+          yield* Deferred.await(termination),
+          CodexError.CodexAppServerInputStreamEndedError,
+        );
+        assert.deepEqual(notifications, [message]);
+      }),
   );
 
   it.effect("routes an unterminated final message at the byte limit when input ends", () =>
