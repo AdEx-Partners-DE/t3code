@@ -38,6 +38,7 @@ import {
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { UsageLimitsPooled } from "./UsageLimitsPooled";
+import { UsageLimitTrendSection } from "./UsageLimitTrendSection";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 
 const PACE: Record<LimitPace, { readonly label: string; readonly icon: typeof GaugeIcon }> = {
@@ -382,5 +383,17 @@ export function UsageLimitsSection({
       ];
     }),
   );
-  return <UsageLimitsPooled presentations={selected} now={now} cursorPrompt={cursorPrompt} />;
+  return (
+    <div className="flex flex-col gap-8">
+      <UsageLimitsPooled presentations={selected} now={now} cursorPrompt={cursorPrompt} />
+      {[...selected].map(([id, presentation]) => (
+        <UsageLimitTrendSection
+          key={id}
+          environmentId={id}
+          providers={presentation.serverConfig?.providers ?? []}
+          now={now}
+        />
+      ))}
+    </div>
+  );
 }

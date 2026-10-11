@@ -1099,6 +1099,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
     }),
+    usageLimitHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:usage-limit-history",
+      tag: WS_METHODS.serverGetUsageLimitHistory,
+      staleTimeMs: 60_000,
+    }),
     // A cold transcript scan is measured in seconds, so keep the result around
     // long enough that switching windows or re-rendering does not rescan.
     // Slow sources answer from cache first: that summary stays on screen, with
