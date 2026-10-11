@@ -16,6 +16,7 @@ const OpenCodeTextGenerationOperation = Schema.Literals([
   "generateBranchName",
   "generateThreadTitle",
   "generateThreadChecklist",
+  "generateReviewGuide",
 ]);
 
 const openCodeTextGenerationErrorContext = {
@@ -321,5 +322,8 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
     return yield* TextGenerationOperations.decodeJsonReply(input, "OpenCode", rawOutput);
   });
 
-  return TextGenerationOperations.fromRunner("OpenCodeTextGeneration", runOpenCodeJson);
+  return TextGenerationOperations.fromRunner(
+    "OpenCodeTextGeneration",
+    TextGenerationOperations.withoutInvestigation("OpenCode", runOpenCodeJson),
+  );
 });
