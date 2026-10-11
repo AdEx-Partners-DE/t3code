@@ -2415,6 +2415,81 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
+    it.effect("imports sessions from linked worktrees of the project with their branch", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
+        const codexHomePath = yield* makeTempDir("t3code-codex-home-");
+        const configBaseDir = yield* makeTempDir("t3code-scanner-base-");
+        const repo = yield* makeTempDir("t3code-workspace-repo-");
+        const otherRepo = yield* makeTempDir("t3code-workspace-other-");
+
+        const addWorktree = Effect.fn("addWorktree")(function* (input: {
+          readonly repo: string;
+          readonly directory: string;
+          readonly name: string;
+        }) {
+          const gitDir = path.join(input.repo, ".git", "worktrees", input.name);
+          yield* fileSystem.makeDirectory(gitDir, { recursive: true });
+          yield* fileSystem.makeDirectory(input.directory, { recursive: true });
+          yield* fileSystem.writeFileString(path.join(gitDir, "commondir"), "../..\n");
+          yield* fileSystem.writeFileString(
+            path.join(gitDir, "HEAD"),
+            `ref: refs/heads/${input.name}\n`,
+          );
+          yield* fileSystem.writeFileString(
+            path.join(input.directory, ".git"),
+            `gitdir: ${gitDir}\n`,
+          );
+        });
+        const worktree = path.join(repo, ".claude", "worktrees", "feature");
+        const managedWorktree = path.join(configBaseDir, "worktrees", "repo", "managed");
+        const otherWorktree = path.join(otherRepo, "elsewhere");
+        yield* addWorktree({ repo, directory: worktree, name: "feature" });
+        yield* addWorktree({ repo, directory: managedWorktree, name: "managed" });
+        yield* addWorktree({ repo: otherRepo, directory: otherWorktree, name: "elsewhere" });
+
+        for (const [index, [sessionId, cwd]] of [
+          ["root-session", repo],
+          ["worktree-session", worktree],
+          ["managed-session", managedWorktree],
+          ["other-session", otherWorktree],
+        ].entries()) {
+          yield* writeTranscript({
+            filePath: path.join(claudeHomePath, "projects", `-slug-${index}`, `${sessionId}.jsonl`),
+            contents: `${JSON.stringify({
+              type: "user",
+              cwd,
+              sessionId,
+              message: { role: "user", content: "Fix the project" },
+            })}\n`,
+            mtimeMs: nowMs - (index + 1) * 60 * 1000,
+          });
+        }
+
+        const outcomes = yield* runRecentThreadOutcomes({
+          claudeHomePath,
+          codexHomePath,
+          configBaseDir,
+          workspaceRoot: repo,
+        });
+
+        expect(
+          outcomes.flatMap((outcome) =>
+            outcome._tag === "Importable"
+              ? [{ sessionId: outcome.thread.providerSessionId, worktree: outcome.worktree }]
+              : [],
+          ),
+        ).toEqual([
+          { sessionId: "root-session", worktree: null },
+          { sessionId: "worktree-session", worktree: { path: worktree, branch: "feature" } },
+        ]);
+      }),
+    );
+
     it.effect("uses one deterministic provider instance for a shared session home", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
