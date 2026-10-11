@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import {
   isAtomCommandInterrupted,
@@ -56,6 +57,74 @@ export const CHECKLIST_STATUS_LABEL: Record<ThreadChecklistItem["status"], strin
 /** An item as plain text: its line and, if it has one, the note below. */
 export function checklistItemText(item: ThreadChecklistItem): string {
   return item.note ? `${item.text}\n${item.note}` : item.text;
+}
+
+/** Quotes the item into the message being written in that thread, so the user only adds what to do with it. */
+export function quoteChecklistItem(threadRef: ScopedThreadRef, item: ThreadChecklistItem): void {
+  const store = useComposerDraftStore.getState();
+  const key = resolveComposerDraftKey(store, threadRef);
+  const existing = (key ? store.draftsByThreadKey[key]?.prompt : undefined) ?? "";
+  const quote = checklistItemText(item)
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  const before = existing.trim() === "" ? "" : `${existing.trimEnd()}\n\n`;
+  store.setPrompt(threadRef, `${before}${quote}\n\n`);
+}
+
+/** A checklist item as a row that opens what can be done with it. */
+export function ChecklistItemMenu(props: {
+  readonly item: ThreadChecklistItem;
+  readonly showLabel: string;
+  readonly onShow: () => void;
+  readonly takeUpLabel: string;
+  readonly onTakeUp: () => void;
+}) {
+  const { item } = props;
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <button
+            type="button"
+            className="-mx-1 flex w-[calc(100%+0.5rem)] cursor-pointer gap-1.5 rounded-sm px-1 py-0.5 text-left hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset data-popup-open:bg-accent"
+          />
+        }
+      >
+        <ChecklistStatusIcon status={item.status} />
+        <span className="min-w-0">
+          <span
+            className={cn(
+              "block break-words",
+              item.status === "done" && "text-muted-foreground",
+              item.status === "attention" && "font-medium",
+            )}
+          >
+            {item.text}
+          </span>
+          {item.note ? (
+            <span className="block break-words text-2xs text-muted-foreground">{item.note}</span>
+          ) : null}
+        </span>
+      </MenuTrigger>
+      <MenuPopup align="start">
+        <MenuItem onClick={props.onShow}>
+          <LocateFixedIcon />
+          {props.showLabel}
+        </MenuItem>
+        <MenuItem onClick={props.onTakeUp}>
+          <CornerDownLeftIcon />
+          {props.takeUpLabel}
+        </MenuItem>
+        <MenuItem
+          onClick={() => void writeTextToClipboard(checklistItemText(item), "checklist item")}
+        >
+          <CopyIcon />
+          Copy
+        </MenuItem>
+      </MenuPopup>
+    </Menu>
+  );
 }
 
 export function ChecklistStatusIcon({
@@ -146,25 +215,17 @@ export function ThreadChecklistPanel(props: {
     toastManager.add(
       stackedThreadToast({
         type: "info",
-        title: "That part of the thread is not loaded",
-        description: "Scroll up to load earlier turns, then try again.",
+        title:
+          item.messageId === undefined
+            ? "No place in the thread recorded for this item"
+            : "That part of the thread is not loaded",
+        description:
+          item.messageId === undefined
+            ? "Update the checklist once; items written from now on know their place."
+            : "Scroll up to load earlier turns, then try again.",
       }),
     );
   };
-  // Quotes the point into the message being written, so the user only adds what to do with it.
-  const takeUp = (item: ThreadChecklistItem) => {
-    const threadRef = scopeThreadRef(environmentId, threadId);
-    const store = useComposerDraftStore.getState();
-    const key = resolveComposerDraftKey(store, threadRef);
-    const existing = (key ? store.draftsByThreadKey[key]?.prompt : undefined) ?? "";
-    const quote = checklistItemText(item)
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n");
-    const before = existing.trim() === "" ? "" : `${existing.trimEnd()}\n\n`;
-    store.setPrompt(threadRef, `${before}${quote}\n\n`);
-  };
-
   const groups = CHECKLIST_STATUS_ORDER.map((status) => ({
     status,
     items: (checklist?.items ?? []).filter((item) => item.status === status),
@@ -246,57 +307,15 @@ export function ThreadChecklistPanel(props: {
               <ul className="flex flex-col gap-1">
                 {shown.map((item) => (
                   <li key={`${item.status}:${item.text}`}>
-                    <Menu>
-                      <MenuTrigger
-                        render={
-                          <button
-                            type="button"
-                            className="-mx-1 flex w-[calc(100%+0.5rem)] cursor-pointer gap-1.5 rounded-sm px-1 py-0.5 text-left hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset data-popup-open:bg-accent"
-                          />
-                        }
-                      >
-                        <ChecklistStatusIcon status={item.status} />
-                        <span className="min-w-0">
-                          <span
-                            className={cn(
-                              "block break-words",
-                              item.status === "done" && "text-muted-foreground",
-                              item.status === "attention" && "font-medium",
-                            )}
-                          >
-                            {item.text}
-                          </span>
-                          {item.note ? (
-                            <span className="block break-words text-2xs text-muted-foreground">
-                              {item.note}
-                            </span>
-                          ) : null}
-                        </span>
-                      </MenuTrigger>
-                      <MenuPopup align="start">
-                        <MenuItem
-                          disabled={item.messageId === undefined}
-                          onClick={() => showInThread(item)}
-                        >
-                          <LocateFixedIcon />
-                          {item.messageId === undefined
-                            ? "No place in the thread recorded"
-                            : "Show in thread"}
-                        </MenuItem>
-                        <MenuItem onClick={() => takeUp(item)}>
-                          <CornerDownLeftIcon />
-                          Take up in the composer
-                        </MenuItem>
-                        <MenuItem
-                          onClick={() =>
-                            void writeTextToClipboard(checklistItemText(item), "checklist item")
-                          }
-                        >
-                          <CopyIcon />
-                          Copy
-                        </MenuItem>
-                      </MenuPopup>
-                    </Menu>
+                    <ChecklistItemMenu
+                      item={item}
+                      showLabel="Show in thread"
+                      onShow={() => showInThread(item)}
+                      takeUpLabel="Take up in the composer"
+                      onTakeUp={() =>
+                        quoteChecklistItem(scopeThreadRef(environmentId, threadId), item)
+                      }
+                    />
                   </li>
                 ))}
               </ul>

@@ -328,6 +328,7 @@ const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new M
 // Collapsed shelves share one empty list so a route change alone does not
 // give the sidebar list a new identity.
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
+const NO_THREAD_KEYS: ReadonlySet<string> = new Set();
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -2929,8 +2930,8 @@ export default function Sidebar() {
   } | null>(null);
   const {
     pinnedThreads: allPinnedThreads,
-    draggableThreadKeys,
-    activeReorderableThreadKeys,
+    draggableThreadKeys: allDraggableThreadKeys,
+    activeReorderableThreadKeys: allActiveReorderableThreadKeys,
     activeThreads: allActiveThreads,
     workingThreads: allWorkingThreads,
     snoozedThreads,
@@ -3064,6 +3065,11 @@ export default function Sidebar() {
   // The cockpit can narrow the list to one group of open threads. Not kept
   // across reloads: a forgotten filter would look like missing threads.
   const [openThreadFilter, setOpenThreadFilter] = useState<OpenThreadFilter | null>(null);
+  // A filtered list hides the neighbours a dropped row would be ordered
+  // against, so rows cannot be dragged while a filter is on.
+  const draggableThreadKeys = openThreadFilter === null ? allDraggableThreadKeys : NO_THREAD_KEYS;
+  const activeReorderableThreadKeys =
+    openThreadFilter === null ? allActiveReorderableThreadKeys : NO_THREAD_KEYS;
   const pinnedThreads = useMemo(
     () => filterOpenThreads(allPinnedThreads, openThreadFilter),
     [allPinnedThreads, openThreadFilter],
@@ -3081,15 +3087,16 @@ export default function Sidebar() {
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
+  // Search looks through every thread, whatever the cockpit filter shows.
   const searchableThreads = useMemo(
     () => [
-      ...pinnedThreads,
-      ...activeThreads,
-      ...workingThreads,
+      ...allPinnedThreads,
+      ...allActiveThreads,
+      ...allWorkingThreads,
       ...snoozedThreads,
       ...settledThreads,
     ],
-    [activeThreads, pinnedThreads, settledThreads, snoozedThreads, workingThreads],
+    [allActiveThreads, allPinnedThreads, settledThreads, snoozedThreads, allWorkingThreads],
   );
   const searchEnvironmentIds = useConnectedEnvironmentIds();
   // useThreadSearch owns the debounce and the two-character floor.

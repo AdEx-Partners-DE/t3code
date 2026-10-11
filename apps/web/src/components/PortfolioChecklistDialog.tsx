@@ -1,16 +1,18 @@
 import type { EnvironmentId, ThreadChecklistItem, ThreadId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
-import { cn } from "../lib/utils";
 import {
   CHECKLIST_STATUS_LABEL,
   CHECKLIST_STATUS_ORDER,
-  ChecklistStatusIcon,
+  ChecklistItemMenu,
+  quoteChecklistItem,
 } from "./chat/ThreadChecklistPanel";
+import { revealInTimelineWhenLoaded } from "./chat/timelineReveal";
 import { relativeLabel } from "./settings/ScheduledTasksSettings";
 import { Button } from "./ui/button";
 import {
@@ -193,23 +195,25 @@ export function PortfolioChecklistDialog({
                   </div>
                   <ul className="mt-2 flex flex-col gap-1 text-xs">
                     {row.items.map((item) => (
-                      <li key={item.text} className="flex gap-1.5">
-                        <ChecklistStatusIcon status={item.status} />
-                        <div className="min-w-0">
-                          <div
-                            className={cn(
-                              "break-words",
-                              item.status === "done" && "text-muted-foreground",
-                            )}
-                          >
-                            {item.text}
-                          </div>
-                          {item.note ? (
-                            <div className="break-words text-2xs text-muted-foreground">
-                              {item.note}
-                            </div>
-                          ) : null}
-                        </div>
+                      <li key={item.text}>
+                        <ChecklistItemMenu
+                          item={item}
+                          showLabel="Open the thread at this point"
+                          onShow={() => {
+                            openThread(row.thread);
+                            if (item.messageId !== undefined) {
+                              revealInTimelineWhenLoaded(item.messageId);
+                            }
+                          }}
+                          takeUpLabel="Take up in that thread's composer"
+                          onTakeUp={() => {
+                            quoteChecklistItem(
+                              scopeThreadRef(row.thread.environmentId, row.thread.id),
+                              item,
+                            );
+                            openThread(row.thread);
+                          }}
+                        />
                       </li>
                     ))}
                   </ul>

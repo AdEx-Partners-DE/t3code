@@ -957,6 +957,15 @@ const ConversationTimeline = memo(function ConversationTimeline({
         onManualNavigation();
         // A jump, not a glide: the target can be far away.
         void listRef.current?.scrollToIndex({ index, animated: false, viewOffset: 24 });
+        // The list places a far row by estimated heights. Once the row is in
+        // the page, put it where it was meant to be.
+        window.setTimeout(() => {
+          const scroller = listRef.current?.getScrollableNode();
+          const target = scroller?.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+          if (!scroller || !target) return;
+          scroller.scrollTop +=
+            target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 24;
+        }, 350);
         return true;
       }),
     [listRef, onManualNavigation, rows],
