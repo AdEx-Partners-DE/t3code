@@ -355,6 +355,10 @@
       "types": "./src/usageLimitSwitch.ts",
       "import": "./src/usageLimitSwitch.ts"
     },
+    "./modelOverride": {
+      "types": "./src/modelOverride.ts",
+      "import": "./src/modelOverride.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"

@@ -1694,6 +1694,24 @@ const WsOrchestrationV2GetTurnItemRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.get
   error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
 });
 
+const WsOrchestrationV2OverrideOpenThreadModelsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels,
+  {
+    payload: OrchestrationV2RpcSchemas.overrideOpenThreadModels.input,
+    success: OrchestrationV2RpcSchemas.overrideOpenThreadModels.output,
+    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
+  },
+);
+
+const WsOrchestrationV2RestoreOpenThreadModelsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.restoreOpenThreadModels,
+  {
+    payload: OrchestrationV2RpcSchemas.restoreOpenThreadModels.input,
+    success: OrchestrationV2RpcSchemas.restoreOpenThreadModels.output,
+    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2ClearAllQueuesRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.clearAllQueues, {
   payload: OrchestrationV2RpcSchemas.clearAllQueues.input,
   success: OrchestrationV2RpcSchemas.clearAllQueues.output,
@@ -2067,6 +2085,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2ClearAllQueuesRpc,
+  WsOrchestrationV2OverrideOpenThreadModelsRpc,
+  WsOrchestrationV2RestoreOpenThreadModelsRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,

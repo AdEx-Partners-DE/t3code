@@ -3259,6 +3259,8 @@ export type OrchestrationV2ServerCommand = OrchestrationV2Command | Orchestratio
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   clearAllQueues: "orchestration.clearAllQueues",
+  overrideOpenThreadModels: "orchestration.overrideOpenThreadModels",
+  restoreOpenThreadModels: "orchestration.restoreOpenThreadModels",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
@@ -3789,6 +3791,25 @@ export const OrchestrationV2RpcSchemas = {
   launchThread: {
     input: OrchestrationV2ThreadLaunchInput,
     output: OrchestrationV2ThreadLaunchResult,
+  },
+  /**
+   * Sets a model, a thinking level, or both on every open thread. The change
+   * applies to each thread's next turn. `threads` is how many changed.
+   */
+  overrideOpenThreadModels: {
+    input: Schema.Struct({
+      commandId: CommandId,
+      model: Schema.optional(
+        Schema.Struct({ instanceId: ProviderInstanceId, model: TrimmedNonEmptyString }),
+      ),
+      effort: Schema.optional(TrimmedNonEmptyString),
+    }),
+    output: Schema.Struct({ threads: NonNegativeInt }),
+  },
+  /** Puts back the selections the last overrides replaced. */
+  restoreOpenThreadModels: {
+    input: Schema.Struct({ commandId: CommandId }),
+    output: Schema.Struct({ threads: NonNegativeInt }),
   },
   clearAllQueues: {
     input: Schema.Struct({ commandId: CommandId }),

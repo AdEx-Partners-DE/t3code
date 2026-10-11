@@ -87,6 +87,7 @@ import {
 } from "./useScopedSettings";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import { ClearAllQueuesButton } from "./ClearAllQueuesButton";
+import { OpenThreadModelOverride } from "./OpenThreadModelOverride";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
@@ -3134,6 +3135,13 @@ export function GeneralSettingsPanel() {
           {...searchableSetting("clear-all-queues")}
           description="Remove every message waiting in a thread's queue. Runs under way go on. This cannot be undone."
           control={<ClearAllQueuesButton />}
+        />
+
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("model-for-all-open-threads")}
+          description="Move every open thread to one model, one thinking level, or both. Each thread uses it from its next message, with a handoff where the account changes. Put back restores what the threads had."
+          control={<OpenThreadModelOverride />}
         />
 
         <SettingsRow

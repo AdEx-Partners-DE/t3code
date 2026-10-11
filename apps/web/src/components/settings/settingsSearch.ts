@@ -509,6 +509,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["queue hold stop waiting messages global pause queued automation"],
   },
   {
+    id: "model-for-all-open-threads",
+    title: "Model for all open threads",
+    to: "/settings/general",
+    searchTerms: [
+      "global override model thinking effort reasoning all threads sessions switch bulk",
+    ],
+  },
+  {
     id: "clear-all-queues",
     title: "Clear all queues",
     to: "/settings/general",

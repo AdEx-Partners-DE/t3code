@@ -984,6 +984,16 @@ export function createServerEnvironmentAtoms<R, E>(
 
   return {
     configValueAtom,
+    overrideOpenThreadModels: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:override-open-thread-models",
+      tag: ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
+    restoreOpenThreadModels: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:restore-open-thread-models",
+      tag: ORCHESTRATION_V2_WS_METHODS.restoreOpenThreadModels,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     clearAllQueues: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:clear-all-queues",
       tag: ORCHESTRATION_V2_WS_METHODS.clearAllQueues,

@@ -247,6 +247,7 @@ import {
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitHistory from "./usage/UsageLimitHistory.ts";
+import * as OpenThreadModelOverride from "./orchestration-v2/OpenThreadModelOverride.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1248,6 +1249,7 @@ const layerWsRpc = (
             );
       const usage = yield* UsageService.UsageService;
       const usageLimitHistory = yield* UsageLimitHistory.UsageLimitHistory;
+      const openThreadModelOverride = yield* OpenThreadModelOverride.make;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
@@ -1947,6 +1949,35 @@ const layerWsRpc = (
                       }),
                   ),
                 ),
+            ),
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels]: (input) =>
+          openThreadModelOverride
+            .apply({
+              commandId: input.commandId,
+              override: { model: input.model, effort: input.effort },
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2DispatchCommandError({
+                    commandId: input.commandId,
+                    commandType: "thread.model-selection.set",
+                    message: "Failed to set the model on the open threads",
+                    cause,
+                  }),
+              ),
+            ),
+        [ORCHESTRATION_V2_WS_METHODS.restoreOpenThreadModels]: (input) =>
+          openThreadModelOverride.restore(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2DispatchCommandError({
+                  commandId: input.commandId,
+                  commandType: "thread.model-selection.set",
+                  message: "Failed to restore the models of the open threads",
+                  cause,
+                }),
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.clearAllQueues]: (input) =>
