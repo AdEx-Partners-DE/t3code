@@ -372,6 +372,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["tint color row thread sidebar project highlight"],
   },
   {
+    id: "next-thread-after-sending",
+    title: "Open the next thread that needs you after sending",
+    to: "/settings/general",
+    searchTerms: ["advance triage inbox waiting approval jump send next thread"],
+  },
+  {
     id: "auto-settle-inactive-threads",
     title: "Auto-settle inactive threads",
     to: "/settings/general",

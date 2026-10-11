@@ -591,6 +591,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarProjectTintEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectTintEnabled
         ? ["Project colors"]
         : []),
+      ...(settings.openNextWaitingThreadAfterSend !==
+      DEFAULT_UNIFIED_SETTINGS.openNextWaitingThreadAfterSend
+        ? ["Next thread after sending"]
+        : []),
       ...(settings.sidebarAutoSettleAfterDays !==
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
@@ -729,6 +733,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarWorkingShelfEnabled,
       settings.sidebarInboxOrder,
       settings.sidebarProjectTintEnabled,
+      settings.openNextWaitingThreadAfterSend,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
@@ -831,6 +836,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
       sidebarInboxOrder: DEFAULT_UNIFIED_SETTINGS.sidebarInboxOrder,
       sidebarProjectTintEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarProjectTintEnabled,
+      openNextWaitingThreadAfterSend: DEFAULT_UNIFIED_SETTINGS.openNextWaitingThreadAfterSend,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
@@ -2476,6 +2482,34 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarProjectTintEnabled: Boolean(checked) })
               }
               aria-label="Project colors in the sidebar"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("next-thread-after-sending")}
+          description="When your message starts a turn, open the thread that needs you most. Stays put when nothing waits."
+          resetAction={
+            settings.openNextWaitingThreadAfterSend !==
+            DEFAULT_UNIFIED_SETTINGS.openNextWaitingThreadAfterSend ? (
+              <SettingResetButton
+                label="next thread after sending"
+                onClick={() =>
+                  updateSettings({
+                    openNextWaitingThreadAfterSend:
+                      DEFAULT_UNIFIED_SETTINGS.openNextWaitingThreadAfterSend,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.openNextWaitingThreadAfterSend}
+              onCheckedChange={(checked) =>
+                updateSettings({ openNextWaitingThreadAfterSend: Boolean(checked) })
+              }
+              aria-label="Open the next thread that needs you after sending"
             />
           }
         />

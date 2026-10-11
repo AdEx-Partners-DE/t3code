@@ -318,6 +318,7 @@ import {
 } from "lucide-react";
 import { cn, randomUUID } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
+import { requestNextWaitingThread } from "./threadNextWaitingBus";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import {
   decodeProjectScriptKeybindingRule,
@@ -342,6 +343,7 @@ import {
   sortProviderInstanceEntries,
 } from "../providerInstances";
 import {
+  getClientSettings,
   useClientSettings,
   useClientSettingsHydrated,
   useEnvironmentSettings,
@@ -10194,6 +10196,14 @@ export default function ChatView(props: ChatViewProps) {
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
       );
       resetLocalDispatch();
+    } else if (
+      getClientSettings().openNextWaitingThreadAfterSend &&
+      submissionIntent === "foreground" &&
+      !isLocalDraftThread &&
+      currentRouteThreadKeyRef.current === routeThreadKey
+    ) {
+      // This thread is busy now; move on to whatever else waits, or stay.
+      requestNextWaitingThread({ quiet: true });
     }
   };
 
