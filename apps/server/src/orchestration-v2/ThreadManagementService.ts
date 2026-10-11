@@ -47,6 +47,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { limitAccountSwitchSelection } from "./LimitAccountSwitch.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import { recordDecision } from "../decisionLog.ts";
 import { startsWithoutTheUser } from "./QueuePauseHold.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
@@ -621,6 +622,15 @@ const make = Effect.gen(function* () {
         from: (command.modelSelection ?? thread.modelSelection).instanceId,
         to: selection.instanceId,
       });
+      yield* recordDecision({
+        kind: "limit-account-switch",
+        threadId: command.threadId,
+        outcome: "switched",
+        facts: {
+          from: (command.modelSelection ?? thread.modelSelection).instanceId,
+          to: selection.instanceId,
+        },
+      });
       return { ...command, modelSelection: selection };
     },
   );
@@ -640,7 +650,20 @@ const make = Effect.gen(function* () {
     !startsWithoutTheUser(command)
       ? Effect.succeed(command)
       : allQueuesPaused.pipe(
-          Effect.map((paused) => (paused ? { ...command, heldByQueuePause: true } : command)),
+          Effect.flatMap((paused) =>
+            paused
+              ? recordDecision({
+                  kind: "queue-pause-hold",
+                  threadId: command.threadId,
+                  outcome: "held",
+                  facts: {
+                    createdBy: command.createdBy,
+                    creationSource: command.creationSource,
+                    scheduledTaskId: command.scheduledTaskId ?? null,
+                  },
+                }).pipe(Effect.as({ ...command, heldByQueuePause: true }))
+              : Effect.succeed(command),
+          ),
         );
 
   const dispatch: ThreadManagementServiceShape["dispatch"] = (command) =>

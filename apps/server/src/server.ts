@@ -86,6 +86,7 @@ import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegi
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
 import * as UsageLimitHistory from "./usage/UsageLimitHistory.ts";
+import * as DecisionLog from "./decisionLog.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
@@ -595,6 +596,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       EnvironmentTheme.layer,
       UsageLimitSources.layer,
       UsageLimitHistory.layer,
+      DecisionLog.layer,
     ),
   ),
   Layer.provideMerge(ProviderRegistry.layer),

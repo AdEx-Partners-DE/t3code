@@ -23,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
+import { recordDecision } from "../decisionLog.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { isNativeMaintenanceCommand } from "./Orchestrator.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -141,6 +142,19 @@ export const layer = Layer.effectDiscard(
         { messageRunIds: [input.runId], turnItemRunIds: [input.runId], turnItemTypes: ["error"] },
       );
       const command = instantFailureRetryCommand(projection, input.runId);
+      yield* recordDecision({
+        kind: "start-failure-retry",
+        threadId: input.threadId,
+        outcome: command === null ? "not-retried" : "retried",
+        facts: {
+          runId: input.runId,
+          failures: projection.turnItems.flatMap((item) =>
+            item.type === "error"
+              ? [`${item.failure.class}: ${item.failure.message.slice(0, 160)}`]
+              : [],
+          ),
+        },
+      });
       if (command === null) return;
       yield* Effect.logInfo("Retrying a turn that failed to start", input);
       yield* threads.dispatch(command);

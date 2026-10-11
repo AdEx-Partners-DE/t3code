@@ -21,6 +21,7 @@ import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { recordDecision } from "../decisionLog.ts";
 import { restartContinuationRun } from "./RestartContinuation.ts";
 import {
   endOrphanedNativeSubagent,
@@ -648,6 +649,43 @@ export const make = Effect.gen(function* () {
         continueAfterRestart && trigger === "startup"
           ? (handoffContinuation ?? restartContinuationRun(projection, now))
           : undefined;
+      // Why a cut turn was or was not continued is asked days later; the
+      // trace log is long gone by then. Record the facts, not a verdict, so the
+      // conditions in restartContinuationRun are not written down twice.
+      if (trigger === "startup" && runs.length > 0) {
+        const cut = runs.find((run) => run.status === "running") ?? runs[0]!;
+        const providerThread = projection.providerThreads.find(
+          (candidate) => candidate.id === cut.providerThreadId,
+        );
+        const session = projection.providerSessions.find(
+          (candidate) => candidate.id === providerThread?.providerSessionId,
+        );
+        yield* recordDecision({
+          kind: "restart-continuation",
+          threadId: projection.thread.id,
+          outcome: continuationRun ? "continued" : "not-continued",
+          facts: {
+            settingOn: continueAfterRestart,
+            runId: cut.id,
+            runStatus: cut.status,
+            cutRuns: runs.length,
+            queuedRuns: queuedRuns.length,
+            threadInstance: projection.thread.providerInstanceId,
+            runInstance: cut.providerInstanceId,
+            providerThreadStatus: providerThread?.status ?? null,
+            nativeRefStrength: providerThread?.nativeThreadRef?.strength ?? null,
+            sessionStatus: session?.status ?? null,
+            providerTurns: projection.providerTurns
+              .filter((turn) => turn.runAttemptId === cut.activeAttemptId)
+              .map((turn) => turn.status),
+            pendingRequests: projection.runtimeRequests.filter(
+              (request) => request.status === "pending",
+            ).length,
+            settledOverride: projection.thread.settledOverride,
+            snoozed: projection.thread.snoozedUntil != null,
+          },
+        });
+      }
       const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
         ? [
             {
