@@ -138,6 +138,11 @@ Right-click a thread and choose **Project priority** to rank its project **High*
 Priority decides the order inside each of those groups and puts high-priority projects first in
 **By project**. It never moves a thread ahead of one that is waiting on you.
 
+Press `mod+shift+u` to open the thread that needs you most: one waiting on an approval or an
+answer first, longest wait first, then failed threads, threads stopped on a usage limit, and
+finished work you have not read. Press it again to move on to the next one. Rebind
+`thread.nextWaiting` in **Settings → Keybindings**.
+
 While either order is on you cannot drag threads within the active list; your saved order
 returns with **Manual**. A row that waits on you shows for how long.
 

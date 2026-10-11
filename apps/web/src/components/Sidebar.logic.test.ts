@@ -35,6 +35,7 @@ import {
   resolveSidebarThreadSection,
   resolveSidebarRowAccessibility,
   orderInboxThreads,
+  resolveNextWaitingThread,
   resolveSidebarThreadStatus,
   resolveSidebarV2TopStatus,
   resolveThreadLastVisitedAt,
@@ -947,6 +948,16 @@ describe("orderInboxThreads", () => {
       "working-a",
     ]);
     expect(ids("status", { "env:beta": "low" })[0]).toBe("question-a");
+  });
+
+  it("picks the thread that waits longest, skips the open one, and stops at read work", () => {
+    const next = (currentId: string | null, list = threads) =>
+      resolveNextWaitingThread(list, {}, (entry) => entry.id === currentId)?.id ?? null;
+    expect(next(null)).toBe("approval-b");
+    expect(next("approval-b")).toBe("question-a");
+    expect(next("question-a")).toBe("approval-b");
+    expect(next(null, [threads[0]!, threads[1]!])).toBeNull();
+    expect(next("unread-a", [threads[1]!, threads[3]!])).toBeNull();
   });
 
   it("keeps each project together, high-priority projects first", () => {
