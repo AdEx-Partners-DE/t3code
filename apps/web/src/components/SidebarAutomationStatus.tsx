@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { useEnvironmentQuery } from "../state/query";
+import { isTaskHeldByPause } from "@t3tools/contracts";
 import { serverEnvironment } from "../state/server";
 import { relativeLabel } from "./settings/ScheduledTasksSettings";
 
@@ -29,12 +30,24 @@ export function SidebarAutomationStatus({
     environmentId,
     (settings) => settings.threadQueuesPaused,
   );
-  const enabledCount = tasks?.filter((task) => task.enabled).length ?? 0;
+  const pauseExemptIds = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.scheduledTasksPauseExemptIds,
+  );
+  const enabled = tasks?.filter((task) => task.enabled) ?? [];
+  const enabledCount = enabled.length;
+  const held = enabled.filter((task) => isTaskHeldByPause(task.id, tasksPaused, pauseExemptIds));
+  const running = enabledCount - held.length;
   // How long the pause has kept work back: the run that has been due longest.
   useNowMinute();
   const oldestDue = tasksPaused
     ? (tasks ?? [])
-        .filter((task) => task.enabled && task.nextRunAt !== null)
+        .filter(
+          (task) =>
+            task.enabled &&
+            task.nextRunAt !== null &&
+            isTaskHeldByPause(task.id, tasksPaused, pauseExemptIds),
+        )
         .map((task) => task.nextRunAt!)
         .filter((at) => Date.parse(at) <= Date.now())
         .toSorted()[0]
@@ -43,8 +56,8 @@ export function SidebarAutomationStatus({
   const parts = [
     ...(enabledCount > 0 || tasksPaused
       ? [
-          tasksPaused
-            ? `${enabledCount} ${enabledCount === 1 ? "automation is" : "automations are"} on but held: all tasks paused${oldestDue === undefined ? "" : `, a run has been due since ${relativeLabel(oldestDue)}`}`
+          tasksPaused && held.length > 0
+            ? `${held.length} ${held.length === 1 ? "automation" : "automations"} paused${oldestDue === undefined ? "" : `, a run has been due since ${relativeLabel(oldestDue)}`}${running > 0 ? ` · ${running} on` : ""}`
             : `${enabledCount} ${enabledCount === 1 ? "automation" : "automations"} on`,
         ]
       : []),

@@ -18,6 +18,7 @@ import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
 import { relativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { isTaskHeldByPause } from "@t3tools/contracts";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -67,6 +68,12 @@ export function ThreadAutomationsPanel(props: {
     props.environmentId,
     (settings) => settings.scheduledTasksPaused,
   );
+  const pauseExemptIds = useEnvironmentSettings(
+    props.environmentId,
+    (settings) => settings.scheduledTasksPauseExemptIds,
+  );
+  const isHeld = (task: ScheduledTask) =>
+    task.enabled && isTaskHeldByPause(task.id, allTasksPaused, pauseExemptIds);
   const updateEnvironmentSettings = useUpdateEnvironmentSettings(props.environmentId);
 
   const boundTasks = (tasksQuery.data?.tasks ?? []).filter(
@@ -158,7 +165,7 @@ export function ThreadAutomationsPanel(props: {
         </p>
       ) : null}
 
-      {allTasksPaused && boundTasks.some((task) => task.enabled) ? (
+      {boundTasks.some(isHeld) ? (
         <div
           className={cn(
             "flex items-center justify-between gap-2 py-1 text-2xs text-warning",
@@ -166,7 +173,7 @@ export function ThreadAutomationsPanel(props: {
           )}
           data-testid="thread-automations-paused"
         >
-          <span>All tasks are paused. Nothing here runs on its own.</span>
+          <span>Paused by "Pause all tasks". Switch a task on to resume just that one.</span>
           <ThreadDetailsControl
             size="xs"
             variant="ghost"
@@ -205,10 +212,10 @@ export function ThreadAutomationsPanel(props: {
                 {scheduleLabel(task.schedule)}
                 {!task.enabled
                   ? " · off"
-                  : allTasksPaused
+                  : isHeld(task)
                     ? task.nextRunAt !== null && Date.parse(task.nextRunAt) <= Date.now()
-                      ? ` · held, all tasks are paused, due since ${relativeLabel(task.nextRunAt)}`
-                      : " · held, all tasks are paused"
+                      ? ` · paused with all tasks, due since ${relativeLabel(task.nextRunAt)}`
+                      : " · paused with all tasks"
                     : task.nextRunAt !== null
                       ? ` · next ${relativeLabel(task.nextRunAt)}`
                       : ""}
@@ -258,9 +265,13 @@ export function ThreadAutomationsPanel(props: {
               </Tooltip>
             )}
             <Switch
-              checked={task.enabled}
+              // The switch shows what the scheduler does: a task held by
+              // "Pause all tasks" reads off, and switching it on resumes it.
+              checked={task.enabled && !isHeld(task)}
               disabled={!canOperate || busyTaskId !== null}
-              aria-label={task.enabled ? `Turn off ${task.title}` : `Turn on ${task.title}`}
+              aria-label={
+                task.enabled && !isHeld(task) ? `Turn off ${task.title}` : `Turn on ${task.title}`
+              }
               onCheckedChange={(enabled) => void toggleEnabled(task, enabled)}
             />
           </li>

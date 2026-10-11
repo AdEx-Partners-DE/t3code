@@ -534,6 +534,57 @@ it.effect("holds every due task while scheduled tasks are paused, and runs them 
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
+it.effect("runs a task that was switched on again by itself while all tasks are paused", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-09-09T12:00:00.000Z";
+    yield* insertRow(sql, { id: "stays-paused", next: now, status: "never", enabled: 1 }, now);
+    yield* insertRow(sql, { id: "resumed", next: now, status: "never", enabled: 1 }, now);
+    yield* TestClock.setTime(Date.parse(now) + 1_000);
+
+    const launched = yield* Deferred.make<void>();
+    const layer = Layer.provideMerge(
+      ScheduledTaskService.layer,
+      Layer.mergeAll(
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+          launch: () =>
+            Deferred.succeed(launched, undefined).pipe(
+              Effect.andThen(Effect.die(new Error("test launch failure"))),
+            ),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        ServerSettings.layerTest({ scheduledTasksPaused: true }),
+        NodeCrypto.layer,
+        Scheduler.layer,
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const runCounts = sql<{ task_id: string; run_count: number }>`
+        SELECT task_id, run_count FROM scheduled_tasks ORDER BY task_id
+      `.pipe(Effect.map((rows) => rows.map((row) => [row.task_id, row.run_count])));
+      yield* TestClock.adjust("6 seconds");
+      assert.deepEqual(yield* runCounts, [
+        ["resumed", 0],
+        ["stays-paused", 0],
+      ]);
+
+      // The task is enabled already; its switch reads off because of the pause.
+      // Switching it on is the user resuming this one task.
+      yield* service.setEnabled({ id: "resumed" as never, enabled: true });
+      assert.deepEqual((yield* settings.getSettings).scheduledTasksPauseExemptIds, ["resumed"]);
+      yield* TestClock.adjust("6 seconds");
+      yield* Deferred.await(launched);
+      assert.deepEqual(yield* runCounts, [
+        ["resumed", 1],
+        ["stays-paused", 0],
+      ]);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
 it.effect("does not queue another prompt while the task's last one still waits in its thread", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

@@ -49,6 +49,8 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import { isTaskHeldByPause } from "@t3tools/contracts";
+
 import { decideIdleTrigger, saysStopPhrase, underUsageBudget } from "./idleTrigger.ts";
 import { planPortfolioNudge } from "./portfolioNudge.ts";
 import { recordDecision } from "../decisionLog.ts";
@@ -434,13 +436,61 @@ export const layer = Layer.effect(
     // Optional, so harnesses that build this service without settings still work.
     const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
-    // The environment-wide pause. A manual "run now" is the user asking, and still runs.
-    const tasksPaused = Option.isNone(serverSettings)
-      ? Effect.succeed(false)
-      : serverSettings.value.getSettings.pipe(
+    // "Pause all tasks" holds every task except the ones the user has switched
+    // back on by hand since. A manual "run now" is the user asking, and still runs.
+    const isHeldByPause = (taskId: string) =>
+      Option.isNone(serverSettings)
+        ? Effect.succeed(false)
+        : serverSettings.value.getSettings.pipe(
+            Effect.map((settings) =>
+              isTaskHeldByPause(
+                taskId,
+                settings.scheduledTasksPaused,
+                settings.scheduledTasksPauseExemptIds,
+              ),
+            ),
+            Effect.orElseSucceed(() => false),
+          );
+    // Switching a held task on is the user resuming that one task.
+    const exemptFromPause = (taskId: string) =>
+      Option.isNone(serverSettings)
+        ? Effect.void
+        : serverSettings.value.getSettings.pipe(
+            Effect.flatMap((settings) =>
+              settings.scheduledTasksPaused &&
+              !settings.scheduledTasksPauseExemptIds.includes(taskId)
+                ? serverSettings.value.updateSettings({
+                    scheduledTasksPauseExemptIds: [
+                      ...settings.scheduledTasksPauseExemptIds,
+                      taskId,
+                    ],
+                  })
+                : Effect.void,
+            ),
+            Effect.ignore,
+          );
+    // Each pause starts with nothing resumed, and lifting it leaves no list behind.
+    if (Option.isSome(serverSettings)) {
+      const settingsService = serverSettings.value;
+      const wasPaused = yield* Ref.make(
+        yield* settingsService.getSettings.pipe(
           Effect.map((settings) => settings.scheduledTasksPaused),
           Effect.orElseSucceed(() => false),
-        );
+        ),
+      );
+      yield* Stream.runForEach(settingsService.streamChanges, (settings) =>
+        Ref.getAndSet(wasPaused, settings.scheduledTasksPaused).pipe(
+          Effect.flatMap((before) =>
+            before !== settings.scheduledTasksPaused &&
+            settings.scheduledTasksPauseExemptIds.length > 0
+              ? settingsService
+                  .updateSettings({ scheduledTasksPauseExemptIds: [] })
+                  .pipe(Effect.ignore)
+              : Effect.void,
+          ),
+        ),
+      ).pipe(Effect.forkScoped);
+    }
     const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
     // Webhook deliveries for one task dispatch in arrival order rather than
     // being dropped while an earlier delivery is still dispatching.
@@ -757,7 +807,7 @@ export const layer = Layer.effect(
       trigger: "scheduled" | "manual" | "webhook" | "idle",
       webhook?: { readonly deliveryId: string; readonly prompt: string },
     ) {
-      if (trigger !== "manual" && (yield* tasksPaused)) {
+      if (trigger !== "manual" && (yield* isHeldByPause(task.id))) {
         if (webhook !== undefined) {
           return yield* new WebhookDeliverySkipped({ reason: "Scheduled tasks are paused." });
         }
@@ -1047,12 +1097,15 @@ export const layer = Layer.effect(
     });
 
     const runDueTasks = Effect.fn("ScheduledTaskService.runDueTasks")(function* () {
-      if (yield* tasksPaused) return;
       const now = yield* localNow;
       const tasks = yield* listDueTasks(now).pipe(
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
       );
-      const due = tasks.flatMap((task) =>
+      // A held task is left exactly as it is, due time and all, until it is resumed.
+      const free = yield* Effect.filter(tasks, (task) =>
+        isHeldByPause(task.id).pipe(Effect.map((held) => !held)),
+      );
+      const due = free.flatMap((task) =>
         task.nextRunAt === null ? [] : [{ task, dueAt: DateTime.makeUnsafe(task.nextRunAt) }],
       );
       yield* Effect.forEach(
@@ -1161,7 +1214,6 @@ export const layer = Layer.effect(
     // after a restart each is read once more, which is harmless.
     const checkedReplies = new Set<string>();
     const runIdleTasks = Effect.fn("ScheduledTaskService.runIdleTasks")(function* () {
-      if (yield* tasksPaused) return;
       const rows = yield* sql<ScheduledTaskRow>`
         SELECT * FROM scheduled_tasks
         WHERE enabled = 1 AND next_run_at IS NULL AND thread_id IS NOT NULL
@@ -1173,6 +1225,7 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const task = yield* decodeRow(row);
             if (task.schedule.type !== "idle" || task.threadId === null) return;
+            if (yield* isHeldByPause(task.id)) return;
             // The thread whose silence starts the task: its own, or another
             // one when the task chains this thread's work behind that one's.
             const watchedThreadId = task.schedule.watchThreadId ?? ThreadId.make(task.threadId);
@@ -1252,7 +1305,6 @@ export const layer = Layer.effect(
     // Portfolio tasks: idle tasks for every open thread at once. Each pass
     // sends to the standing threads the plan picks, within the cap.
     const runPortfolioTasks = Effect.fn("ScheduledTaskService.runPortfolioTasks")(function* () {
-      if (yield* tasksPaused) return;
       const rows = yield* sql<ScheduledTaskRow>`
         SELECT * FROM scheduled_tasks
         WHERE enabled = 1 AND next_run_at IS NULL AND thread_id IS NULL
@@ -1264,6 +1316,7 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const task = yield* decodeRow(row);
             if (task.schedule.type !== "idle" || task.schedule.allOpenThreads !== true) return;
+            if (yield* isHeldByPause(task.id)) return;
             const schedule = task.schedule;
             const now = yield* localNow;
             const nowMs = DateTime.toEpochMillis(now);
@@ -1531,6 +1584,12 @@ export const layer = Layer.effect(
     const setEnabled: ScheduledTaskService["Service"]["setEnabled"] = (input) =>
       Effect.gen(function* () {
         const existing = yield* loadTask(input.id);
+        // Under "Pause all tasks" a task's switch reads off although the task
+        // is enabled. Switching it on resumes this one task.
+        if (input.enabled) {
+          yield* exemptFromPause(input.id);
+          if (existing.enabled) yield* notifyChanged;
+        }
         if (existing.enabled === input.enabled) return { task: existing };
         const now = yield* localNow;
         const next = nextRunAt({ enabled: input.enabled, schedule: existing.schedule }, now);

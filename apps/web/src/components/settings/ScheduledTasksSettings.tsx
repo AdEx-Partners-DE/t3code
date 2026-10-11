@@ -74,6 +74,7 @@ import {
   type WorkspaceMode,
 } from "./scheduledTasksSettings.logic";
 import { Label } from "../ui/label";
+import { isTaskHeldByPause, taskRunsOnItsOwn } from "@t3tools/contracts";
 import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator } from "../ui/menu";
 import { ToggleGroup, Toggle } from "../ui/toggle-group";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "../ui/empty";
@@ -390,6 +391,13 @@ function ScheduledTaskEnvironmentSection({
   );
   const updateEnvironmentSettings = useUpdateEnvironmentSettings(environment.environmentId);
   const enabledCount = tasks?.filter((task) => task.enabled).length ?? 0;
+  const pauseExemptIds = useEnvironmentSettings(
+    environment.environmentId,
+    (settings) => settings.scheduledTasksPauseExemptIds,
+  );
+  const heldCount =
+    tasks?.filter((task) => task.enabled && isTaskHeldByPause(task.id, paused, pauseExemptIds))
+      .length ?? 0;
   const linkedTask = tasks?.find((task) => task.id === taskId);
   const openedLink = useRef(false);
   useEffect(() => {
@@ -429,11 +437,11 @@ function ScheduledTaskEnvironmentSection({
             />
           ) : null}
           <SettingsRow
-            title={paused ? "All tasks are paused" : "Pause all tasks"}
+            title={paused ? "Tasks are paused" : "Pause all tasks"}
             description={
               paused
-                ? `Nothing starts on a timer, on idle or from a webhook. ${enabledCount} ${enabledCount === 1 ? "task resumes" : "tasks resume"} when you turn this off.`
-                : `Holds every task in this environment without changing which ones are enabled. ${enabledCount} of ${tasks.length} enabled.`
+                ? `${heldCount} ${heldCount === 1 ? "task is" : "tasks are"} paused and ${heldCount === 1 ? "resumes" : "resume"} when you turn this off. Switch a single task on to resume just that one.`
+                : `Pauses every task in this environment at once. Each can be switched on again by itself; turning this off resumes the rest. ${enabledCount} of ${tasks.length} enabled.`
             }
             control={
               <Switch
@@ -481,6 +489,17 @@ function ScheduledTaskRow({
   const [busy, setBusy] = useState(false);
   const [deliveriesOpen, setDeliveriesOpen] = useState(false);
   const isWebhook = task.schedule.type === "webhook";
+  // "Pause all tasks" holds the task unless it was switched on again by itself.
+  const allTasksPaused = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.scheduledTasksPaused,
+  );
+  const pauseExemptIds = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.scheduledTasksPauseExemptIds,
+  );
+  const runsOnItsOwn = taskRunsOnItsOwn(task, allTasksPaused, pauseExemptIds);
+  const heldByPause = task.enabled && !runsOnItsOwn;
   const boundThread = useThreadShell(
     task.threadId === null ? null : scopeThreadRef(environmentId, task.threadId),
   );
@@ -498,7 +517,7 @@ function ScheduledTaskRow({
     setBusy(true);
     const result =
       action === "toggle"
-        ? await toggle({ environmentId, input: { id: task.id, enabled: !task.enabled } })
+        ? await toggle({ environmentId, input: { id: task.id, enabled: !runsOnItsOwn } })
         : action === "run"
           ? await run({ environmentId, input: { id: task.id } })
           : await remove({ environmentId, input: { id: task.id } });
@@ -513,11 +532,6 @@ function ScheduledTaskRow({
       );
     }
   };
-  // The environment-wide pause holds the task, whatever its own switch says.
-  const allTasksPaused = useEnvironmentSettings(
-    environmentId,
-    (settings) => settings.scheduledTasksPaused,
-  );
   return (
     <SettingsRow
       title={task.title}
@@ -528,8 +542,8 @@ function ScheduledTaskRow({
             {scheduleLabel(task.schedule)} ·{" "}
             {!task.enabled
               ? "Off"
-              : allTasksPaused
-                ? "On, but held: all tasks are paused"
+              : heldByPause
+                ? "Paused with all tasks; switch it on to resume just this one"
                 : isWebhook
                   ? "Listening"
                   : task.nextRunAt
@@ -546,7 +560,9 @@ function ScheduledTaskRow({
       control={
         <div className="flex items-center gap-2">
           <Switch
-            checked={task.enabled}
+            // Shows what the scheduler does: a task held by "Pause all tasks"
+            // reads off, and switching it on resumes that one task.
+            checked={runsOnItsOwn}
             disabled={busy || !canOperate}
             aria-label={`Enable ${task.title}`}
             onCheckedChange={() => void act("toggle")}

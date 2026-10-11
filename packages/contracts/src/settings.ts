@@ -1139,11 +1139,20 @@ export const ServerSettings = Schema.Struct({
    */
   retryInstantFailures: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
-   * Holds every scheduled task in this environment: nothing starts on a timer,
-   * on idle or from a webhook until it is turned off again. Each task keeps
-   * its own enabled state, so resuming restores exactly what was running.
+   * Pauses the scheduled tasks of this environment in one go: nothing of
+   * theirs starts on a timer, on idle or from a webhook. Each task keeps its
+   * own enabled state, so resuming restores exactly what was running. A task
+   * switched on by hand while the pause is on runs again
+   * (`scheduledTasksPauseExemptIds`).
    */
   scheduledTasksPaused: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * Tasks the user switched back on one by one while `scheduledTasksPaused`
+   * is on. Kept by the server and emptied whenever the pause is set or lifted.
+   */
+  scheduledTasksPauseExemptIds: Schema.Array(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   /**
    * Holds every thread's queue in this environment: a run that is under way
    * finishes, but no queued message starts until this is turned off again.
@@ -1541,6 +1550,7 @@ export const ServerSettingsPatch = Schema.Struct({
   switchAccountAtUsageLimit: Schema.optionalKey(Schema.Boolean),
   retryInstantFailures: Schema.optionalKey(Schema.Boolean),
   scheduledTasksPaused: Schema.optionalKey(Schema.Boolean),
+  scheduledTasksPauseExemptIds: Schema.optionalKey(Schema.Array(Schema.String)),
   threadQueuesPaused: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),

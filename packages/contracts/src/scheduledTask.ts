@@ -393,3 +393,28 @@ export class ScheduledTaskError extends Schema.TaggedError<ScheduledTaskError>()
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+// "Pause all tasks" holds every scheduled task of an environment at once. A task
+// the user switches on again while the pause is on is exempt and runs. Server and
+// clients share this one rule, so a task's switch shows what the scheduler does.
+
+/** Whether the pause keeps this task from running. */
+export function isTaskHeldByPause(
+  taskId: string,
+  paused: boolean,
+  exemptIds: ReadonlyArray<string>,
+): boolean {
+  return paused && !exemptIds.includes(taskId);
+}
+
+/**
+ * What a task's own switch should show: on only when the task is enabled and
+ * the pause does not hold it.
+ */
+export function taskRunsOnItsOwn(
+  task: { readonly id: string; readonly enabled: boolean },
+  paused: boolean,
+  exemptIds: ReadonlyArray<string>,
+): boolean {
+  return task.enabled && !isTaskHeldByPause(task.id, paused, exemptIds);
+}
