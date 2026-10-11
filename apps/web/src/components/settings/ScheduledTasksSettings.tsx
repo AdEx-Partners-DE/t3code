@@ -116,6 +116,7 @@ const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
 
 /** "Send to" value for an idle task that covers every open thread. */
 const ALL_OPEN_THREADS = "all-open-threads";
+const PROJECT_OPEN_THREADS = "project-open-threads";
 
 const EMPTY_DRAFT: DraftState = {
   editingId: null,
@@ -130,6 +131,7 @@ const EMPTY_DRAFT: DraftState = {
   idleMinRemainingPercent: "",
   idleWatchThreadId: "",
   idleAllOpenThreads: false,
+  idleProjectOnly: false,
   idleMaxParallel: "2",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
@@ -186,7 +188,7 @@ function splitModelKey(value: string): ModelSelection | null {
 export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
   if (schedule.type === "idle") {
-    const runs = `${schedule.allOpenThreads ? "All open threads, when idle" : "When idle"}, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
+    const runs = `${schedule.allOpenThreads ? (schedule.projectOnly ? "Open threads of this project, when idle" : "All open threads, when idle") : "When idle"}, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
     return [
       runs,
       ...(schedule.stopPhrase === undefined ? [] : [`stops at "${schedule.stopPhrase}"`]),
@@ -1446,24 +1448,40 @@ function ScheduledTaskEditorDialog({
                   <div className="flex flex-wrap items-center gap-2">
                     <Label htmlFor="scheduled-task-idle-thread">Send to</Label>
                     <Select
-                      value={draft.idleAllOpenThreads ? ALL_OPEN_THREADS : draft.threadId}
+                      value={
+                        draft.idleAllOpenThreads
+                          ? draft.idleProjectOnly
+                            ? PROJECT_OPEN_THREADS
+                            : ALL_OPEN_THREADS
+                          : draft.threadId
+                      }
                       onValueChange={(threadId) =>
                         setDraft((current) => ({
                           ...current,
-                          idleAllOpenThreads: threadId === ALL_OPEN_THREADS,
-                          threadId: threadId === ALL_OPEN_THREADS ? "" : (threadId ?? ""),
+                          idleAllOpenThreads:
+                            threadId === ALL_OPEN_THREADS || threadId === PROJECT_OPEN_THREADS,
+                          idleProjectOnly: threadId === PROJECT_OPEN_THREADS,
+                          threadId:
+                            threadId === ALL_OPEN_THREADS || threadId === PROJECT_OPEN_THREADS
+                              ? ""
+                              : (threadId ?? ""),
                         }))
                       }
                     >
                       <SelectTrigger size="sm" id="scheduled-task-idle-thread" className="w-56">
                         <SelectValue placeholder="Choose a thread">
                           {draft.idleAllOpenThreads
-                            ? "All open threads"
+                            ? draft.idleProjectOnly
+                              ? "Open threads of this project"
+                              : "All open threads"
                             : idleThreads.find((thread) => thread.id === draft.threadId)?.title}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectPopup>
                         <SelectItem value={ALL_OPEN_THREADS}>All open threads</SelectItem>
+                        <SelectItem value={PROJECT_OPEN_THREADS}>
+                          Open threads of this project
+                        </SelectItem>
                         {idleThreads.map((thread) => (
                           <SelectItem key={thread.id} value={thread.id}>
                             {thread.title}

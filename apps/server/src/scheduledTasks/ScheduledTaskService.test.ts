@@ -890,3 +890,105 @@ it.effect("a portfolio task sends to standing open threads only, once per finish
     );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
+
+it.effect("a portfolio task limited to its project leaves other projects' threads alone", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* insertRow(
+      sql,
+      {
+        id: "portfolio",
+        next: null,
+        status: "never",
+        enabled: 1,
+        scheduleJson: JSON.stringify({
+          type: "idle",
+          maxRuns: 5,
+          minPauseMs: 0,
+          allOpenThreads: true,
+          projectOnly: true,
+          maxParallel: 3,
+          stopPhrase: "ALL DONE",
+        }),
+      },
+      "2026-09-09T11:00:00.000Z",
+    );
+    yield* TestClock.setTime(Date.parse("2026-09-09T12:00:00.000Z"));
+
+    const shellThread = (id: string, finishedAt: string, overrides: object = {}) => ({
+      id,
+      projectId: "project:test",
+      archivedAt: null,
+      settledAt: null,
+      settledOverride: null,
+      lineage: { relationshipToParent: null },
+      activeRunId: null,
+      activityRunStatus: null,
+      pendingRuntimeRequest: null,
+      status: "completed",
+      snoozedUntil: null,
+      latestRunId: `run:${id}`,
+      latestRunCompletedAt: DateTime.makeUnsafe(finishedAt),
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      ...overrides,
+    });
+    const sent = yield* Ref.make<ReadonlyArray<{ threadId: string; model: unknown }>>([]);
+    const layer = Layer.provideMerge(
+      ScheduledTaskService.layer,
+      Layer.mergeAll(
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getShellSnapshot: (() =>
+            Effect.succeed({
+              threads: [
+                shellThread("thread:stop", "2026-09-09T11:50:00.000Z"),
+                shellThread("thread:go", "2026-09-09T11:40:00.000Z", {
+                  projectId: "project:other",
+                }),
+                shellThread("thread:busy", "2026-09-09T11:30:00.000Z", {
+                  activeRunId: "run:busy:2",
+                }),
+              ],
+            })) as never,
+          getThreadRecords: ((threadId: string) =>
+            Effect.succeed({
+              messages: [
+                {
+                  role: "assistant",
+                  text: threadId === "thread:stop" ? "All done." : "Two items are open.",
+                },
+              ],
+            })) as never,
+          getProjectThreadRecords: (() => Effect.succeed({ runs: [] })) as never,
+          sendToThread: ((input: { threadId: string; modelSelection?: unknown }) =>
+            Ref.update(sent, (all) => [
+              ...all,
+              { threadId: input.threadId, model: input.modelSelection ?? null },
+            ]).pipe(Effect.as({}))) as never,
+        }),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([]) as never,
+        }),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        NodeCrypto.layer,
+        Scheduler.layer,
+      ),
+    );
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(layer);
+        // Several polls: the second and later ones must not send again.
+        yield* TestClock.adjust("30 seconds");
+        // Sent without a model: the thread keeps the one it runs on.
+        assert.deepEqual(yield* Ref.get(sent), []);
+        const rows = yield* sql<{ schedule_json: string; enabled: number }>`
+          SELECT schedule_json, enabled FROM scheduled_tasks WHERE task_id = 'portfolio'
+        `;
+        assert.deepEqual(JSON.parse(rows[0]!.schedule_json).nudged, {
+          "thread:stop": "run:thread:stop",
+        });
+        assert.equal(rows[0]!.enabled, 1);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);

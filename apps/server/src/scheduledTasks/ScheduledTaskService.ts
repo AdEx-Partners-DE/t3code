@@ -1277,7 +1277,14 @@ export const layer = Layer.effect(
               return;
             }
             const shell = yield* threadManagement.getShellSnapshot();
-            const plan = planPortfolioNudge({ schedule, threads: shell.threads, nowMs });
+            const plan = planPortfolioNudge({
+              schedule,
+              threads:
+                schedule.projectOnly === true
+                  ? shell.threads.filter((thread) => thread.projectId === task.projectId)
+                  : shell.threads,
+              nowMs,
+            });
             let runsUsed = schedule.runsUsed ?? 0;
             const nudged: Record<string, string> = { ...plan.remembered };
             let changed = Object.keys(nudged).length !== Object.keys(schedule.nudged ?? {}).length;

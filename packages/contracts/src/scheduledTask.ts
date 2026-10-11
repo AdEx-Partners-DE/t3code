@@ -153,6 +153,9 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
     description:
       "With allOpenThreads: send only while fewer than this many open threads are at work. Defaults to 2.",
   }),
+  projectOnly: Schema.optional(Schema.Boolean).annotate({
+    description: "With allOpenThreads: cover only the open threads of the task's project.",
+  }),
   /** With allOpenThreads: per thread, the run this task last reacted to. Kept by the server. */
   nudged: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   watchThreadId: Schema.optional(ThreadId).annotate({
