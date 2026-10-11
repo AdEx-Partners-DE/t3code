@@ -8651,10 +8651,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
       }
       for (const providerThread of input.projection.providerThreads) {
-        // A live process owns its roster and reports clearing it.
+        // A live process owns its roster and reports clearing it, unless Stop
+        // just ended it: that report is dropped when a later run whose start
+        // failed has taken the provider thread's lastRunOrdinal.
         if (
           (providerThread.pendingBackgroundTasks?.length ?? 0) === 0 ||
-          (yield* hasLiveSession(providerThread.id))
+          (providerThread.id !== input.stoppedProviderThreadId &&
+            (yield* hasLiveSession(providerThread.id)))
         ) {
           continue;
         }

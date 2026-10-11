@@ -41,10 +41,12 @@ const stopEarlierBackgroundWork = ({
   failedStart = false,
   stopWithQueue,
   olderStart = false,
+  staleRoster = false,
   stalledRun,
   workflowMember = false,
 }: {
   readonly failedStart?: boolean;
+  readonly staleRoster?: boolean;
   readonly stopWithQueue?: "thread.stop" | "run.interrupt";
   readonly olderStart?: boolean;
   readonly workflowMember?: boolean;
@@ -416,6 +418,26 @@ const stopEarlierBackgroundWork = ({
 
         const codexProviderThread = (yield* orchestrator.getThreadProjection(threadId))
           .providerThreads[0]!;
+        if (staleRoster) {
+          // The live process still lists a background command that Stop will
+          // end, and its report of the cleared roster never lands.
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make("stale-roster"),
+                type: "provider-thread.updated",
+                threadId,
+                occurredAt: now,
+                payload: {
+                  ...codexProviderThread,
+                  pendingBackgroundTasks: [
+                    { taskId: "sleep", description: "Wait before the recheck", kind: "command" },
+                  ],
+                },
+              },
+            ],
+          });
+        }
         // A native subagent's own thread, still showing its runless root turn as working.
         const subagentThread = (name: string) =>
           Effect.gen(function* () {
@@ -927,6 +949,13 @@ const stopEarlierBackgroundWork = ({
         }
         const testerThread = yield* orchestrator.getThreadProjection(tester.threadId);
         assert.equal(testerThread.nodes[0]?.status, "interrupted");
+        if (staleRoster) {
+          assert.deepEqual(
+            after.providerThreads.find((candidate) => candidate.id === codexProviderThread.id)
+              ?.pendingBackgroundTasks,
+            [],
+          );
+        }
       }).pipe(
         Effect.provide(
           ProviderReplayHarness.layerWithRegistry(
@@ -945,6 +974,10 @@ it.effect("Stop reaches background work an earlier provider thread still runs", 
 
 it.effect("Stop settles workflow members without subagent turn items", () =>
   stopEarlierBackgroundWork({ workflowMember: true }),
+);
+
+it.effect("Stop clears a live provider thread's roster its process no longer reports", () =>
+  stopEarlierBackgroundWork({ staleRoster: true }),
 );
 
 it.effect(
