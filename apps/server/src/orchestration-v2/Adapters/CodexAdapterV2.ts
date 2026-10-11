@@ -707,11 +707,51 @@ function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
   }
 }
 
+function usesCodexWorkspaceWriteDefault(
+  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+): boolean {
+  return (
+    runtimePolicy.sandboxPolicy === undefined &&
+    codexRuntimeModeTurnDefaults(runtimePolicy.runtimeMode).sandboxPolicy.type === "workspaceWrite"
+  );
+}
+
+/**
+ * `turn/start` replaces the thread's sandbox policy, and Codex fills omitted
+ * workspace-write fields with no network access and no extra writable roots.
+ * Copying the `sandbox_workspace_write` table Codex resolved from config and
+ * launch arguments keeps those settings under a mode's default policy.
+ */
+function withWorkspaceWriteConfig(
+  policy: CodexSchema.V2TurnStartParams__SandboxPolicy,
+  config: CodexSchema.V2ConfigReadResponse__SandboxWorkspaceWrite | null | undefined,
+): CodexSchema.V2TurnStartParams__SandboxPolicy {
+  if (policy.type !== "workspaceWrite" || config == null) {
+    return policy;
+  }
+  return {
+    ...policy,
+    ...(config.writable_roots === undefined ? {} : { writableRoots: config.writable_roots }),
+    ...(config.network_access === undefined ? {} : { networkAccess: config.network_access }),
+    ...(config.exclude_tmpdir_env_var === undefined
+      ? {}
+      : { excludeTmpdirEnvVar: config.exclude_tmpdir_env_var }),
+    ...(config.exclude_slash_tmp === undefined
+      ? {}
+      : { excludeSlashTmp: config.exclude_slash_tmp }),
+  };
+}
+
 export function buildCodexTurnStartParams(input: {
   readonly nativeThreadId: string;
   readonly codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   readonly modelSelection: ModelSelection;
+  /** `sandbox_workspace_write` from Codex's effective config (`config/read`). */
+  readonly workspaceWriteConfig?:
+    | CodexSchema.V2ConfigReadResponse__SandboxWorkspaceWrite
+    | null
+    | undefined;
   readonly hasT3Mcp?: boolean;
   readonly browserToolsAvailable?: boolean;
   readonly deviceToolsAvailable?: boolean;
@@ -728,7 +768,7 @@ export function buildCodexTurnStartParams(input: {
         : yield* decodeTurnApprovalPolicy(input.runtimePolicy.approvalPolicy);
     const sandboxPolicy =
       input.runtimePolicy.sandboxPolicy === undefined
-        ? runtimeModeDefaults.sandboxPolicy
+        ? withWorkspaceWriteConfig(runtimeModeDefaults.sandboxPolicy, input.workspaceWriteConfig)
         : yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy);
     const selectedEffort = getModelSelectionStringOptionValue(
       input.modelSelection,
@@ -1358,6 +1398,29 @@ export function codexThreadRuntimeParams(input: {
     },
   };
 }
+
+// Decodes only this table, so an unrelated config field cannot fail the turn.
+const decodeCodexWorkspaceWriteConfig = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    config: Schema.Struct({
+      sandbox_workspace_write: Schema.optionalKey(
+        Schema.NullOr(CodexSchema.V2ConfigReadResponse__SandboxWorkspaceWrite),
+      ),
+    }),
+  }),
+);
+
+// Decodes only `allowedPermissionProfiles`, the requirement that makes Codex
+// ignore `[sandbox_workspace_write]`.
+const decodeCodexPermissionProfileRequirements = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    requirements: Schema.optionalKey(
+      Schema.NullOr(
+        Schema.Struct({ allowedPermissionProfiles: Schema.optionalKey(Schema.Unknown) }),
+      ),
+    ),
+  }),
+);
 
 const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
   Schema.Struct({ thread: Schema.Struct({ id: Schema.String, updatedAt: Schema.Number }) }),
@@ -6288,10 +6351,39 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           Effect.gen(function* () {
             const threadId = yield* getNativeThreadId(turnInput.providerThread);
             const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+            // A failed or slow read sends the mode's bare policy instead of
+            // blocking the turn.
+            const workspaceWriteConfig = usesCodexWorkspaceWriteDefault(turnInput.runtimePolicy)
+              ? yield* client.raw.request("config/read", { cwd: turnInput.runtimePolicy.cwd }).pipe(
+                  Effect.flatMap(decodeCodexWorkspaceWriteConfig),
+                  Effect.map((response) => response.config.sandbox_workspace_write),
+                  // Under managed permission profiles Codex ignores this table,
+                  // so copying it would grant what the admin's profile excludes.
+                  Effect.flatMap((config) =>
+                    config == null
+                      ? Effect.succeed(config)
+                      : client.raw.request("configRequirements/read", undefined).pipe(
+                          Effect.flatMap(decodeCodexPermissionProfileRequirements),
+                          Effect.map((response) =>
+                            response.requirements?.allowedPermissionProfiles == null
+                              ? config
+                              : undefined,
+                          ),
+                        ),
+                  ),
+                  Effect.timeout("5 seconds"),
+                  Effect.catch((cause) =>
+                    Effect.logWarning("orchestration-v2.codex-workspace-write-config-failed", {
+                      cause,
+                    }).pipe(Effect.as(undefined)),
+                  ),
+                )
+              : undefined;
             const turnStartParams = yield* buildCodexTurnStartParams({
               nativeThreadId: threadId,
               codexInput,
               runtimePolicy: turnInput.runtimePolicy,
+              workspaceWriteConfig,
               modelSelection: turnInput.modelSelection,
               hasT3Mcp: mcpSession !== undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
