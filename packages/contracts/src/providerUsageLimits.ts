@@ -188,3 +188,55 @@ export const UsageLimitsReport = Schema.Struct({
   notices: Schema.Array(Schema.String),
 });
 export type UsageLimitsReport = typeof UsageLimitsReport.Type;
+
+const UsagePercent = Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 }));
+
+/**
+ * One recorded reading of an account's quota window. A point exists only where
+ * the reading changed, so the line between two points is flat, not unknown.
+ */
+export const UsageLimitHistoryPoint = Schema.Struct({
+  at: IsoDateTime,
+  instanceId: ProviderInstanceId,
+  windowId: TrimmedNonEmptyString,
+  kind: ServerProviderUsageWindow.fields.kind,
+  label: TrimmedNonEmptyString,
+  usedPercent: UsagePercent,
+  resetsAt: Schema.optional(IsoDateTime),
+});
+export type UsageLimitHistoryPoint = typeof UsageLimitHistoryPoint.Type;
+
+/**
+ * A window whose usage dropped between two readings. `ahead` marks a reset
+ * that came before the time the provider had announced, as happens when a
+ * provider resets every account at once; `unusedPercentBefore` is the
+ * allowance that was still there and went unused.
+ */
+export const UsageLimitReset = Schema.Struct({
+  at: IsoDateTime,
+  instanceId: ProviderInstanceId,
+  windowId: TrimmedNonEmptyString,
+  kind: ServerProviderUsageWindow.fields.kind,
+  label: TrimmedNonEmptyString,
+  usedPercentBefore: UsagePercent,
+  unusedPercentBefore: UsagePercent,
+  usedPercentAfter: UsagePercent,
+  /** The last reading before the drop; the reset happened between this and `at`. */
+  lastSeenBeforeAt: IsoDateTime,
+  expectedAt: Schema.optional(IsoDateTime),
+  ahead: Schema.Boolean,
+});
+export type UsageLimitReset = typeof UsageLimitReset.Type;
+
+export const UsageLimitHistoryInput = Schema.Struct({
+  /** Oldest instant to return. */
+  since: IsoDateTime,
+});
+export type UsageLimitHistoryInput = typeof UsageLimitHistoryInput.Type;
+
+/** Recorded readings and resets of every account, oldest first. */
+export const UsageLimitHistory = Schema.Struct({
+  points: Schema.Array(UsageLimitHistoryPoint),
+  resets: Schema.Array(UsageLimitReset),
+});
+export type UsageLimitHistory = typeof UsageLimitHistory.Type;
