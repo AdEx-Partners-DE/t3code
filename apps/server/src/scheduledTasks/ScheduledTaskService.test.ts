@@ -406,3 +406,65 @@ it.effect("holds every due task while scheduled tasks are paused, and runs them 
     );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
+
+it.effect("does not queue another prompt while the task's last one still waits in its thread", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-09-09T12:00:00.000Z";
+    yield* insertRow(sql, { id: "bound", next: now, status: "never", enabled: 1 }, now);
+    yield* sql`UPDATE scheduled_tasks SET thread_id = 'thread:test' WHERE task_id = 'bound'`;
+    yield* TestClock.setTime(Date.parse(now) + 1_000);
+
+    const sent = yield* Ref.make(0);
+    const delivered = yield* Deferred.make<void>();
+    const serviceWith = (pendingMessageId: string | null) =>
+      Layer.provideMerge(
+        ScheduledTaskService.layer,
+        Layer.mergeAll(
+          Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getProjectThreadRecords: (() =>
+              Effect.succeed({
+                runs:
+                  pendingMessageId === null
+                    ? []
+                    : [{ status: "queued", userMessageId: pendingMessageId }],
+              })) as never,
+            sendToThread: () =>
+              Ref.update(sent, (n) => n + 1).pipe(
+                Effect.andThen(Deferred.succeed(delivered, undefined)),
+                Effect.andThen(Effect.die(new Error("test send failure"))),
+              ),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          NodeCrypto.layer,
+          Scheduler.layer,
+        ),
+      );
+
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(serviceWith("scheduled-task-message:bound:1:scheduled"));
+        yield* TestClock.adjust("6 seconds");
+        assert.equal(yield* Ref.get(sent), 0);
+        const rows = yield* sql<{ run_count: number; next_run_at: string | null }>`
+            SELECT run_count, next_run_at FROM scheduled_tasks WHERE task_id = 'bound'
+          `;
+        // Skipped, not run: nothing counted, and the next tick is a full interval away.
+        assert.equal(rows[0]?.run_count, 0);
+        assert.isTrue((rows[0]?.next_run_at ?? "") > now);
+      }),
+    );
+
+    // Another task's prompt in the same thread does not hold this one back.
+    yield* sql`UPDATE scheduled_tasks SET next_run_at = ${now} WHERE task_id = 'bound'`;
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(serviceWith("scheduled-task-message:other:1:scheduled"));
+        yield* TestClock.adjust("6 seconds");
+        yield* Deferred.await(delivered);
+        assert.equal(yield* Ref.get(sent), 1);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);

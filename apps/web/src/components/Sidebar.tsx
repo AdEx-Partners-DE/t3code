@@ -270,6 +270,7 @@ import {
   type ProviderInstanceEntry,
 } from "../providerInstances";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
+import { SidebarAutomationStatus } from "./SidebarAutomationStatus";
 import { subscribeNextWaitingThread } from "./threadNextWaitingBus";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button, InlineButton } from "./ui/button";
@@ -5421,6 +5422,11 @@ export default function Sidebar() {
         }
       >
         <SidebarGroup className="flex-1" role="presentation">
+          {isSearchingThreads
+            ? null
+            : [...serverConfigs.keys()].map((id) => (
+                <SidebarAutomationStatus key={id} environmentId={id} />
+              ))}
           {!isSearchingThreads && waitingCounts.length > 0 ? (
             <div
               data-testid="sidebar-waiting-counts"

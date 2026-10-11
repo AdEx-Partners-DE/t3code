@@ -288,6 +288,29 @@ function nextRunAt(
   }
 }
 
+const SCHEDULED_MESSAGE_ID_PREFIX = "scheduled-task-message:";
+
+/**
+ * Whether a prompt this task sent earlier is still queued or running in its
+ * thread. Scheduled prompts carry the task id in their message id.
+ */
+export function hasPendingScheduledPrompt(
+  taskId: string,
+  runs: ReadonlyArray<{ readonly status: string; readonly userMessageId?: string | null }>,
+): boolean {
+  const prefix = `${SCHEDULED_MESSAGE_ID_PREFIX}${taskId}:`;
+  return runs.some(
+    (run) =>
+      (run.status === "queued" ||
+        run.status === "preparing" ||
+        run.status === "starting" ||
+        run.status === "running" ||
+        run.status === "waiting") &&
+      typeof run.userMessageId === "string" &&
+      run.userMessageId.startsWith(prefix),
+  );
+}
+
 function errorMessage(error: unknown): string {
   if (Cause.isCause(error)) return Cause.pretty(error);
   if (error instanceof Error) return error.message;
@@ -796,6 +819,42 @@ export const layer = Layer.effect(
           if (reason !== null) return yield* new WebhookDeliverySkipped({ reason });
         }
 
+        // A timer keeps firing whether or not the thread kept up. Without
+        // this, a thread busier than the task's interval collects one more
+        // copy of the same prompt on every tick.
+        if (trigger === "scheduled" && active.threadId !== null) {
+          const pending = yield* Effect.exit(
+            threadManagement.getProjectThreadRecords(
+              { projectId: active.projectId, threadId: ThreadId.make(active.threadId) },
+              ["runs"],
+            ),
+          ).pipe(
+            Effect.map(
+              (records) =>
+                records._tag === "Success" &&
+                hasPendingScheduledPrompt(active.id, records.value.runs),
+            ),
+          );
+          if (pending) {
+            const next = nextRunAt(active, startedAt);
+            yield* Effect.logInfo("Skipping schedule task run: its last prompt still waits", {
+              taskId: active.id,
+              rescheduledTo: next,
+            });
+            yield* sql`
+              UPDATE scheduled_tasks
+              SET next_run_at = ${next}
+              WHERE task_id = ${active.id}
+            `.pipe(
+              Effect.mapError((cause) =>
+                taskError("Could not reschedule schedule task.", { taskId: active.id, cause }),
+              ),
+            );
+            yield* notifyChanged;
+            return { ...active, nextRunAt: next };
+          }
+        }
+
         yield* markRunning(active.id, startedAtIso);
         yield* notifyChanged;
 
@@ -806,7 +865,7 @@ export const layer = Layer.effect(
             ? `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`
             : `${active.id}:webhook:${webhook.deliveryId}`;
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
-        const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
+        const messageId = MessageId.make(`${SCHEDULED_MESSAGE_ID_PREFIX}${fireKey}`);
         // Dispatch from the fresh row so prompt/model/binding edits made
         // after the poll read are honoured. A webhook prompt was rendered
         // from the row when the request arrived.
