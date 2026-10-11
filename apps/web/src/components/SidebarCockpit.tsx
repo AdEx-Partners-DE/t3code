@@ -26,6 +26,8 @@ export function SidebarCockpit({
   nowMs,
   filter,
   onFilter,
+  queueFilterOn,
+  onQueueFilter,
   onOpenChecklists,
 }: {
   readonly summary: OpenThreadSummary;
@@ -35,6 +37,10 @@ export function SidebarCockpit({
   /** The group the thread list is narrowed to; null shows every open thread. */
   readonly filter: OpenThreadFilter | null;
   readonly onFilter: (filter: OpenThreadFilter | null) => void;
+  /** Whether the list is narrowed to the threads with a waiting queue. */
+  readonly queueFilterOn: boolean;
+  /** Narrows the list to these threads; null shows every thread again. */
+  readonly onQueueFilter: (threadIds: ReadonlySet<string> | null) => void;
   /** Opens the checklists of all open threads on the given group of items. */
   readonly onOpenChecklists: (status: ThreadChecklistItem["status"]) => void;
 }) {
@@ -111,6 +117,14 @@ export function SidebarCockpit({
                 (summary.waiting > 0 ? ` · ${summary.waiting} on background work` : "")}
           </div>
           {environmentId === null ? null : (
+            <CockpitWaitingQueues
+              environmentId={environmentId}
+              nowMs={nowMs}
+              filterOn={queueFilterOn}
+              onFilter={onQueueFilter}
+            />
+          )}
+          {environmentId === null ? null : (
             <CockpitChecklists environmentId={environmentId} onOpen={onOpenChecklists} />
           )}
           {environmentId === null ? null : (
@@ -158,6 +172,64 @@ function CockpitStat(props: {
       className="flex min-w-0 cursor-pointer flex-col items-start rounded-sm bg-sidebar-row-hover/60 px-1.5 py-1 text-left hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset aria-pressed:bg-sidebar-row-hover aria-pressed:ring-1 aria-pressed:ring-sidebar-foreground/30 aria-pressed:ring-inset"
     >
       {body}
+    </button>
+  );
+}
+
+const STALE_QUEUE_MS = 60 * 60_000;
+
+function waitLabel(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  const hours = minutes / 60;
+  return hours < 10 ? `${hours.toFixed(1)} h` : `${Math.round(hours)} h`;
+}
+
+/**
+ * Messages that wait in the queues of open threads, and for how long the
+ * oldest has waited. A queue behind a pause or a hold is otherwise silent.
+ * A click narrows the thread list to the threads concerned.
+ */
+function CockpitWaitingQueues({
+  environmentId,
+  nowMs,
+  filterOn,
+  onFilter,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly nowMs: number;
+  readonly filterOn: boolean;
+  readonly onFilter: (threadIds: ReadonlySet<string> | null) => void;
+}) {
+  const input = useMemo(() => ({}), []);
+  const result = useAtomValue(serverEnvironment.threadChecklists({ environmentId, input }));
+  const queues = Option.getOrNull(AsyncResult.value(result))?.waitingQueues ?? [];
+  if (queues.length === 0) {
+    return filterOn ? (
+      <button
+        type="button"
+        onClick={() => onFilter(null)}
+        className="cursor-pointer self-start rounded-sm underline underline-offset-2 hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      >
+        No queue waits any more · show all
+      </button>
+    ) : null;
+  }
+  const waiting = queues.reduce((total, queue) => total + queue.waiting, 0);
+  const oldestMs = nowMs - Date.parse(queues[0]!.oldestQueuedAt);
+  return (
+    <button
+      type="button"
+      data-testid="sidebar-cockpit-queues"
+      aria-pressed={filterOn}
+      onClick={() => onFilter(filterOn ? null : new Set(queues.map((queue) => queue.threadId)))}
+      className="cursor-pointer self-start rounded-sm text-left tabular-nums hover:text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+    >
+      <span className={oldestMs >= STALE_QUEUE_MS ? "font-medium text-warning" : undefined}>
+        {waiting} {waiting === 1 ? "message waits" : "messages wait"} in {queues.length}{" "}
+        {queues.length === 1 ? "thread" : "threads"}, oldest {waitLabel(oldestMs)}
+      </span>
+      {filterOn ? " · show all" : ""}
     </button>
   );
 }

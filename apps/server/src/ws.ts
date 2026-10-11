@@ -251,6 +251,7 @@ import * as UsageLimitHistory from "./usage/UsageLimitHistory.ts";
 import * as OpenThreadModelOverride from "./orchestration-v2/OpenThreadModelOverride.ts";
 import * as OpenThreadNudge from "./orchestration-v2/OpenThreadNudge.ts";
 import * as ThreadChecklist from "./orchestration-v2/ThreadChecklist.ts";
+import * as QueueOverview from "./orchestration-v2/QueueOverview.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1256,6 +1257,7 @@ const layerWsRpc = (
       const openThreadModelOverride = yield* OpenThreadModelOverride.make;
       const openThreadNudge = yield* OpenThreadNudge.make;
       const threadChecklist = yield* ThreadChecklist.make;
+      const queueOverview = yield* QueueOverview.make;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const worktreeSetupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
@@ -1999,8 +2001,10 @@ const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.listThreadChecklists]: () =>
-          threadChecklist.listOpen.pipe(
-            Effect.map((checklists) => ({ checklists })),
+          Effect.all({
+            checklists: threadChecklist.listOpen,
+            waitingQueues: queueOverview.read,
+          }).pipe(
             Effect.mapError(
               (cause) =>
                 new OrchestrationV2GetShellSnapshotError({

@@ -3067,21 +3067,27 @@ export default function Sidebar() {
   const [openThreadFilter, setOpenThreadFilter] = useState<OpenThreadFilter | null>(null);
   // A filtered list hides the neighbours a dropped row would be ordered
   // against, so rows cannot be dragged while a filter is on.
-  const draggableThreadKeys = openThreadFilter === null ? allDraggableThreadKeys : NO_THREAD_KEYS;
-  const activeReorderableThreadKeys =
-    openThreadFilter === null ? allActiveReorderableThreadKeys : NO_THREAD_KEYS;
-  const pinnedThreads = useMemo(
-    () => filterOpenThreads(allPinnedThreads, openThreadFilter),
-    [allPinnedThreads, openThreadFilter],
+  // The cockpit can also narrow the list to the threads with a waiting queue.
+  const [queueFilterThreadIds, setQueueFilterThreadIds] = useState<ReadonlySet<string> | null>(
+    null,
   );
-  const activeThreads = useMemo(
-    () => filterOpenThreads(allActiveThreads, openThreadFilter),
-    [allActiveThreads, openThreadFilter],
+  const listIsFiltered = openThreadFilter !== null || queueFilterThreadIds !== null;
+  const draggableThreadKeys = listIsFiltered ? NO_THREAD_KEYS : allDraggableThreadKeys;
+  const activeReorderableThreadKeys = listIsFiltered
+    ? NO_THREAD_KEYS
+    : allActiveReorderableThreadKeys;
+  const narrowed = useCallback(
+    <T extends EnvironmentThreadShell>(threads: ReadonlyArray<T>): ReadonlyArray<T> => {
+      const byGroup = filterOpenThreads(threads, openThreadFilter);
+      return queueFilterThreadIds === null
+        ? byGroup
+        : byGroup.filter((thread) => queueFilterThreadIds.has(thread.id));
+    },
+    [openThreadFilter, queueFilterThreadIds],
   );
-  const workingThreads = useMemo(
-    () => filterOpenThreads(allWorkingThreads, openThreadFilter),
-    [allWorkingThreads, openThreadFilter],
-  );
+  const pinnedThreads = useMemo(() => narrowed(allPinnedThreads), [allPinnedThreads, narrowed]);
+  const activeThreads = useMemo(() => narrowed(allActiveThreads), [allActiveThreads, narrowed]);
+  const workingThreads = useMemo(() => narrowed(allWorkingThreads), [allWorkingThreads, narrowed]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
@@ -5572,6 +5578,8 @@ export default function Sidebar() {
               nowMs={cockpitNowMs}
               filter={openThreadFilter}
               onFilter={setOpenThreadFilter}
+              queueFilterOn={queueFilterThreadIds !== null}
+              onQueueFilter={setQueueFilterThreadIds}
               onOpenChecklists={(status) => {
                 setPortfolioChecklistStatus(status);
                 setPortfolioChecklistOpen(true);

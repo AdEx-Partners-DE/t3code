@@ -3882,10 +3882,28 @@ export const OrchestrationV2RpcSchemas = {
     }),
     output: Schema.Struct({ sent: NonNegativeInt, still: NonNegativeInt }),
   },
-  /** The stored checklists of every open thread, for the view across threads. */
+  /**
+   * The view across all open threads: their stored checklists and which of
+   * them have messages waiting in their queue, the longest wait first.
+   *
+   * One read for both on purpose: the RPC group is as large as the type
+   * checker takes, and one more method turns the server's types into `any`.
+   */
   listThreadChecklists: {
     input: Schema.Struct({}),
-    output: Schema.Struct({ checklists: Schema.Array(ThreadChecklist) }),
+    output: Schema.Struct({
+      checklists: Schema.Array(ThreadChecklist),
+      waitingQueues: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            threadId: ThreadId,
+            waiting: NonNegativeInt,
+            held: NonNegativeInt,
+            oldestQueuedAt: IsoDateTime,
+          }),
+        ),
+      ),
+    }),
   },
   getThreadChecklist: {
     input: Schema.Struct({ threadId: ThreadId }),
