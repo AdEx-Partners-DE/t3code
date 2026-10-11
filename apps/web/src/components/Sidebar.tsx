@@ -5029,34 +5029,38 @@ export default function Sidebar() {
   // Shared by the shortcut and the command palette. The empty-state toast is
   // replaced, not stacked, when the command is repeated.
   const nothingWaitingToastRef = useRef<string | null>(null);
-  const openNextWaitingThread = useCallback(() => {
-    const keyOf = (thread: EnvironmentThreadShell) =>
-      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-    const target = resolveNextWaitingThread(
-      [...pinnedThreads, ...activeThreads, ...workingThreads],
+  const openNextWaitingThread = useCallback(
+    (request: { quiet: boolean } = { quiet: false }) => {
+      const keyOf = (thread: EnvironmentThreadShell) =>
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      const target = resolveNextWaitingThread(
+        [...pinnedThreads, ...activeThreads, ...workingThreads],
+        projectPriorities,
+        (thread) => keyOf(thread) === routeThreadKey,
+      );
+      if (nothingWaitingToastRef.current !== null) {
+        toastManager.close(nothingWaitingToastRef.current);
+        nothingWaitingToastRef.current = null;
+      }
+      if (target) {
+        navigateToThread(scopeThreadRef(target.environmentId, target.id));
+        return;
+      }
+      if (request.quiet) return;
+      nothingWaitingToastRef.current = toastManager.add({
+        type: "info",
+        title: "Nothing is waiting on you",
+      });
+    },
+    [
+      activeThreads,
+      navigateToThread,
+      pinnedThreads,
       projectPriorities,
-      (thread) => keyOf(thread) === routeThreadKey,
-    );
-    if (nothingWaitingToastRef.current !== null) {
-      toastManager.close(nothingWaitingToastRef.current);
-      nothingWaitingToastRef.current = null;
-    }
-    if (target) {
-      navigateToThread(scopeThreadRef(target.environmentId, target.id));
-      return;
-    }
-    nothingWaitingToastRef.current = toastManager.add({
-      type: "info",
-      title: "Nothing is waiting on you",
-    });
-  }, [
-    activeThreads,
-    navigateToThread,
-    pinnedThreads,
-    projectPriorities,
-    routeThreadKey,
-    workingThreads,
-  ]);
+      routeThreadKey,
+      workingThreads,
+    ],
+  );
   useEffect(() => subscribeNextWaitingThread(openNextWaitingThread), [openNextWaitingThread]);
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {

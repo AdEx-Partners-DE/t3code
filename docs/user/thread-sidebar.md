@@ -143,6 +143,10 @@ answer first, longest wait first, then failed threads, threads stopped on a usag
 finished work you have not read. Press it again to move on to the next one. Rebind
 `thread.nextWaiting` in **Settings → Keybindings**.
 
+To work through everything that waits without the shortcut, turn on **Settings → General → Open
+the next thread that needs you after sending**. When your message starts a turn, the app opens the
+next waiting thread; when nothing waits, you stay where you are.
+
 While either order is on you cannot drag threads within the active list; your saved order
 returns with **Manual**. A row that waits on you shows for how long.
 

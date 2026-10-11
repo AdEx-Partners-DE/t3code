@@ -494,6 +494,10 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarProjectPriorities: Schema.Record(TrimmedNonEmptyString, SidebarProjectPriority).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  // After a message starts a turn, opens the thread that needs the user most.
+  openNextWaitingThreadAfterSend: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   // Tints each thread row with its project's icon color.
   sidebarProjectTintEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
@@ -1674,6 +1678,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarInboxOrder: Schema.optionalKey(SidebarInboxOrder),
   sidebarProjectTintEnabled: Schema.optionalKey(Schema.Boolean),
+  openNextWaitingThreadAfterSend: Schema.optionalKey(Schema.Boolean),
   sidebarProjectPriorities: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectPriority),
   ),
