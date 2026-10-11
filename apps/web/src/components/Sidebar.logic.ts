@@ -1046,6 +1046,24 @@ export function orderInboxThreads<T extends InboxOrderInput>(
     .flat();
 }
 
+/**
+ * The thread that needs the user most: one blocked on an approval or answer
+ * (longest wait first), then a failed one, one stopped on a usage limit, and
+ * finished work not yet read. `isCurrent` skips the open thread, so repeating
+ * the command walks through everything that waits. Null when nothing does.
+ */
+export function resolveNextWaitingThread<T extends InboxOrderInput>(
+  threads: ReadonlyArray<T>,
+  priorities: Readonly<Record<string, SidebarProjectPriority>>,
+  isCurrent: (thread: T) => boolean,
+): T | null {
+  return (
+    orderInboxThreads(threads, "status", priorities).find(
+      (thread) => inboxStatusTier(thread) <= 3 && !isCurrent(thread),
+    ) ?? null
+  );
+}
+
 export function shouldRecedeSidebarThread(input: {
   status: SidebarThreadStatus;
   isUnread: boolean;
