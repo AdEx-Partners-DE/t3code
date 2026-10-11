@@ -513,6 +513,11 @@ function ScheduledTaskRow({
       );
     }
   };
+  // The environment-wide pause holds the task, whatever its own switch says.
+  const allTasksPaused = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.scheduledTasksPaused,
+  );
   return (
     <SettingsRow
       title={task.title}
@@ -522,12 +527,14 @@ function ScheduledTaskRow({
           <span>
             {scheduleLabel(task.schedule)} ·{" "}
             {!task.enabled
-              ? "Paused"
-              : isWebhook
-                ? "Listening"
-                : task.nextRunAt
-                  ? `Next run ${relativeLabel(task.nextRunAt)}`
-                  : "Not scheduled"}
+              ? "Off"
+              : allTasksPaused
+                ? "On, but held: all tasks are paused"
+                : isWebhook
+                  ? "Listening"
+                  : task.nextRunAt
+                    ? `Next run ${relativeLabel(task.nextRunAt)}`
+                    : "Not scheduled"}
           </span>
           {task.lastRunStatus !== "never" ? (
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
