@@ -92,8 +92,18 @@ export const make = Effect.gen(function* () {
       });
       if (next === null) {
         // Already there: still reported, so a client whose composer shows an
-        // older pick for this thread can line it up.
+        // older pick for this thread can line it up. Messages waiting in its
+        // queue may still carry an older model and would move the thread back.
         selections.push({ threadId: thread.id, modelSelection: thread.modelSelection });
+        yield* threads
+          .dispatch({
+            type: "thread.model-selection.set",
+            commandId: CommandId.make(`${input.commandId}:queued:${thread.id}`),
+            threadId: thread.id,
+            modelSelection: thread.modelSelection,
+            includeQueuedRuns: true,
+          })
+          .pipe(Effect.ignore);
         continue;
       }
       const set = yield* threads
@@ -102,6 +112,7 @@ export const make = Effect.gen(function* () {
           commandId: CommandId.make(`${input.commandId}:model:${thread.id}`),
           threadId: thread.id,
           modelSelection: next,
+          includeQueuedRuns: true,
         })
         .pipe(
           Effect.as(true),
@@ -150,6 +161,7 @@ export const make = Effect.gen(function* () {
           commandId: CommandId.make(`${input.commandId}:model:${threadId}`),
           threadId: thread.id,
           modelSelection: entry.previous,
+          includeQueuedRuns: true,
         })
         .pipe(
           Effect.as(true),

@@ -3337,6 +3337,39 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: updatedThread,
     });
 
+    if (command.type === "thread.model-selection.set" && command.includeQueuedRuns === true) {
+      const records = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs"])
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      for (const run of records.runs) {
+        if (
+          run.status !== "queued" ||
+          modelSelectionsEqual(run.modelSelection, command.modelSelection)
+        ) {
+          continue;
+        }
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          providerInstanceId: command.modelSelection.instanceId,
+          occurredAt: now,
+          payload: {
+            ...run,
+            providerInstanceId: command.modelSelection.instanceId,
+            modelSelection: command.modelSelection,
+          },
+        });
+      }
+    }
+
     if (command.type === "thread.metadata.update" && command.regenerateTitle === true) {
       yield* Ref.update(effects, (existing) => [
         ...existing,

@@ -2924,6 +2924,12 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     modelSelection: ModelSelection,
+    /**
+     * Also move the messages waiting in the thread's queue to this selection.
+     * Each queued message otherwise keeps the model it was sent with and
+     * moves the thread back to it when it starts.
+     */
+    includeQueuedRuns: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-session.detach"),
