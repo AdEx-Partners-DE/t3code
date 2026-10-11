@@ -181,7 +181,7 @@ function splitModelKey(value: string): ModelSelection | null {
 export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
   if (schedule.type === "idle") {
-    const runs = `When idle, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
+    const runs = `${schedule.allOpenThreads ? "All open threads, when idle" : "When idle"}, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
     return [
       runs,
       ...(schedule.stopPhrase === undefined ? [] : [`stops at "${schedule.stopPhrase}"`]),
@@ -218,11 +218,13 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
  */
 export function taskFactsLabel(task: ScheduledTask, threadTitle: string | null): string {
   const target =
-    task.threadId === null
-      ? "New thread each run"
-      : threadTitle === null
-        ? "Thread no longer exists"
-        : `In "${threadTitle}"`;
+    task.schedule.type === "idle" && task.schedule.allOpenThreads
+      ? `Up to ${task.schedule.maxParallel ?? 2} threads at work at once`
+      : task.threadId === null
+        ? "New thread each run"
+        : threadTitle === null
+          ? "Thread no longer exists"
+          : `In "${threadTitle}"`;
   const runs = `${task.runCount} ${task.runCount === 1 ? "run" : "runs"}`;
   const last = task.lastRunAt === null ? "never ran" : `last ${relativeLabel(task.lastRunAt)}`;
   const author = task.createdBy === "agent" ? "made by an agent" : `made by ${task.createdBy}`;

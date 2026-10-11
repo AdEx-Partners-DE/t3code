@@ -50,6 +50,8 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { decideIdleTrigger, saysStopPhrase, underUsageBudget } from "./idleTrigger.ts";
+import { planPortfolioNudge } from "./portfolioNudge.ts";
+import { recordDecision } from "../decisionLog.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -1248,6 +1250,115 @@ export const layer = Layer.effect(
     });
     yield* scheduler.register("scheduled-tasks-idle", runIdleTasks());
 
+    // Portfolio tasks: idle tasks for every open thread at once. Each pass
+    // sends to the standing threads the plan picks, within the cap.
+    const runPortfolioTasks = Effect.fn("ScheduledTaskService.runPortfolioTasks")(function* () {
+      if (yield* tasksPaused) return;
+      const rows = yield* sql<ScheduledTaskRow>`
+        SELECT * FROM scheduled_tasks
+        WHERE enabled = 1 AND next_run_at IS NULL AND thread_id IS NULL
+          AND schedule_json LIKE '%"type":"idle"%' AND schedule_json LIKE '%"allOpenThreads":true%'
+      `.pipe(Effect.mapError((cause) => taskError("Could not list portfolio tasks.", { cause })));
+      yield* Effect.forEach(
+        rows,
+        (row) =>
+          Effect.gen(function* () {
+            const task = yield* decodeRow(row);
+            if (task.schedule.type !== "idle" || task.schedule.allOpenThreads !== true) return;
+            const schedule = task.schedule;
+            const now = yield* localNow;
+            const nowMs = DateTime.toEpochMillis(now);
+            if ((schedule.runsUsed ?? 0) >= schedule.maxRuns) {
+              yield* sql`
+                UPDATE scheduled_tasks SET enabled = 0, updated_at = ${iso(now)}
+                WHERE task_id = ${task.id}
+              `;
+              yield* notifyChanged;
+              return;
+            }
+            const shell = yield* threadManagement.getShellSnapshot();
+            const plan = planPortfolioNudge({ schedule, threads: shell.threads, nowMs });
+            let runsUsed = schedule.runsUsed ?? 0;
+            const nudged: Record<string, string> = { ...plan.remembered };
+            let changed = Object.keys(nudged).length !== Object.keys(schedule.nudged ?? {}).length;
+            for (const thread of plan.targets) {
+              if (thread.latestRunId === null) continue;
+              // Whatever happens next, this finished run has been looked at.
+              nudged[thread.id] = thread.latestRunId;
+              changed = true;
+              if (
+                saysStopPhrase(
+                  schedule.stopPhrase,
+                  schedule.stopPhrase === undefined
+                    ? null
+                    : yield* lastReplyText(thread.id, thread.latestRunId),
+                )
+              ) {
+                yield* recordDecision({
+                  kind: "portfolio-nudge",
+                  threadId: thread.id,
+                  outcome: "skipped-stop-phrase",
+                  facts: { taskId: task.id },
+                });
+                continue;
+              }
+              const remainingPercent =
+                schedule.minRemainingPercent === undefined
+                  ? null
+                  : yield* remainingPercentOf(thread.modelSelection.instanceId);
+              if (underUsageBudget(schedule.minRemainingPercent, remainingPercent)) {
+                yield* recordDecision({
+                  kind: "portfolio-nudge",
+                  threadId: thread.id,
+                  outcome: "skipped-budget",
+                  facts: { taskId: task.id, remainingPercent },
+                });
+                continue;
+              }
+              const fireKey = `${task.id}:${nowMs}:portfolio:${thread.id}`;
+              const sent = yield* Effect.exit(
+                threadManagement.sendToThread({
+                  projectId: thread.projectId,
+                  commandId: CommandId.make(`scheduled-task:${fireKey}`),
+                  threadId: thread.id,
+                  messageId: MessageId.make(`${SCHEDULED_MESSAGE_ID_PREFIX}${fireKey}`),
+                  scheduledTaskId: task.id,
+                  text: task.prompt,
+                  attachments: [],
+                  // No model: each thread goes on with the one it runs on.
+                  mode: "queue",
+                  createdBy: task.createdBy,
+                  creationSource: task.creationSource,
+                }),
+              );
+              yield* recordDecision({
+                kind: "portfolio-nudge",
+                threadId: thread.id,
+                outcome: sent._tag === "Success" ? "sent" : "failed",
+                facts: { taskId: task.id },
+              });
+              if (sent._tag === "Success") runsUsed += 1;
+            }
+            if (!changed && runsUsed === (schedule.runsUsed ?? 0)) return;
+            yield* sql`
+              UPDATE scheduled_tasks
+              SET schedule_json = ${encodeScheduleJson({ ...schedule, runsUsed, nudged })},
+                  run_count = run_count + ${runsUsed - (schedule.runsUsed ?? 0)},
+                  last_run_at = ${runsUsed === (schedule.runsUsed ?? 0) ? row.last_run_at : iso(now)},
+                  last_run_status = ${runsUsed === (schedule.runsUsed ?? 0) ? row.last_run_status : "succeeded"}
+              WHERE task_id = ${task.id}
+            `;
+            yield* notifyChanged;
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Portfolio task pass failed", { taskId: row.task_id, cause }),
+            ),
+          ),
+        { concurrency: 1, discard: true },
+      );
+    });
+    yield* scheduler.register("scheduled-tasks-portfolio", runPortfolioTasks());
+
     const list: ScheduledTaskService["Service"]["list"] = () =>
       listRows().pipe(
         Effect.map((tasks) => ({ tasks })),
@@ -1306,19 +1417,37 @@ export const layer = Layer.effect(
               }
             : input.schedule.type === "idle"
               ? // Saving arms the task afresh; an untouched schedule keeps its count.
-                {
-                  ...input.schedule,
-                  runsUsed:
+                (() => {
+                  const untouched =
                     existingTask !== null &&
                     existingTask.enabled === input.enabled &&
                     isSameSchedule(existingTask.schedule, input.schedule) &&
                     existingTask.schedule.type === "idle"
-                      ? (existingTask.schedule.runsUsed ?? 0)
-                      : 0,
-                }
+                      ? existingTask.schedule
+                      : null;
+                  const { nudged: _clientNudged, ...fromInput } = input.schedule;
+                  return {
+                    ...fromInput,
+                    runsUsed: untouched?.runsUsed ?? 0,
+                    ...(untouched?.nudged === undefined ? {} : { nudged: untouched.nudged }),
+                  };
+                })()
               : input.schedule;
-        if (schedule.type === "idle" && (input.threadId ?? null) === null) {
+        if (
+          schedule.type === "idle" &&
+          schedule.allOpenThreads !== true &&
+          (input.threadId ?? null) === null
+        ) {
           return yield* taskError("A task that runs when a thread is idle needs a thread.", {
+            taskId: id,
+          });
+        }
+        if (
+          schedule.type === "idle" &&
+          schedule.allOpenThreads === true &&
+          input.threadId != null
+        ) {
+          return yield* taskError("A task for all open threads cannot be bound to one thread.", {
             taskId: id,
           });
         }
@@ -1457,6 +1586,12 @@ export const layer = Layer.effect(
           return yield* taskError("Webhook tasks run when their URL receives a request.", {
             taskId: input.id,
           });
+        }
+        if (task.schedule.type === "idle" && task.schedule.allOpenThreads === true) {
+          return yield* taskError(
+            "This task sends to open threads when they stand still; it has nothing to run by hand. Use Send to idle threads for a single pass.",
+            { taskId: input.id },
+          );
         }
         return yield* runTask(task, "manual").pipe(
           Effect.mapError((cause) =>
