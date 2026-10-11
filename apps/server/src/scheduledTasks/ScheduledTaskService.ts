@@ -941,7 +941,12 @@ export const layer = Layer.effect(
                   scheduledTaskId: active.id,
                   text: prompt,
                   attachments: [],
-                  modelSelection: active.modelSelection,
+                  // An idle task carries on the thread's own work, so it runs on
+                  // whatever the thread runs on. Sending the task's model would
+                  // move the thread to it, account and all.
+                  ...(active.schedule.type === "idle"
+                    ? {}
+                    : { modelSelection: active.modelSelection }),
                   // Scheduled prompts must not interrupt tools in the bound thread.
                   mode: "queue",
                   createdBy: active.createdBy,

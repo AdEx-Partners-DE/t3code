@@ -628,6 +628,7 @@ const idleHarness = (input: {
 
     const sent = yield* Ref.make(0);
     const shellsRead = yield* Ref.make<ReadonlyArray<string>>([]);
+    const sentModel = yield* Ref.make<unknown>("unset");
     const delivered = yield* Deferred.make<void>();
     const layer = Layer.provideMerge(
       ScheduledTaskService.layer,
@@ -652,11 +653,12 @@ const idleHarness = (input: {
               messages: [{ role: "assistant", text: input.lastReply, runId: "run:1" }],
             })) as never,
           getProjectThreadRecords: (() => Effect.succeed({ runs: [] })) as never,
-          sendToThread: () =>
+          sendToThread: ((sendInput: { readonly modelSelection?: unknown }) =>
             Ref.update(sent, (n) => n + 1).pipe(
+              Effect.andThen(Ref.set(sentModel, sendInput.modelSelection ?? null)),
               Effect.andThen(Deferred.succeed(delivered, undefined)),
               Effect.andThen(Effect.die(new Error("test send failure"))),
-            ),
+            )) as never,
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({
           getProviders: Effect.succeed(
@@ -687,7 +689,7 @@ const idleHarness = (input: {
     const row = sql<{ enabled: number; last_run_error: string | null }>`
       SELECT enabled, last_run_error FROM scheduled_tasks WHERE task_id = 'idle'
     `.pipe(Effect.map((rows) => rows[0]!));
-    return { layer, sent, shellsRead, delivered, row };
+    return { layer, sent, sentModel, shellsRead, delivered, row };
   });
 
 it.effect(
@@ -721,6 +723,8 @@ it.effect("sends an idle task's prompt when the reply does not hold the stop phr
         yield* TestClock.adjust("6 seconds");
         yield* Deferred.await(harness.delivered);
         assert.equal(yield* Ref.get(harness.sent), 1);
+        // Sent without a model: the thread keeps the one it runs on.
+        assert.isNull(yield* Ref.get(harness.sentModel));
       }),
     );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
