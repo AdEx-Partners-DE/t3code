@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - Effect's symlink cannot make the junctions Windows users link these homes with.
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -75,10 +77,12 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-home-" }),
       );
       const home = (name: string) => path.join(root, name);
+      const linkDirectory = (target: string, link: string) =>
+        Effect.promise(() => NodeFSP.symlink(target, link, "junction"));
       const linkProjects = (name: string, target: string) =>
         fileSystem
           .makeDirectory(home(name))
-          .pipe(Effect.andThen(fileSystem.symlink(target, path.join(home(name), "projects"))));
+          .pipe(Effect.andThen(linkDirectory(target, path.join(home(name), "projects"))));
 
       yield* fileSystem.makeDirectory(path.join(home("shared"), "projects"), { recursive: true });
       yield* fileSystem.makeDirectory(path.join(home("separate"), "projects"), { recursive: true });
@@ -86,7 +90,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
       yield* linkProjects("overlay", path.join(home("shared"), "projects"));
       yield* linkProjects("chained", path.join(home("overlay"), "projects"));
       yield* linkProjects("dangling", path.join(home("missing"), "projects"));
-      yield* fileSystem.symlink(home("shared"), home("alias"));
+      yield* linkDirectory(home("shared"), home("alias"));
       for (const account of ["personal", "work"]) {
         yield* fileSystem.makeDirectory(path.join(home("transcripts"), account), {
           recursive: true,
@@ -100,7 +104,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
     const ownProjectsKey = (homePath: string) =>
       Effect.map(Path.Path, (path) => `claude:projects:${path.join(homePath, "projects")}`);
 
-    it.effect("groups auth-overlay homes with the home their projects symlink points at", () =>
+    it.effect("groups auth-overlay homes with the home their projects link points at", () =>
       Effect.gen(function* () {
         const home = yield* makeClaudeHomes;
         const sharedKey = yield* ownProjectsKey(home("shared"));
