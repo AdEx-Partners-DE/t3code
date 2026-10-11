@@ -3829,12 +3829,20 @@ export const OrchestrationV2RpcSchemas = {
       ),
       effort: Schema.optional(TrimmedNonEmptyString),
     }),
-    output: Schema.Struct({ threads: NonNegativeInt }),
+    output: Schema.Struct({
+      threads: NonNegativeInt,
+      /** The selection of every thread the call covered, changed or already there, for clients to line their composers up. */
+      changed: Schema.Array(Schema.Struct({ threadId: ThreadId, modelSelection: ModelSelection })),
+    }),
   },
   /** Puts back the selections the last overrides replaced. */
   restoreOpenThreadModels: {
     input: Schema.Struct({ commandId: CommandId }),
-    output: Schema.Struct({ threads: NonNegativeInt }),
+    output: Schema.Struct({
+      threads: NonNegativeInt,
+      /** The selection of every thread the call covered, changed or already there, for clients to line their composers up. */
+      changed: Schema.Array(Schema.Struct({ threadId: ThreadId, modelSelection: ModelSelection })),
+    }),
   },
   /**
    * Starts a turn with one message in open threads that stand still, up to

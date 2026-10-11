@@ -75,7 +75,7 @@ export function NudgeIdleThreads() {
   };
 
   return (
-    <div className="flex w-full max-w-xl flex-wrap items-center justify-end gap-2">
+    <div className="flex w-full flex-wrap items-center gap-2 pt-3">
       <Input
         nativeInput
         aria-label="Message for all idle threads"

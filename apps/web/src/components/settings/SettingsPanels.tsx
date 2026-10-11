@@ -3142,15 +3142,17 @@ export function GeneralSettingsPanel() {
           serverScoped
           {...searchableSetting("model-for-all-open-threads")}
           description="Move every open thread to one model, one thinking level, or both. Each thread uses it from its next message, with a handoff where the account changes. Put back restores what the threads had."
-          control={<OpenThreadModelOverride />}
-        />
+        >
+          <OpenThreadModelOverride />
+        </SettingsRow>
 
         <SettingsRow
           serverScoped
           {...searchableSetting("nudge-idle-threads")}
           description="Send one message to the open threads that stand still, most recently finished first, up to the number you set. Each starts a turn now."
-          control={<NudgeIdleThreads />}
-        />
+        >
+          <NudgeIdleThreads />
+        </SettingsRow>
 
         <SettingsRow
           {...searchableSetting("continue-threads-after-server-update")}

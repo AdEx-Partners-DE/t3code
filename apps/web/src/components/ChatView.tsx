@@ -318,6 +318,7 @@ import {
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomUUID } from "~/lib/utils";
+import { threadModelSelectionChanged } from "../threadModelSelectionSeen";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { requestNextWaitingThread } from "./threadNextWaitingBus";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -3050,6 +3051,23 @@ export default function ChatView(props: ChatViewProps) {
     composerDraftTarget,
     latestRunSelection,
     routeThreadKey,
+    setComposerDraftModelSelection,
+  ]);
+  // The thread was moved to another model from outside this composer (the
+  // override for all open threads, another client): take the thread's
+  // selection, or the composer's saved pick would go on hiding it.
+  const serverThreadModelSelection = isServerThread ? (activeThread?.modelSelection ?? null) : null;
+  useEffect(() => {
+    if (serverThreadModelSelection === null) return;
+    if (!threadModelSelectionChanged(routeThreadKey, serverThreadModelSelection)) return;
+    setComposerDraftModelSelection(composerDraftTarget, serverThreadModelSelection, {
+      explicit: true,
+      replaceOptions: true,
+    });
+  }, [
+    composerDraftTarget,
+    routeThreadKey,
+    serverThreadModelSelection,
     setComposerDraftModelSelection,
   ]);
   const selectedProviderByThreadId = composerActiveProvider ?? null;

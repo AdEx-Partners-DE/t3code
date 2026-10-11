@@ -81,6 +81,7 @@ export const make = Effect.gen(function* () {
     const providers = yield* registry.getProviders;
     const shell = yield* threads.getShellSnapshot();
     const saved: Record<string, SavedSelections[ThreadId]> = { ...(yield* readSaved) };
+    const selections: Array<{ threadId: ThreadId; modelSelection: ModelSelection }> = [];
     let changed = 0;
     for (const thread of shell.threads) {
       if (!isOpenThread(thread)) continue;
@@ -89,7 +90,12 @@ export const make = Effect.gen(function* () {
         override: input.override,
         providers,
       });
-      if (next === null) continue;
+      if (next === null) {
+        // Already there: still reported, so a client whose composer shows an
+        // older pick for this thread can line it up.
+        selections.push({ threadId: thread.id, modelSelection: thread.modelSelection });
+        continue;
+      }
       const set = yield* threads
         .dispatch({
           type: "thread.model-selection.set",
@@ -108,6 +114,7 @@ export const make = Effect.gen(function* () {
         );
       if (!set) continue;
       changed += 1;
+      selections.push({ threadId: thread.id, modelSelection: next });
       // A second override on top of the first still restores to the original.
       saved[thread.id] = {
         previous: saved[thread.id]?.previous ?? thread.modelSelection,
@@ -118,7 +125,7 @@ export const make = Effect.gen(function* () {
       yield* fileSystem.writeFileString(filePath, encodeSaved(saved as SavedSelections));
     }
     yield* Effect.logInfo("Model set on open threads", { threads: changed });
-    return { threads: changed };
+    return { threads: changed, changed: selections };
   });
 
   const restore = Effect.fn("OpenThreadModelOverride.restore")(function* (input: {
@@ -127,7 +134,7 @@ export const make = Effect.gen(function* () {
     const saved = yield* readSaved;
     const shell = yield* threads.getShellSnapshot();
     const byId = new Map(shell.threads.map((thread) => [thread.id as string, thread]));
-    let restored = 0;
+    const restored: Array<{ threadId: ThreadId; modelSelection: ModelSelection }> = [];
     for (const [threadId, entry] of Object.entries(saved)) {
       const thread = byId.get(threadId);
       // A thread the user has moved to another model since then keeps that choice.
@@ -148,11 +155,13 @@ export const make = Effect.gen(function* () {
           Effect.as(true),
           Effect.catch(() => Effect.succeed(false)),
         );
-      if (set) restored += 1;
+      if (set) restored.push({ threadId: thread.id, modelSelection: entry.previous });
     }
     yield* fileSystem.remove(filePath).pipe(Effect.ignore);
-    yield* Effect.logInfo("Previous models restored on open threads", { threads: restored });
-    return { threads: restored };
+    yield* Effect.logInfo("Previous models restored on open threads", {
+      threads: restored.length,
+    });
+    return { threads: restored.length, changed: restored };
   });
 
   return {

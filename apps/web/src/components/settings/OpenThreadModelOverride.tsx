@@ -4,9 +4,11 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { CommandId, type EnvironmentId, type ProviderInstanceId } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useMemo, useState } from "react";
 
 import { randomUUID } from "~/lib/utils";
+import { useComposerDraftStore } from "../../composerDraftStore";
 import { ensureLocalApi } from "../../localApi";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
@@ -111,6 +113,16 @@ function OpenThreadModelOverrideControls({
     failed: string,
   ) => {
     if (result._tag === "Success") {
+      // A composer keeps its own saved pick per thread, which would hide the
+      // change; move every changed thread's composer along.
+      const drafts = useComposerDraftStore.getState();
+      for (const entry of result.value.changed) {
+        drafts.setModelSelection(
+          scopeThreadRef(environmentId, entry.threadId),
+          entry.modelSelection,
+          { explicit: true, replaceOptions: true },
+        );
+      }
       toastManager.add({ type: "success", title: done(result.value.threads) });
     } else if (!isAtomCommandInterrupted(result)) {
       toastManager.add({
@@ -167,7 +179,7 @@ function OpenThreadModelOverrideControls({
   };
 
   return (
-    <div className="flex flex-wrap items-center justify-end gap-2">
+    <div className="flex flex-wrap items-center gap-2 pt-3">
       <Input
         nativeInput
         aria-label="Filter the model list"
