@@ -25,12 +25,15 @@ export function SidebarCockpit({
   environmentId,
   nowMs,
   onOpenNextWaiting,
+  onOpenChecklists,
 }: {
   readonly summary: OpenThreadSummary;
   /** The environment whose usage history feeds the burn chart; null hides the chart. */
   readonly environmentId: EnvironmentId | null;
   readonly nowMs: number;
   readonly onOpenNextWaiting: () => void;
+  /** Opens the checklists of all open threads. */
+  readonly onOpenChecklists: () => void;
 }) {
   const [expanded, setExpanded] = useLocalStorage(COCKPIT_EXPANDED_KEY, true, Schema.Boolean);
   const blockedShare = summary.open === 0 ? 0 : Math.round((summary.needYou / summary.open) * 100);
@@ -74,6 +77,9 @@ export function SidebarCockpit({
                 (summary.waiting > 0 ? ` · ${summary.waiting} on background work` : "")}
           </div>
           {environmentId === null ? null : (
+            <CockpitChecklists environmentId={environmentId} onOpen={onOpenChecklists} />
+          )}
+          {environmentId === null ? null : (
             <CockpitBurn environmentId={environmentId} nowMs={nowMs} />
           )}
         </div>
@@ -114,6 +120,44 @@ function CockpitStat(props: {
     </button>
   ) : (
     <div className={className}>{body}</div>
+  );
+}
+
+/** What the stored checklists of the open threads add up to; opens the full list. */
+function CockpitChecklists({
+  environmentId,
+  onOpen,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly onOpen: () => void;
+}) {
+  const input = useMemo(() => ({}), []);
+  const result = useAtomValue(serverEnvironment.threadChecklists({ environmentId, input }));
+  const checklists = Option.getOrNull(AsyncResult.value(result))?.checklists ?? null;
+  const count = (status: string) =>
+    (checklists ?? []).reduce(
+      (total, checklist) => total + checklist.items.filter((item) => item.status === status).length,
+      0,
+    );
+  const attention = count("attention");
+  return (
+    <button
+      type="button"
+      data-testid="sidebar-cockpit-checklists"
+      onClick={onOpen}
+      className="cursor-pointer rounded-sm text-left tabular-nums hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+    >
+      {checklists === null || checklists.length === 0 ? (
+        "Checklists of all threads"
+      ) : (
+        <>
+          <span className={attention > 0 ? "font-medium text-destructive" : undefined}>
+            {attention} {attention === 1 ? "point needs" : "points need"} you
+          </span>{" "}
+          · {count("open")} open · {count("done")} done
+        </>
+      )}
+    </button>
   );
 }
 

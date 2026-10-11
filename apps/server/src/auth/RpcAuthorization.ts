@@ -58,6 +58,7 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.clearAllQueues]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getThreadChecklist]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.listThreadChecklists]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels]: AuthOrchestrationOperateScope,

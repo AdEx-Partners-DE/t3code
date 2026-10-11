@@ -45,6 +45,7 @@ import {
 import {
   resolveThreadProviderStack,
   threadRuntimeCanArchive,
+  threadRuntimeIsActive,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/models";
 import {
@@ -276,6 +277,7 @@ import {
 } from "../providerInstances";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { PendingRequestsDialog } from "./PendingRequestsDialog";
+import { PortfolioChecklistDialog } from "./PortfolioChecklistDialog";
 import { SidebarAutomationStatus } from "./SidebarAutomationStatus";
 import { SidebarCockpit } from "./SidebarCockpit";
 import { subscribeNextWaitingThread } from "./threadNextWaitingBus";
@@ -5164,6 +5166,22 @@ export default function Sidebar() {
     [activeThreads, pinnedThreads, workingThreads],
   );
   const [pendingRequestsOpen, setPendingRequestsOpen] = useState(false);
+  const [portfolioChecklistOpen, setPortfolioChecklistOpen] = useState(false);
+  const portfolioThreads = useMemo(
+    () =>
+      portfolioChecklistOpen
+        ? [...pinnedThreads, ...activeThreads, ...workingThreads].map((thread) => ({
+            environmentId: thread.environmentId,
+            id: thread.id,
+            title: thread.title,
+            projectName:
+              projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
+            latestRunId: thread.latestRun?.runId ?? null,
+            working: threadRuntimeIsActive(thread.runtime),
+          }))
+        : [],
+    [activeThreads, pinnedThreads, portfolioChecklistOpen, projectDisplayNameByKey, workingThreads],
+  );
   const pendingRequestThreads = useMemo(
     () =>
       pendingRequestsOpen
@@ -5525,8 +5543,16 @@ export default function Sidebar() {
               environmentId={serverConfigs.keys().next().value ?? null}
               nowMs={cockpitNowMs}
               onOpenNextWaiting={() => openNextWaitingThread({ quiet: true })}
+              onOpenChecklists={() => setPortfolioChecklistOpen(true)}
             />
           )}
+          {portfolioChecklistOpen && serverConfigs.size > 0 ? (
+            <PortfolioChecklistDialog
+              environmentId={serverConfigs.keys().next().value!}
+              threads={portfolioThreads}
+              onClose={() => setPortfolioChecklistOpen(false)}
+            />
+          ) : null}
           {isSearchingThreads
             ? null
             : [...serverConfigs.keys()].map((id) => (

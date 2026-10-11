@@ -29,6 +29,7 @@ const RPC_AGGREGATES = {
   [ORCHESTRATION_V2_WS_METHODS.launchThread]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.clearAllQueues]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getThreadChecklist]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.listThreadChecklists]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels]: "orchestration",

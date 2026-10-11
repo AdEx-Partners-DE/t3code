@@ -1996,6 +1996,17 @@ const layerWsRpc = (
                 }),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.listThreadChecklists]: () =>
+          threadChecklist.listOpen.pipe(
+            Effect.map((checklists) => ({ checklists })),
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Could not read the checklists of the open threads",
+                  cause,
+                }),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadChecklist]: (input) =>
           threadChecklist.read(input.threadId).pipe(Effect.map((checklist) => ({ checklist }))),
         [ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist]: (input) =>

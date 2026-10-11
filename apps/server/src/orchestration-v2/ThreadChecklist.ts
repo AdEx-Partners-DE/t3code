@@ -20,6 +20,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { isOpenThread } from "./OpenThreadModelOverride.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import { buildChecklistTranscript } from "./threadChecklistTranscript.ts";
 
@@ -86,9 +87,20 @@ export const make = Effect.gen(function* () {
     return checklist;
   });
 
+  const listOpen = threads.getShellSnapshot().pipe(
+    Effect.flatMap((shell) =>
+      Effect.forEach(shell.threads.filter(isOpenThread), (thread) => read(thread.id), {
+        concurrency: 8,
+      }),
+    ),
+    Effect.map((checklists) => checklists.filter((checklist) => checklist !== null)),
+  );
+
   return {
     /** The stored checklist, or null when none was written yet. */
     read,
+    /** The stored checklists of all open threads; threads without one are left out. */
+    listOpen,
     /** Writes the checklist anew from the thread as it stands and stores it. */
     refresh: (threadId: ThreadId) => lock.withPermits(1)(refresh(threadId)),
   };

@@ -38,15 +38,19 @@ const AUTO_REFRESH_KEY = "t3code:thread-checklist:auto";
 const AUTO_REFRESH_MIN_AGE_MS = 15 * 60_000;
 const DONE_SHOWN = 5;
 
-const STATUS_ORDER = ["attention", "open", "backlog", "done"] as const;
-const STATUS_LABEL: Record<ThreadChecklistItem["status"], string> = {
+export const CHECKLIST_STATUS_ORDER = ["attention", "open", "backlog", "done"] as const;
+export const CHECKLIST_STATUS_LABEL: Record<ThreadChecklistItem["status"], string> = {
   attention: "Needs you",
   open: "Open",
   backlog: "Backlog",
   done: "Done",
 };
 
-function StatusIcon({ status }: { readonly status: ThreadChecklistItem["status"] }) {
+export function ChecklistStatusIcon({
+  status,
+}: {
+  readonly status: ThreadChecklistItem["status"];
+}) {
   const className = "mt-0.5 size-3.5 shrink-0";
   switch (status) {
     case "attention":
@@ -125,7 +129,7 @@ export function ThreadChecklistPanel(props: {
     // `run` closes over the same values this effect lists.
   }, [allowed, auto, busy, checklist, hasRun, loaded, latestRunId, stale, working]);
 
-  const groups = STATUS_ORDER.map((status) => ({
+  const groups = CHECKLIST_STATUS_ORDER.map((status) => ({
     status,
     items: (checklist?.items ?? []).filter((item) => item.status === status),
   })).filter((group) => group.items.length > 0);
@@ -201,12 +205,12 @@ export function ThreadChecklistPanel(props: {
           return (
             <div key={group.status} className="flex flex-col gap-1">
               <div className="text-2xs font-medium text-muted-foreground select-none">
-                {STATUS_LABEL[group.status]} · {group.items.length}
+                {CHECKLIST_STATUS_LABEL[group.status]} · {group.items.length}
               </div>
               <ul className="flex flex-col gap-1">
                 {shown.map((item) => (
                   <li key={`${item.status}:${item.text}`} className="flex gap-1.5">
-                    <StatusIcon status={item.status} />
+                    <ChecklistStatusIcon status={item.status} />
                     <div className="min-w-0">
                       <div
                         className={cn(

@@ -1128,6 +1128,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-tasks:live",
       tag: WS_METHODS.scheduledTasksSubscribe,
     }),
+    threadChecklists: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:thread-checklists",
+      tag: ORCHESTRATION_V2_WS_METHODS.listThreadChecklists,
+      staleTimeMs: 30_000,
+    }),
     threadChecklist: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:thread-checklist",
       tag: ORCHESTRATION_V2_WS_METHODS.getThreadChecklist,

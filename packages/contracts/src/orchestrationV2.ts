@@ -3281,6 +3281,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   clearAllQueues: "orchestration.clearAllQueues",
   getThreadChecklist: "orchestration.getThreadChecklist",
+  listThreadChecklists: "orchestration.listThreadChecklists",
   refreshThreadChecklist: "orchestration.refreshThreadChecklist",
   nudgeIdleThreads: "orchestration.nudgeIdleThreads",
   overrideOpenThreadModels: "orchestration.overrideOpenThreadModels",
@@ -3846,6 +3847,11 @@ export const OrchestrationV2RpcSchemas = {
       limit: PositiveInt.check(Schema.isLessThanOrEqualTo(50)),
     }),
     output: Schema.Struct({ sent: NonNegativeInt, still: NonNegativeInt }),
+  },
+  /** The stored checklists of every open thread, for the view across threads. */
+  listThreadChecklists: {
+    input: Schema.Struct({}),
+    output: Schema.Struct({ checklists: Schema.Array(ThreadChecklist) }),
   },
   getThreadChecklist: {
     input: Schema.Struct({ threadId: ThreadId }),

@@ -1721,6 +1721,15 @@ const WsOrchestrationV2NudgeIdleThreadsRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationV2ListThreadChecklistsRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.listThreadChecklists,
+  {
+    payload: OrchestrationV2RpcSchemas.listThreadChecklists.input,
+    success: OrchestrationV2RpcSchemas.listThreadChecklists.output,
+    error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2GetThreadChecklistRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getThreadChecklist,
   {
@@ -2113,6 +2122,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2ClearAllQueuesRpc,
   WsOrchestrationV2GetThreadChecklistRpc,
+  WsOrchestrationV2ListThreadChecklistsRpc,
   WsOrchestrationV2RefreshThreadChecklistRpc,
   WsOrchestrationV2NudgeIdleThreadsRpc,
   WsOrchestrationV2OverrideOpenThreadModelsRpc,
