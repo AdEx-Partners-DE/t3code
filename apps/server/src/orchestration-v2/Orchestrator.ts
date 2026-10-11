@@ -7908,6 +7908,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           status: "cancelled",
           queuePosition: null,
           completedAt: input.now,
+          // What a clear removed can be put back; a single cancel is final.
+          ...(input.command.type === "queue.clear" ? { queueClearedAt: input.now } : {}),
         },
       });
       if (queuedAttempt !== undefined && queuedRootNode !== undefined) {

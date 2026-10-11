@@ -3134,7 +3134,7 @@ export function GeneralSettingsPanel() {
         <SettingsRow
           serverScoped
           {...searchableSetting("clear-all-queues")}
-          description="Remove every message waiting in a thread's queue. Runs under way go on. This cannot be undone."
+          description="Remove every message waiting in a thread's queue. Runs under way go on. Restore cleared puts back what was removed in the last 24 hours."
           control={<ClearAllQueuesButton />}
         />
 

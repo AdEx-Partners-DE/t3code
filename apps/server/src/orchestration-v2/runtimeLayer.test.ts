@@ -3868,6 +3868,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const cleared = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(cleared.runs.filter((run) => run.status === "queued").length, 0);
       assert.equal(cleared.runs.filter((run) => run.status === "cancelled").length, 2);
+      // Marked as cleared, which is what lets them be put back later.
+      assert.equal(cleared.runs.filter((run) => run.queueClearedAt !== undefined).length, 2);
       assert.equal(cleared.runs.find((run) => run.id === activeRun.id)?.status, activeRun.status);
     }),
   );

@@ -2024,6 +2024,18 @@ const layerWsRpc = (
                 }),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.restoreClearedQueues]: (input) =>
+          threadManagement.restoreClearedQueues(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2DispatchCommandError({
+                  commandId: input.commandId,
+                  commandType: "message.dispatch",
+                  message: "Failed to restore the cleared queues",
+                  cause,
+                }),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.clearAllQueues]: (input) =>
           threadManagement.clearAllQueues(input).pipe(
             Effect.mapError(

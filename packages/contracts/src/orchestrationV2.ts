@@ -554,6 +554,11 @@ export const OrchestrationV2Run = Schema.Struct({
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
   /** Restart recovery holds the queue until the user explicitly resumes it. */
   queueHeld: Schema.optional(Schema.Boolean),
+  /**
+   * Set when "clear queue" cancelled this run before it started. Such a run
+   * can be put back into the queue; one the user cancelled by itself cannot.
+   */
+  queueClearedAt: Schema.optional(Schema.DateTimeUtc),
   requestedAt: Schema.DateTimeUtc,
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
@@ -2114,6 +2119,7 @@ export const OrchestrationV2RunJson = OrchestrationV2Run.mapFields((fields) => (
   startedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   workStartedAt: Schema.optional(Schema.DateTimeUtcFromString),
+  queueClearedAt: Schema.optional(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2RunJson = typeof OrchestrationV2RunJson.Type;
 
@@ -3280,6 +3286,7 @@ export type ThreadChecklist = typeof ThreadChecklist.Type;
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   clearAllQueues: "orchestration.clearAllQueues",
+  restoreClearedQueues: "orchestration.restoreClearedQueues",
   getThreadChecklist: "orchestration.getThreadChecklist",
   listThreadChecklists: "orchestration.listThreadChecklists",
   refreshThreadChecklist: "orchestration.refreshThreadChecklist",
@@ -3869,6 +3876,19 @@ export const OrchestrationV2RpcSchemas = {
   refreshThreadChecklist: {
     input: Schema.Struct({ threadId: ThreadId }),
     output: Schema.Struct({ checklist: ThreadChecklist }),
+  },
+  /**
+   * Puts messages back that "clear queue" removed within the last
+   * `maxAgeMinutes`: for one thread, or for every open thread. A message is
+   * put back once. `messages` is how many went back, into `threads` threads.
+   */
+  restoreClearedQueues: {
+    input: Schema.Struct({
+      commandId: CommandId,
+      threadId: Schema.optional(ThreadId),
+      maxAgeMinutes: PositiveInt.check(Schema.isLessThanOrEqualTo(7 * 24 * 60)),
+    }),
+    output: Schema.Struct({ threads: NonNegativeInt, messages: NonNegativeInt }),
   },
   clearAllQueues: {
     input: Schema.Struct({ commandId: CommandId }),

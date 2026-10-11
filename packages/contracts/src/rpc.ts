@@ -1748,6 +1748,15 @@ const WsOrchestrationV2RefreshThreadChecklistRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationV2RestoreClearedQueuesRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.restoreClearedQueues,
+  {
+    payload: OrchestrationV2RpcSchemas.restoreClearedQueues.input,
+    success: OrchestrationV2RpcSchemas.restoreClearedQueues.output,
+    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2ClearAllQueuesRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.clearAllQueues, {
   payload: OrchestrationV2RpcSchemas.clearAllQueues.input,
   success: OrchestrationV2RpcSchemas.clearAllQueues.output,
@@ -2121,6 +2130,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2ClearAllQueuesRpc,
+  WsOrchestrationV2RestoreClearedQueuesRpc,
   WsOrchestrationV2GetThreadChecklistRpc,
   WsOrchestrationV2ListThreadChecklistsRpc,
   WsOrchestrationV2RefreshThreadChecklistRpc,

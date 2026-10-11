@@ -306,6 +306,19 @@ export interface ThreadManagementServiceShape {
   readonly clearAllQueues: (input: {
     readonly commandId: CommandId;
   }) => Effect.Effect<{ readonly threads: number }, Orchestrator.OrchestratorV2Error>;
+  /**
+   * Queues again what "clear queue" removed in the last `maxAgeMinutes`, in
+   * the order it was queued: for `threadId`, or for every open thread. Each
+   * message goes back once; calling again restores nothing twice.
+   */
+  readonly restoreClearedQueues: (input: {
+    readonly commandId: CommandId;
+    readonly threadId?: ThreadId | undefined;
+    readonly maxAgeMinutes: number;
+  }) => Effect.Effect<
+    { readonly threads: number; readonly messages: number },
+    Orchestrator.OrchestratorV2Error
+  >;
   readonly getThreadHistoryPage: Orchestrator.OrchestratorV2["Service"]["getThreadHistoryPage"];
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
@@ -637,6 +650,74 @@ const make = Effect.gen(function* () {
       }
       yield* Effect.logInfo("Thread queues cleared", { threads });
       return { threads };
+    });
+
+  const restoreClearedQueues: ThreadManagementServiceShape["restoreClearedQueues"] = (input) =>
+    Effect.gen(function* () {
+      const sinceMs = (yield* Clock.currentTimeMillis) - input.maxAgeMinutes * 60_000;
+      const threadIds =
+        input.threadId !== undefined
+          ? [input.threadId]
+          : (yield* orchestrator.getShellSnapshot()).threads
+              .filter((thread) => thread.archivedAt === null)
+              .map((thread) => thread.id);
+      let threads = 0;
+      let messages = 0;
+      for (const threadId of threadIds) {
+        const { runs } = yield* orchestrator.getThreadRecords(threadId, ["runs"]);
+        const cleared = runs
+          .filter(
+            (run) =>
+              run.status === "cancelled" &&
+              run.queueClearedAt !== undefined &&
+              DateTime.toEpochMillis(run.queueClearedAt) >= sinceMs,
+          )
+          .toSorted((left, right) => left.ordinal - right.ordinal);
+        if (cleared.length === 0) continue;
+        // The restored message's id is derived from the cleared run, so a
+        // message that already went back is found and skipped.
+        const restoredId = (run: (typeof cleared)[number]) =>
+          MessageId.make(`message:queue-restore:${run.id}`);
+        const records = yield* orchestrator.getThreadRecords(threadId, ["messages"], {
+          messageIds: [...cleared.map((run) => run.userMessageId), ...cleared.map(restoredId)],
+        });
+        const byId = new Map(records.messages.map((message) => [message.id, message]));
+        let restoredHere = 0;
+        for (const run of cleared) {
+          const source = byId.get(run.userMessageId);
+          if (source === undefined || byId.has(restoredId(run))) continue;
+          const queued = yield* dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`${input.commandId}:restore:${run.id}`),
+            threadId,
+            messageId: restoredId(run),
+            text: source.text,
+            ...(source.context === undefined ? {} : { context: source.context }),
+            attachments: source.attachments,
+            ...(source.scheduledTaskId === undefined
+              ? {}
+              : { scheduledTaskId: source.scheduledTaskId }),
+            modelSelection: run.modelSelection,
+            dispatchMode: { type: "queue_after_active" },
+            createdBy: source.createdBy,
+            creationSource: source.creationSource,
+          }).pipe(
+            Effect.as(true),
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not put a cleared message back", { threadId, cause }).pipe(
+                Effect.as(false),
+              ),
+            ),
+          );
+          if (queued) restoredHere += 1;
+        }
+        if (restoredHere > 0) {
+          threads += 1;
+          messages += restoredHere;
+        }
+      }
+      yield* Effect.logInfo("Cleared queues restored", { threads, messages });
+      return { threads, messages };
     });
 
   const getProjectThread: ThreadManagementServiceShape["getProjectThread"] = (input) =>
@@ -1124,6 +1205,7 @@ const make = Effect.gen(function* () {
   return ThreadManagementService.of({
     ensureLegacyTranscript,
     clearAllQueues,
+    restoreClearedQueues,
     searchThreadStream: (input) =>
       Stream.unwrap(
         ensureProjectionTranscript(input.threadId).pipe(

@@ -1,12 +1,13 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { deriveThreadQueueWorkflowState } from "@t3tools/client-runtime/state/thread-workflows";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
-import type {
-  ChatAttachment as ContractChatAttachment,
-  EnvironmentId,
-  MessageId,
-  RunId,
-  ThreadId,
+import {
+  CommandId,
+  type ChatAttachment as ContractChatAttachment,
+  type EnvironmentId,
+  type MessageId,
+  type RunId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import {
   Clock3Icon,
@@ -20,13 +21,15 @@ import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from 
 import { useAssetUrls } from "../../assets/assetUrls";
 import { ensureLocalApi } from "../../localApi";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useThreadProjection } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { isImageAttachment, type ChatMessage } from "../../types";
-import { cn } from "~/lib/utils";
+import { cn, randomUUID } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
 import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export interface EditQueuedRunRequest {
@@ -75,6 +78,7 @@ export function QueuedRunsControl({
   const holdQueue = useAtomCommand(threadEnvironment.holdThreadQueue, "pause queue");
   const resumeQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
   const clearQueue = useAtomCommand(threadEnvironment.clearThreadQueue, "clear queue");
+  const restoreQueue = useAtomCommand(serverEnvironment.restoreClearedQueues, "restore queue");
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
@@ -319,14 +323,33 @@ export function QueuedRunsControl({
                           `Remove ${queued.length === 1 ? "the queued message" : `all ${queued.length} queued messages`} from this thread? The current run goes on.`,
                           { variant: "destructive" },
                         )
-                        .then((confirmed) =>
-                          confirmed
-                            ? clearQueue({
-                                environmentId: props.environmentId,
-                                input: { threadId: props.threadId },
-                              })
-                            : undefined,
-                        );
+                        .then(async (confirmed) => {
+                          if (!confirmed) return;
+                          const count = queued.length;
+                          const result = await clearQueue({
+                            environmentId: props.environmentId,
+                            input: { threadId: props.threadId },
+                          });
+                          if (result._tag !== "Success") return;
+                          const toastId = toastManager.add({
+                            type: "success",
+                            title: `Removed ${count} queued ${count === 1 ? "message" : "messages"}`,
+                            actionProps: {
+                              children: "Undo",
+                              onClick: () => {
+                                toastManager.close(toastId);
+                                void restoreQueue({
+                                  environmentId: props.environmentId,
+                                  input: {
+                                    commandId: CommandId.make(randomUUID()),
+                                    threadId: props.threadId,
+                                    maxAgeMinutes: 60,
+                                  },
+                                });
+                              },
+                            },
+                          });
+                        });
                     }}
                   >
                     Clear queue

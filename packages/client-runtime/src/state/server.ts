@@ -1007,6 +1007,11 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
       },
     }),
+    restoreClearedQueues: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:restore-cleared-queues",
+      tag: ORCHESTRATION_V2_WS_METHODS.restoreClearedQueues,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     clearAllQueues: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:clear-all-queues",
       tag: ORCHESTRATION_V2_WS_METHODS.clearAllQueues,
