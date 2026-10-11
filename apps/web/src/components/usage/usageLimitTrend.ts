@@ -12,9 +12,61 @@ import type {
 } from "@t3tools/contracts";
 import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 
+/**
+ * Where a window ends up if the account keeps its pace since the last reset:
+ * empty before the reset, or at the reset with allowance to spare.
+ */
+export type UsageLimitForecast =
+  | { readonly type: "runs-out"; readonly at: string; readonly resetsAt: string }
+  | { readonly type: "lasts"; readonly unusedPercent: number; readonly resetsAt: string };
+
+/** A pace measured over less than this says nothing yet. */
+const FORECAST_MIN_ELAPSED_MS = 60 * 60_000;
+
+/**
+ * `points` are one window's readings, oldest first. The pace is taken from the
+ * readings since the last drop, which is the current cycle. No forecast
+ * without an announced reset still ahead, or before an hour of the cycle has
+ * been recorded.
+ */
+export function forecastUsageWindow(
+  points: ReadonlyArray<UsageLimitHistoryPoint>,
+  nowMs: number,
+): UsageLimitForecast | null {
+  const last = points.at(-1);
+  if (last === undefined || last.resetsAt === undefined) return null;
+  const resetsAtMs = Date.parse(last.resetsAt);
+  if (!Number.isFinite(resetsAtMs) || resetsAtMs <= nowMs) return null;
+  let start = last;
+  for (let index = points.length - 2; index >= 0; index -= 1) {
+    const point = points[index]!;
+    if (point.usedPercent > start.usedPercent) break;
+    start = point;
+  }
+  const elapsedMs = nowMs - Date.parse(start.at);
+  if (!(elapsedMs >= FORECAST_MIN_ELAPSED_MS)) return null;
+  const pacePerMs = (last.usedPercent - start.usedPercent) / elapsedMs;
+  const usedAtReset = last.usedPercent + pacePerMs * (resetsAtMs - nowMs);
+  if (usedAtReset < 100) {
+    return {
+      type: "lasts",
+      unusedPercent: Math.round(100 - usedAtReset),
+      resetsAt: last.resetsAt,
+    };
+  }
+  const emptyAtMs = pacePerMs <= 0 ? nowMs : nowMs + (100 - last.usedPercent) / pacePerMs;
+  return {
+    type: "runs-out",
+    at: new Date(Math.min(emptyAtMs, resetsAtMs)).toISOString(),
+    resetsAt: last.resetsAt,
+  };
+}
+
 export interface UsageLimitTrendLine {
   readonly windowId: string;
   readonly label: string;
+  /** Absent when there is not enough to go on. */
+  readonly forecast?: UsageLimitForecast;
   /** Remaining allowance now, by the last recorded reading. */
   readonly remainingPercent: number;
   /**
@@ -95,7 +147,9 @@ export function buildUsageLimitTrend(input: {
             (left, right) => Date.parse(left.at) - Date.parse(right.at),
           );
           const last = sorted.at(-1)!;
+          const forecast = forecastUsageWindow(sorted, input.nowMs);
           return {
+            ...(forecast === null ? {} : { forecast }),
             windowId,
             label: last.label,
             remainingPercent: Math.max(0, 100 - last.usedPercent),

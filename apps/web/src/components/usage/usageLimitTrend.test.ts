@@ -1,7 +1,7 @@
 import { ProviderDriverKind, ProviderInstanceId, type UsageLimitHistory } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildUsageLimitTrend } from "./usageLimitTrend";
+import { buildUsageLimitTrend, forecastUsageWindow } from "./usageLimitTrend";
 
 const SINCE = Date.parse("2026-10-10T00:00:00.000Z");
 const NOW = Date.parse("2026-10-11T00:00:00.000Z");
@@ -78,5 +78,58 @@ describe("buildUsageLimitTrend", () => {
     };
     const [account] = buildUsageLimitTrend({ history, providers, sinceMs: SINCE, nowMs: NOW });
     expect(account?.resets.map((entry) => entry.unusedPercentBefore)).toEqual([12, 38]);
+  });
+});
+
+describe("forecastUsageWindow", () => {
+  const RESET = "2026-10-12T00:00:00.000Z";
+  const reading = (at: string, usedPercent: number, resetsAt: string | null = RESET) => ({
+    ...point("codex", at, usedPercent),
+    ...(resetsAt === null ? {} : { resetsAt }),
+  });
+
+  it("says when the allowance runs out before the reset", () => {
+    // 60 points in 12 hours: the remaining 40 are gone 8 hours from now.
+    expect(
+      forecastUsageWindow(
+        [reading("2026-10-10T12:00:00.000Z", 0), reading("2026-10-10T23:00:00.000Z", 60)],
+        NOW,
+      ),
+    ).toEqual({ type: "runs-out", at: "2026-10-11T08:00:00.000Z", resetsAt: RESET });
+  });
+
+  it("says what stays unused when the pace is slow enough", () => {
+    // 12 points in 12 hours: 24 more by the reset a day later, 36 used, 64 unused.
+    expect(
+      forecastUsageWindow(
+        [reading("2026-10-10T12:00:00.000Z", 0), reading("2026-10-10T23:00:00.000Z", 12)],
+        NOW,
+      ),
+    ).toEqual({ type: "lasts", unusedPercent: 64, resetsAt: RESET });
+  });
+
+  it("measures the pace from the last reset, not from before it", () => {
+    expect(
+      forecastUsageWindow(
+        [
+          reading("2026-10-10T00:00:00.000Z", 90),
+          reading("2026-10-10T12:00:00.000Z", 0),
+          reading("2026-10-10T23:00:00.000Z", 12),
+        ],
+        NOW,
+      ),
+    ).toEqual({ type: "lasts", unusedPercent: 64, resetsAt: RESET });
+  });
+
+  it("stays silent without a reset ahead or with too little of the cycle recorded", () => {
+    expect(forecastUsageWindow([reading("2026-10-10T12:00:00.000Z", 10, null)], NOW)).toBeNull();
+    expect(
+      forecastUsageWindow(
+        [reading("2026-10-10T12:00:00.000Z", 10, "2026-10-10T20:00:00.000Z")],
+        NOW,
+      ),
+    ).toBeNull();
+    expect(forecastUsageWindow([reading("2026-10-10T23:30:00.000Z", 10)], NOW)).toBeNull();
+    expect(forecastUsageWindow([], NOW)).toBeNull();
   });
 });

@@ -56,7 +56,7 @@ export function UsageLimitTrendSection({
           >
             <h3 className="truncate text-sm font-medium text-foreground">{account.name}</h3>
             {account.lines.map((line) => (
-              <div key={line.windowId} className="flex items-center gap-3">
+              <div key={line.windowId} className="flex flex-wrap items-center gap-x-3">
                 <span className="w-28 shrink-0 truncate text-xs text-muted-foreground">
                   {line.label}
                 </span>
@@ -78,6 +78,19 @@ export function UsageLimitTrendSection({
                 <span className="w-16 shrink-0 text-right text-xs tabular-nums text-foreground">
                   {Math.round(line.remainingPercent)}% left
                 </span>
+                {line.forecast ? (
+                  <span
+                    className={
+                      line.forecast.type === "runs-out"
+                        ? "basis-full pl-31 text-xs text-warning-foreground"
+                        : "basis-full pl-31 text-xs text-muted-foreground"
+                    }
+                  >
+                    {line.forecast.type === "runs-out"
+                      ? `At this pace empty ${resetTimeFormat.format(new Date(line.forecast.at))}, before the reset ${resetTimeFormat.format(new Date(line.forecast.resetsAt))}`
+                      : `At this pace ${line.forecast.unusedPercent}% stays unused at the reset ${resetTimeFormat.format(new Date(line.forecast.resetsAt))}`}
+                  </span>
+                ) : null}
               </div>
             ))}
             {account.resets.length > 0 ? (
