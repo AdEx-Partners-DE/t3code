@@ -143,6 +143,10 @@ answer first, longest wait first, then failed threads, threads stopped on a usag
 finished work you have not read. Press it again to move on to the next one. Rebind
 `thread.nextWaiting` in **Settings → Keybindings**.
 
+Above the list, a line counts what waits on you by reason: threads that need an answer, failed
+threads, threads at a usage limit, and finished work you have not read. Click a count to open the
+first thread of that kind. The line is hidden when nothing waits.
+
 To work through everything that waits without the shortcut, turn on **Settings → General → Open
 the next thread that needs you after sending**. When your message starts a turn, the app opens the
 next waiting thread; when nothing waits, you stay where you are.

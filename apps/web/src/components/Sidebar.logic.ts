@@ -1056,12 +1056,35 @@ export function resolveNextWaitingThread<T extends InboxOrderInput>(
   threads: ReadonlyArray<T>,
   priorities: Readonly<Record<string, SidebarProjectPriority>>,
   isCurrent: (thread: T) => boolean,
+  kind?: WaitingThreadKind,
 ): T | null {
   return (
     orderInboxThreads(threads, "status", priorities).find(
-      (thread) => inboxStatusTier(thread) <= 3 && !isCurrent(thread),
+      (thread) =>
+        (kind === undefined
+          ? inboxStatusTier(thread) <= 3
+          : WAITING_THREAD_KINDS[inboxStatusTier(thread)] === kind) && !isCurrent(thread),
     ) ?? null
   );
+}
+
+/** Why a thread waits on the user, in the order the status sort ranks them. */
+const WAITING_THREAD_KINDS = ["blocked", "failed", "limited", "unread"] as const;
+export type WaitingThreadKind = (typeof WAITING_THREAD_KINDS)[number];
+
+/** How many threads wait on the user, by reason. Kinds with none are left out. */
+export function countWaitingThreads(
+  threads: ReadonlyArray<InboxOrderInput>,
+): ReadonlyArray<{ readonly kind: WaitingThreadKind; readonly count: number }> {
+  const counts = new Map<WaitingThreadKind, number>();
+  for (const thread of threads) {
+    const kind = WAITING_THREAD_KINDS[inboxStatusTier(thread)];
+    if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  return WAITING_THREAD_KINDS.flatMap((kind) => {
+    const count = counts.get(kind);
+    return count ? [{ kind, count }] : [];
+  });
 }
 
 export function shouldRecedeSidebarThread(input: {

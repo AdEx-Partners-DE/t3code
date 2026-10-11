@@ -34,6 +34,7 @@ import {
   resolveSidebarStageBadgeLabel,
   resolveSidebarThreadSection,
   resolveSidebarRowAccessibility,
+  countWaitingThreads,
   orderInboxThreads,
   resolveNextWaitingThread,
   resolveSidebarThreadStatus,
@@ -958,6 +959,19 @@ describe("orderInboxThreads", () => {
     expect(next("question-a")).toBe("approval-b");
     expect(next(null, [threads[0]!, threads[1]!])).toBeNull();
     expect(next("unread-a", [threads[1]!, threads[3]!])).toBeNull();
+  });
+
+  it("counts what waits by reason and opens the first thread of one reason", () => {
+    expect(countWaitingThreads(threads)).toEqual([
+      { kind: "blocked", count: 2 },
+      { kind: "unread", count: 1 },
+    ]);
+    expect(countWaitingThreads([threads[0]!, threads[1]!])).toEqual([]);
+    const next = (kind: "blocked" | "failed" | "unread", currentId: string | null = null) =>
+      resolveNextWaitingThread(threads, {}, (entry) => entry.id === currentId, kind)?.id ?? null;
+    expect(next("unread")).toBe("unread-a");
+    expect(next("blocked", "approval-b")).toBe("question-a");
+    expect(next("failed")).toBeNull();
   });
 
   it("keeps each project together, high-priority projects first", () => {
