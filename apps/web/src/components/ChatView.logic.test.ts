@@ -628,6 +628,31 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(true);
   });
 
+  it("acknowledges a send that landed in a thread whose held queue keeps it queued", () => {
+    const heldQueue = { ...readySession, status: "queued" as const, activeRunId: null };
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestRun: completedTurn, runtime: heldQueue }),
+    );
+    const input = {
+      localDispatch,
+      phase: "connecting" as const,
+      latestRun: completedTurn,
+      runtime: heldQueue,
+      hasPendingApproval: false,
+      hasPendingUserInput: false,
+      threadError: null,
+    };
+    // Nothing has landed yet: the send is still on its way.
+    expect(hasServerAcknowledgedLocalDispatch(input)).toBe(false);
+    // The message is in the transcript; the queue stays held, the send is done.
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        ...input,
+        latestUserMessageId: MessageId.make("message:landed"),
+      }),
+    ).toBe(true);
+  });
+
   it("holds a first send while the thread shell still reports a preparing run", () => {
     // The draft had no run. The server thread's shell shows the new run before
     // the detail projection behind `phase` loads.

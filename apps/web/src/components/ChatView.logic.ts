@@ -1239,14 +1239,19 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   // The thread shell can report a preparing or starting run before the detail
   // projection behind `phase` loads, so either source still connecting holds
   // the send.
-  if (input.phase === "connecting" || derivePhase(input.runtime ?? null) === "connecting") {
-    return false;
-  }
-
   const latestRun = input.latestRun ?? null;
   const runtime = input.runtime ?? null;
   const latestUserMessageChanged =
     input.localDispatch.latestUserMessageId !== (input.latestUserMessageId ?? null);
+  // A thread whose queue is held or paused reports "queued" with no run under
+  // way, for as long as the hold lasts. That is not a send still connecting:
+  // once the message has landed, the send is done.
+  if (latestUserMessageChanged && runtime?.status === "queued" && runtime.activeRunId === null) {
+    return true;
+  }
+  if (input.phase === "connecting" || derivePhase(runtime) === "connecting") {
+    return false;
+  }
   const latestRunChanged =
     input.localDispatch.latestRunId !== (latestRun?.runId ?? null) ||
     input.localDispatch.latestRunRequestedAt !== (latestRun?.requestedAt ?? null) ||
