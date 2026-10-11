@@ -223,6 +223,21 @@ describe("idle scheduled tasks", () => {
     expect(scheduleFromDraft({ ...draft, idleMinRemainingPercent: "2.5" })).toBeNull();
   });
 
+  it("chains behind another thread, and treats the task's own thread as no chain", () => {
+    const draft = { ...taskToDraft(idleTask), threadId: "thread:b" };
+    expect(scheduleFromDraft({ ...draft, idleWatchThreadId: "thread:a" })).toEqual({
+      type: "idle",
+      maxRuns: 4,
+      minPauseMs: 90_000,
+      watchThreadId: "thread:a",
+    });
+    expect(scheduleFromDraft({ ...draft, idleWatchThreadId: "thread:b" })).toEqual({
+      type: "idle",
+      maxRuns: 4,
+      minPauseMs: 90_000,
+    });
+  });
+
   it("refuses a missing or unbounded run limit", () => {
     const draft = taskToDraft(idleTask);
     expect(scheduleFromDraft({ ...draft, idleMaxRuns: "" })).toBeNull();

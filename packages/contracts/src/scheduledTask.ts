@@ -143,6 +143,10 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
     description:
       "The task turns itself off instead of running when the thread's last reply contains this text, ignoring case.",
   }),
+  watchThreadId: Schema.optional(ThreadId).annotate({
+    description:
+      "Wait for this thread to finish instead of the task's own thread. With maxRuns 1 this starts one thread's work after another's.",
+  }),
   minRemainingPercent: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 99 })),
   ).annotate({

@@ -1125,7 +1125,10 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const task = yield* decodeRow(row);
             if (task.schedule.type !== "idle" || task.threadId === null) return;
-            const thread = yield* threadManagement.getThreadShell(ThreadId.make(task.threadId));
+            // The thread whose silence starts the task: its own, or another
+            // one when the task chains this thread's work behind that one's.
+            const watchedThreadId = task.schedule.watchThreadId ?? ThreadId.make(task.threadId);
+            const thread = yield* threadManagement.getThreadShell(watchedThreadId);
             if (thread === null) return;
             const now = yield* localNow;
             const lastRunAt =
@@ -1148,13 +1151,19 @@ export const layer = Layer.effect(
               task.schedule.stopPhrase !== undefined &&
               saysStopPhrase(
                 task.schedule.stopPhrase,
-                yield* lastReplyText(ThreadId.make(task.threadId), thread.latestRunId),
+                yield* lastReplyText(watchedThreadId, thread.latestRunId),
               );
             const remainingPercent =
               decision.type === "fire" &&
               !stopped &&
               task.schedule.minRemainingPercent !== undefined
-                ? yield* remainingPercentOf(thread.modelSelection.instanceId)
+                ? yield* remainingPercentOf(
+                    // The budget is the account that will do the work.
+                    task.schedule.watchThreadId === undefined
+                      ? thread.modelSelection.instanceId
+                      : ((yield* threadManagement.getThreadShell(ThreadId.make(task.threadId)))
+                          ?.modelSelection.instanceId ?? task.modelSelection.instanceId),
+                  )
                 : null;
             if (underUsageBudget(task.schedule.minRemainingPercent, remainingPercent)) {
               // Say why in the task's last error, so the list shows it.

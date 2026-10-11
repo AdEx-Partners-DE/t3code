@@ -54,7 +54,7 @@ import {
   type EnvironmentPresentation,
 } from "../../state/environments";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { useProjects, useThreadShell } from "../../state/entities";
+import { useProjects, useThreadShell, useThreadShells } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -125,6 +125,7 @@ const EMPTY_DRAFT: DraftState = {
   idlePauseMinutes: "1",
   idleStopPhrase: "",
   idleMinRemainingPercent: "",
+  idleWatchThreadId: "",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
@@ -187,6 +188,7 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
       ...(schedule.minRemainingPercent === undefined
         ? []
         : [`stops under ${schedule.minRemainingPercent}% left`]),
+      ...(schedule.watchThreadId === undefined ? [] : ["waits for another thread"]),
     ].join(", ");
   }
   if (schedule.type === "interval") {
@@ -860,6 +862,7 @@ function ScheduledTaskEditorDialog({
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
+  const allThreadShells = useThreadShells();
   const upsertTask = useAtomCommand(serverEnvironment.upsertScheduledTask, {
     label: "scheduled task upsert",
   });
@@ -886,6 +889,32 @@ function ScheduledTaskEditorDialog({
     : task;
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  // Threads an idle task can post to or wait for: this environment's open
+  // threads of the chosen project, most recently active first.
+  const idleThreads = useMemo(
+    () =>
+      draft.scheduleMode !== "idle"
+        ? []
+        : allThreadShells
+            .filter(
+              (thread) =>
+                thread.environmentId === environmentId &&
+                thread.archivedAt === null &&
+                (thread.projectId === selectedProjectId ||
+                  thread.id === draft.threadId ||
+                  thread.id === draft.idleWatchThreadId),
+            )
+            .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+            .slice(0, 100),
+    [
+      allThreadShells,
+      draft.idleWatchThreadId,
+      draft.scheduleMode,
+      draft.threadId,
+      environmentId,
+      selectedProjectId,
+    ],
+  );
 
   // The real model picker is keyed by a `${instanceId}:${model}` string, which
   // is exactly how the draft stores its selection.
@@ -1396,6 +1425,51 @@ function ScheduledTaskEditorDialog({
                 </div>
               ) : draft.scheduleMode === "idle" ? (
                 <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Label htmlFor="scheduled-task-idle-thread">Send to</Label>
+                    <Select
+                      value={draft.threadId}
+                      onValueChange={(threadId) =>
+                        setDraft((current) => ({ ...current, threadId: threadId ?? "" }))
+                      }
+                    >
+                      <SelectTrigger size="sm" id="scheduled-task-idle-thread" className="w-56">
+                        <SelectValue placeholder="Choose a thread">
+                          {idleThreads.find((thread) => thread.id === draft.threadId)?.title}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectPopup>
+                        {idleThreads.map((thread) => (
+                          <SelectItem key={thread.id} value={thread.id}>
+                            {thread.title}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                    <Label htmlFor="scheduled-task-idle-watch">when</Label>
+                    <Select
+                      value={draft.idleWatchThreadId}
+                      onValueChange={(threadId) =>
+                        setDraft((current) => ({ ...current, idleWatchThreadId: threadId ?? "" }))
+                      }
+                    >
+                      <SelectTrigger size="sm" id="scheduled-task-idle-watch" className="w-56">
+                        <SelectValue>
+                          {draft.idleWatchThreadId === ""
+                            ? "that thread finishes"
+                            : `"${idleThreads.find((thread) => thread.id === draft.idleWatchThreadId)?.title ?? "another thread"}" finishes`}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectPopup>
+                        <SelectItem value="">that thread finishes</SelectItem>
+                        {idleThreads.map((thread) => (
+                          <SelectItem key={thread.id} value={thread.id}>
+                            {thread.title}
+                          </SelectItem>
+                        ))}
+                      </SelectPopup>
+                    </Select>
+                  </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Label htmlFor="scheduled-task-idle-runs">Run up to</Label>
                     <Input

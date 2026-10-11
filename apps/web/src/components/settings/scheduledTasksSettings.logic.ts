@@ -8,6 +8,7 @@ import {
   type RuntimeMode,
   type ProviderInteractionMode,
   type ServerSettings,
+  ThreadId,
 } from "@t3tools/contracts";
 import { parseMaxDeliveryAge } from "@t3tools/client-runtime/scheduled-task-webhook";
 
@@ -61,6 +62,8 @@ export interface DraftState {
   readonly idlePauseMinutes: string;
   /** Idle tasks: text in the thread's last reply that ends the task early. Empty for none. */
   readonly idleStopPhrase: string;
+  /** Idle tasks: the other thread to wait for. Empty waits for the task's own thread. */
+  readonly idleWatchThreadId: string;
   /** Idle tasks: stop when the account has less than this percent left. Empty for no budget. */
   readonly idleMinRemainingPercent: string;
   readonly timeOfDay: string;
@@ -144,6 +147,9 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
       minPauseMs: Math.round(pauseMinutes * 60_000),
       ...(stopPhrase === "" ? {} : { stopPhrase }),
       ...(minRemainingPercent === null ? {} : { minRemainingPercent }),
+      ...(draft.idleWatchThreadId === "" || draft.idleWatchThreadId === draft.threadId
+        ? {}
+        : { watchThreadId: ThreadId.make(draft.idleWatchThreadId) }),
     };
   }
   const selectedEveryDay = draft.weekdays.size === 0 || draft.weekdays.size === 7;
@@ -176,6 +182,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     idleMaxRuns: schedule.type === "idle" ? String(schedule.maxRuns) : "5",
     idlePauseMinutes: schedule.type === "idle" ? String(schedule.minPauseMs / 60_000) : "1",
     idleStopPhrase: schedule.type === "idle" ? (schedule.stopPhrase ?? "") : "",
+    idleWatchThreadId: schedule.type === "idle" ? (schedule.watchThreadId ?? "") : "",
     idleMinRemainingPercent:
       schedule.type === "idle" && schedule.minRemainingPercent !== undefined
         ? String(schedule.minRemainingPercent)
