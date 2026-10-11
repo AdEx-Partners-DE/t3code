@@ -114,7 +114,7 @@ describe("instantFailureRetryCommand", () => {
       threadId,
       text: "Fix the build.",
       messageId: "message:instant-retry:run:1",
-      dispatchMode: { type: "start_immediately" },
+      dispatchMode: { type: "queue_after_active" },
     });
   });
 
