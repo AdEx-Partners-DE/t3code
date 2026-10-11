@@ -2418,6 +2418,41 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
     [activeThreadModelSelection, modelOptionsByInstance],
   );
+  // The composer keeps its own model pick for a thread. When it differs from
+  // what the thread runs on, sending moves the thread, account and all, which
+  // is easy to do without meaning to after the model was set from outside.
+  const threadModelSwitch = useMemo(() => {
+    if (routeKind === "draft" || !activeThreadModelSelection || providerCatalogPending) return null;
+    if (
+      activeThreadModelSelection.instanceId === selectedModelSelection.instanceId &&
+      activeThreadModelSelection.model === selectedModelSelection.model
+    )
+      return null;
+    const name = (selection: ModelSelection) => {
+      const model =
+        resolveContextWindowModelDisplayName(selection, modelOptionsByInstance) ?? selection.model;
+      const instance = providerStatuses.find((entry) => entry.instanceId === selection.instanceId);
+      // The same model on another account reads the same, so name the account.
+      return selection.model === activeThreadModelSelection.model &&
+        selection.model === selectedModelSelection.model &&
+        instance
+        ? resolveProviderInstanceDisplayName(instance)
+        : model;
+    };
+    return {
+      instanceId: activeThreadModelSelection.instanceId,
+      model: activeThreadModelSelection.model,
+      from: name(activeThreadModelSelection),
+      to: name(selectedModelSelection),
+    };
+  }, [
+    activeThreadModelSelection,
+    modelOptionsByInstance,
+    providerCatalogPending,
+    providerStatuses,
+    routeKind,
+    selectedModelSelection,
+  ]);
   const reserveContextWindowMeter = shouldReserveContextWindowMeter({
     meterEnabled: settings.contextWindowMeterEnabled,
     detailLoading: props.threadSyncPhase === "loading",
@@ -5547,6 +5582,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           className="@max-[400px]/composer-surface:hidden"
           data-resting-controls-separator="true"
         />
+      ) : null}
+      {threadModelSwitch !== null ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="xs"
+                variant="ghost-muted"
+                data-testid="composer-model-switch-marker"
+                aria-label={`Use this thread's model, ${threadModelSwitch.from}`}
+                onClick={() =>
+                  onProviderModelSelect(threadModelSwitch.instanceId, threadModelSwitch.model)
+                }
+              >
+                switches model
+              </Button>
+            }
+          />
+          <TooltipPopup>
+            {`This thread runs on ${threadModelSwitch.from}. Your next message would move it to ${threadModelSwitch.to}. Click to stay on ${threadModelSwitch.from}.`}
+          </TooltipPopup>
+        </Tooltip>
       ) : null}
       <ProviderModelPicker
         environmentId={environmentId}
