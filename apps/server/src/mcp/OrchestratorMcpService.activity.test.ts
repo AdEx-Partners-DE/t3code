@@ -606,6 +606,7 @@ it("readThread names the thread that sent a message with t3_thread_send", async 
               ? Effect.succeed(projection)
               : Effect.die(`unexpected thread ${input.threadId}`),
         } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
+        ServerSettings.layerTest(),
         Layer.mock(ProviderRegistry.ProviderRegistry)({
           getProviders: Effect.succeed([]),
         } satisfies Partial<ProviderRegistry.ProviderRegistry["Service"]>),
