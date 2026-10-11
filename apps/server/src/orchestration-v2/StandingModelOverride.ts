@@ -89,7 +89,8 @@ export function standingOverrideFromApplied(
 const AppliedSelections = Schema.Record(Schema.String, Schema.Struct({ applied: ModelSelection }));
 const decodeApplied = Schema.decodeUnknownOption(Schema.fromJsonString(AppliedSelections));
 
-const readStandingOverride = Effect.gen(function* () {
+/** The override in force, or null. */
+export const readStandingOverride = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const stored = yield* fileSystem.readFileString(yield* filePath).pipe(
     Effect.map((contents) => Option.getOrNull(decodeStored(contents)) as ModelOverride | null),

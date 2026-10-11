@@ -25,7 +25,11 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import { forgetStandingOverride, rememberStandingOverride } from "./StandingModelOverride.ts";
+import {
+  forgetStandingOverride,
+  readStandingOverride,
+  rememberStandingOverride,
+} from "./StandingModelOverride.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export const MODEL_OVERRIDE_FILE_NAME = "open-thread-model-override.json";
@@ -75,10 +79,21 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => ({}) as SavedSelections),
   );
 
+  const standing = readStandingOverride.pipe(
+    Effect.provideService(FileSystem.FileSystem, fileSystem),
+    Effect.provideService(Path.Path, path),
+    Effect.provideService(ServerConfig.ServerConfig, config),
+  );
+  const noSelections: Array<{ threadId: ThreadId; modelSelection: ModelSelection }> = [];
+
   const apply = Effect.fn("OpenThreadModelOverride.apply")(function* (input: {
     readonly commandId: CommandId;
     readonly override: ModelOverride;
   }) {
+    // Nothing asked for: only say what is in force.
+    if (input.override.model === undefined && input.override.effort === undefined) {
+      return { threads: 0, changed: noSelections, standing: yield* standing };
+    }
     const providers = yield* registry.getProviders;
     const shell = yield* threads.getShellSnapshot();
     const saved: Record<string, SavedSelections[ThreadId]> = { ...(yield* readSaved) };
@@ -143,7 +158,7 @@ export const make = Effect.gen(function* () {
       Effect.provideService(ServerConfig.ServerConfig, config),
     );
     yield* Effect.logInfo("Model set on open threads", { threads: changed });
-    return { threads: changed, changed: selections };
+    return { threads: changed, changed: selections, standing: yield* standing };
   });
 
   const restore = Effect.fn("OpenThreadModelOverride.restore")(function* (input: {
@@ -185,7 +200,7 @@ export const make = Effect.gen(function* () {
     yield* Effect.logInfo("Previous models restored on open threads", {
       threads: restored.length,
     });
-    return { threads: restored.length, changed: restored };
+    return { threads: restored.length, changed: restored, standing: yield* standing };
   });
 
   return {

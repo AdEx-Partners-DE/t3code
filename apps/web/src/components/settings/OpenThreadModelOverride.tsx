@@ -5,7 +5,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { CommandId, type EnvironmentId, type ProviderInstanceId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { randomUUID } from "~/lib/utils";
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -66,6 +66,24 @@ function OpenThreadModelOverrideControls({
   const [effort, setEffort] = useState(KEEP);
   const [filter, setFilter] = useState("");
   const [pending, setPending] = useState(false);
+  // What the server holds in force. It also reaches threads that open later,
+  // so the page says so instead of looking as if nothing were set.
+  const [standing, setStanding] =
+    useState<Extract<Awaited<ReturnType<typeof apply>>, { _tag: "Success" }>["value"]["standing"]>(
+      null,
+    );
+  useEffect(() => {
+    if (!allowed) return;
+    let current = true;
+    void apply({ environmentId, input: { commandId: CommandId.make(randomUUID()) } }).then(
+      (result) => {
+        if (current && result._tag === "Success") setStanding(result.value.standing);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [allowed, apply, environmentId]);
 
   const choices = useMemo<ReadonlyArray<ModelChoice>>(
     () =>
@@ -113,6 +131,7 @@ function OpenThreadModelOverrideControls({
     failed: string,
   ) => {
     if (result._tag === "Success") {
+      setStanding(result.value.standing);
       // A composer keeps its own saved pick per thread, which would hide the
       // change; move every changed thread's composer along.
       const drafts = useComposerDraftStore.getState();
@@ -178,8 +197,29 @@ function OpenThreadModelOverrideControls({
     }
   };
 
+  const standingModel =
+    standing?.model === undefined
+      ? null
+      : (choices.find(
+          (choice) =>
+            choice.instanceId === standing.model?.instanceId &&
+            choice.model === standing.model?.model,
+        )?.label ?? `${standing.model.instanceId} · ${standing.model.model}`);
+  const standingText =
+    standing === null
+      ? null
+      : [standingModel, standing.effort === undefined ? null : `thinking ${standing.effort}`]
+          .filter((part) => part !== null)
+          .join(", ");
+
   return (
     <div className="flex flex-wrap items-center gap-2 pt-3">
+      {standingText === null ? null : (
+        <p className="w-full text-xs text-muted-foreground" data-testid="standing-model-override">
+          In force: {standingText}. Threads that open later, and threads a scheduled task posts to,
+          are set to it as well, until you put it back.
+        </p>
+      )}
       <Input
         nativeInput
         aria-label="Filter the model list"

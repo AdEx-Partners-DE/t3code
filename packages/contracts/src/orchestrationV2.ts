@@ -3860,6 +3860,19 @@ export const OrchestrationV2RpcSchemas = {
     }),
     output: Schema.Struct({
       threads: NonNegativeInt,
+      /**
+       * What is in force after the call, or null when nothing is. It also
+       * reaches threads that open later, until it is put back. A call with no
+       * model, no level and no `restore` changes nothing and only reads this.
+       */
+      standing: Schema.NullOr(
+        Schema.Struct({
+          model: Schema.optional(
+            Schema.Struct({ instanceId: ProviderInstanceId, model: TrimmedNonEmptyString }),
+          ),
+          effort: Schema.optional(TrimmedNonEmptyString),
+        }),
+      ),
       /** The selection of every thread the call covered, changed or already there, for clients to line their composers up. */
       changed: Schema.Array(Schema.Struct({ threadId: ThreadId, modelSelection: ModelSelection })),
     }),
