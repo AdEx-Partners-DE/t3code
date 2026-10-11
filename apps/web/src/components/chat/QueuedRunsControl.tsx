@@ -78,7 +78,7 @@ export function QueuedRunsControl({
   const holdQueue = useAtomCommand(threadEnvironment.holdThreadQueue, "pause queue");
   const resumeQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
   const clearQueue = useAtomCommand(threadEnvironment.clearThreadQueue, "clear queue");
-  const restoreQueue = useAtomCommand(serverEnvironment.restoreClearedQueues, "restore queue");
+  const restoreQueue = useAtomCommand(serverEnvironment.clearAllQueues, "restore queue");
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
@@ -378,8 +378,7 @@ export function QueuedRunsControl({
                                   environmentId: props.environmentId,
                                   input: {
                                     commandId: CommandId.make(randomUUID()),
-                                    threadId: props.threadId,
-                                    maxAgeMinutes: 60,
+                                    restore: { threadId: props.threadId, maxAgeMinutes: 60 },
                                   },
                                 }).then((restored) => {
                                   if (

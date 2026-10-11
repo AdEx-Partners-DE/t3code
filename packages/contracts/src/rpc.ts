@@ -1718,15 +1718,6 @@ const WsOrchestrationV2OverrideOpenThreadModelsRpc = Rpc.make(
   },
 );
 
-const WsOrchestrationV2RestoreOpenThreadModelsRpc = Rpc.make(
-  ORCHESTRATION_V2_WS_METHODS.restoreOpenThreadModels,
-  {
-    payload: OrchestrationV2RpcSchemas.restoreOpenThreadModels.input,
-    success: OrchestrationV2RpcSchemas.restoreOpenThreadModels.output,
-    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
-  },
-);
-
 const WsOrchestrationV2NudgeIdleThreadsRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads,
   {
@@ -1760,15 +1751,6 @@ const WsOrchestrationV2RefreshThreadChecklistRpc = Rpc.make(
     payload: OrchestrationV2RpcSchemas.refreshThreadChecklist.input,
     success: OrchestrationV2RpcSchemas.refreshThreadChecklist.output,
     error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
-  },
-);
-
-const WsOrchestrationV2RestoreClearedQueuesRpc = Rpc.make(
-  ORCHESTRATION_V2_WS_METHODS.restoreClearedQueues,
-  {
-    payload: OrchestrationV2RpcSchemas.restoreClearedQueues.input,
-    success: OrchestrationV2RpcSchemas.restoreClearedQueues.output,
-    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
   },
 );
 
@@ -2147,13 +2129,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2ClearAllQueuesRpc,
-  WsOrchestrationV2RestoreClearedQueuesRpc,
   WsOrchestrationV2GetThreadChecklistRpc,
   WsOrchestrationV2ListThreadChecklistsRpc,
   WsOrchestrationV2RefreshThreadChecklistRpc,
   WsOrchestrationV2NudgeIdleThreadsRpc,
   WsOrchestrationV2OverrideOpenThreadModelsRpc,
-  WsOrchestrationV2RestoreOpenThreadModelsRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,

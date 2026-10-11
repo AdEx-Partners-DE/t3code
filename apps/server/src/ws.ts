@@ -1960,30 +1960,19 @@ const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels]: (input) =>
-          openThreadModelOverride
-            .apply({
-              commandId: input.commandId,
-              override: { model: input.model, effort: input.effort },
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationV2DispatchCommandError({
-                    commandId: input.commandId,
-                    commandType: "thread.model-selection.set",
-                    message: "Failed to set the model on the open threads",
-                    cause,
-                  }),
-              ),
-            ),
-        [ORCHESTRATION_V2_WS_METHODS.restoreOpenThreadModels]: (input) =>
-          openThreadModelOverride.restore(input).pipe(
+          (input.restore === true
+            ? openThreadModelOverride.restore({ commandId: input.commandId })
+            : openThreadModelOverride.apply({
+                commandId: input.commandId,
+                override: { model: input.model, effort: input.effort },
+              })
+          ).pipe(
             Effect.mapError(
               (cause) =>
                 new OrchestrationV2DispatchCommandError({
                   commandId: input.commandId,
                   commandType: "thread.model-selection.set",
-                  message: "Failed to restore the models of the open threads",
+                  message: "Failed to set the model on the open threads",
                   cause,
                 }),
             ),
@@ -2030,20 +2019,14 @@ const layerWsRpc = (
                 }),
             ),
           ),
-        [ORCHESTRATION_V2_WS_METHODS.restoreClearedQueues]: (input) =>
-          threadManagement.restoreClearedQueues(input).pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2DispatchCommandError({
-                  commandId: input.commandId,
-                  commandType: "message.dispatch",
-                  message: "Failed to restore the cleared queues",
-                  cause,
-                }),
-            ),
-          ),
         [ORCHESTRATION_V2_WS_METHODS.clearAllQueues]: (input) =>
-          threadManagement.clearAllQueues(input).pipe(
+          (input.restore === undefined
+            ? threadManagement.clearAllQueues({ commandId: input.commandId })
+            : threadManagement.restoreClearedQueues({
+                commandId: input.commandId,
+                ...input.restore,
+              })
+          ).pipe(
             Effect.mapError(
               (cause) =>
                 new OrchestrationV2DispatchCommandError({

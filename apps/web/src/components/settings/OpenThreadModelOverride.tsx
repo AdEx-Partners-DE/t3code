@@ -61,7 +61,7 @@ function OpenThreadModelOverrideControls({
     serverEnvironment.overrideOpenThreadModels.permissionAtom(environmentId),
   );
   const apply = useAtomCommand(serverEnvironment.overrideOpenThreadModels);
-  const restore = useAtomCommand(serverEnvironment.restoreOpenThreadModels);
+  const restore = useAtomCommand(serverEnvironment.overrideOpenThreadModels);
   const [modelKey, setModelKey] = useState(KEEP);
   const [effort, setEffort] = useState(KEEP);
   const [filter, setFilter] = useState("");
@@ -165,7 +165,7 @@ function OpenThreadModelOverrideControls({
         );
       } else {
         report(
-          await restore({ environmentId, input: { commandId } }),
+          await restore({ environmentId, input: { commandId, restore: true } }),
           (threads) =>
             threads === 0
               ? "Nothing to put back"

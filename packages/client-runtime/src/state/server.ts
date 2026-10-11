@@ -989,11 +989,6 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
-    restoreOpenThreadModels: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:restore-open-thread-models",
-      tag: ORCHESTRATION_V2_WS_METHODS.restoreOpenThreadModels,
-      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
-    }),
     nudgeIdleThreads: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:nudge-idle-threads",
       tag: ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads,
@@ -1006,11 +1001,6 @@ export function createServerEnvironmentAtoms<R, E>(
         mode: "singleFlight",
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
       },
-    }),
-    restoreClearedQueues: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:restore-cleared-queues",
-      tag: ORCHESTRATION_V2_WS_METHODS.restoreClearedQueues,
-      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
     clearAllQueues: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:clear-all-queues",

@@ -21,7 +21,7 @@ const RESTORE_WINDOW_MINUTES = 24 * 60;
 export function ClearAllQueuesButton() {
   const { connectedEnvironments } = useSettingsScope();
   const clear = useAtomCommand(serverEnvironment.clearAllQueues);
-  const restore = useAtomCommand(serverEnvironment.restoreClearedQueues);
+  const restore = useAtomCommand(serverEnvironment.clearAllQueues);
   const [pending, setPending] = useState(false);
   const allowed = useAtomValue(
     useMemo(
@@ -83,11 +83,12 @@ export function ClearAllQueuesButton() {
             environmentId: environment.environmentId,
             input: {
               commandId: CommandId.make(randomUUID()),
-              maxAgeMinutes: RESTORE_WINDOW_MINUTES,
+              restore: { maxAgeMinutes: RESTORE_WINDOW_MINUTES },
             },
           });
           if (result._tag === "Success") {
-            const { threads, messages } = result.value;
+            const { threads } = result.value;
+            const messages = result.value.messages ?? 0;
             const heldBack = result.value.heldBack ?? 0;
             toastManager.add({
               type: "success",

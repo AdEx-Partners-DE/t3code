@@ -3305,13 +3305,11 @@ export type ThreadChecklist = typeof ThreadChecklist.Type;
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   clearAllQueues: "orchestration.clearAllQueues",
-  restoreClearedQueues: "orchestration.restoreClearedQueues",
   getThreadChecklist: "orchestration.getThreadChecklist",
   listThreadChecklists: "orchestration.listThreadChecklists",
   refreshThreadChecklist: "orchestration.refreshThreadChecklist",
   nudgeIdleThreads: "orchestration.nudgeIdleThreads",
   overrideOpenThreadModels: "orchestration.overrideOpenThreadModels",
-  restoreOpenThreadModels: "orchestration.restoreOpenThreadModels",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
@@ -3854,16 +3852,13 @@ export const OrchestrationV2RpcSchemas = {
         Schema.Struct({ instanceId: ProviderInstanceId, model: TrimmedNonEmptyString }),
       ),
       effort: Schema.optional(TrimmedNonEmptyString),
+      /**
+       * Put back the selections the last overrides replaced instead of setting
+       * one. The way back shares this method because the RPC group is as
+       * large as the type checker takes.
+       */
+      restore: Schema.optional(Schema.Boolean),
     }),
-    output: Schema.Struct({
-      threads: NonNegativeInt,
-      /** The selection of every thread the call covered, changed or already there, for clients to line their composers up. */
-      changed: Schema.Array(Schema.Struct({ threadId: ThreadId, modelSelection: ModelSelection })),
-    }),
-  },
-  /** Puts back the selections the last overrides replaced. */
-  restoreOpenThreadModels: {
-    input: Schema.Struct({ commandId: CommandId }),
     output: Schema.Struct({
       threads: NonNegativeInt,
       /** The selection of every thread the call covered, changed or already there, for clients to line their composers up. */
@@ -3915,31 +3910,34 @@ export const OrchestrationV2RpcSchemas = {
     output: Schema.Struct({ checklist: ThreadChecklist }),
   },
   /**
-   * Puts messages back that "clear queue" removed within the last
+   * Cancels the queued messages of every open thread, or, with `restore`,
+   * puts messages back that "clear queue" removed within the last
    * `maxAgeMinutes`: for one thread, or for every open thread. A message is
-   * put back once. `messages` is how many went back, into `threads` threads.
+   * put back once. Both ways share this method because the RPC group is as
+   * large as the type checker takes.
    */
-  restoreClearedQueues: {
+  clearAllQueues: {
     input: Schema.Struct({
       commandId: CommandId,
-      threadId: Schema.optional(ThreadId),
-      maxAgeMinutes: PositiveInt.check(Schema.isLessThanOrEqualTo(7 * 24 * 60)),
+      restore: Schema.optional(
+        Schema.Struct({
+          threadId: Schema.optional(ThreadId),
+          maxAgeMinutes: PositiveInt.check(Schema.isLessThanOrEqualTo(7 * 24 * 60)),
+        }),
+      ),
     }),
     output: Schema.Struct({
+      /** Threads that had messages cancelled, or put back. */
       threads: NonNegativeInt,
-      messages: NonNegativeInt,
+      /** With `restore`: how many messages went back. */
+      messages: Schema.optional(NonNegativeInt),
       /**
-       * Messages left out because all queues are paused and their thread
-       * stands still: put back, the first would start at once. They stay
-       * restorable.
+       * With `restore`: messages left out because all queues are paused and
+       * their thread stands still: put back, the first would start at once.
+       * They stay restorable.
        */
       heldBack: Schema.optional(NonNegativeInt),
     }),
-  },
-  clearAllQueues: {
-    input: Schema.Struct({ commandId: CommandId }),
-    /** How many threads had queued messages cancelled. */
-    output: Schema.Struct({ threads: NonNegativeInt }),
   },
   subscribeArchivedShell: {
     input: Schema.Struct({}),
