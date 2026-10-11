@@ -1156,6 +1156,9 @@ export const layer = Layer.effect(
             Effect.orElseSucceed(() => null),
           );
 
+    // Replies already checked for a stop phrase, as `task:run`. In memory only:
+    // after a restart each is read once more, which is harmless.
+    const checkedReplies = new Set<string>();
     const runIdleTasks = Effect.fn("ScheduledTaskService.runIdleTasks")(function* () {
       if (yield* tasksPaused) return;
       const rows = yield* sql<ScheduledTaskRow>`
@@ -1188,15 +1191,22 @@ export const layer = Layer.effect(
                 : null,
               nowMs: DateTime.toEpochMillis(now),
             });
-            // The reply is read only when the task would otherwise fire, so a
-            // waiting task costs one shell read per poll and no message read.
+            // The reply is read once per finished run: when the thread has gone
+            // quiet, whether the task may fire now or still waits out its pause.
+            // So a task turns off as soon as the stop phrase is there, and a
+            // waiting task costs one message read per run, not one per poll.
+            const quiet =
+              decision.type === "fire" || (decision.type === "wait" && decision.reason === "pause");
+            const replyKey = `${task.id}:${thread.latestRunId}`;
             const stopped =
-              decision.type === "fire" &&
+              quiet &&
               task.schedule.stopPhrase !== undefined &&
+              (decision.type === "fire" || !checkedReplies.has(replyKey)) &&
               saysStopPhrase(
                 task.schedule.stopPhrase,
                 yield* lastReplyText(watchedThreadId, thread.latestRunId),
               );
+            if (quiet) checkedReplies.add(replyKey);
             const remainingPercent =
               decision.type === "fire" &&
               !stopped &&

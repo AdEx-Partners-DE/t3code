@@ -767,3 +767,21 @@ it.effect("judges idleness by the thread an idle task watches, not the one it po
     );
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
+
+it.effect("turns an idle task off at the stop phrase without waiting out its pause", () =>
+  Effect.gen(function* () {
+    const harness = yield* idleHarness({
+      // The thread finished half an hour ago; the pause would run for hours yet.
+      schedule: { stopPhrase: "ALL DONE", minPauseMs: 6 * 60 * 60_000 },
+      lastReply: "All done.",
+    });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(harness.layer);
+        yield* TestClock.adjust("6 seconds");
+        assert.equal(yield* Ref.get(harness.sent), 0);
+        assert.equal((yield* harness.row).enabled, 0);
+      }),
+    );
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
