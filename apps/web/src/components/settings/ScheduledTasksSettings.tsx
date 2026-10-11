@@ -53,7 +53,8 @@ import {
   useEnvironmentHttpBaseUrl,
   type EnvironmentPresentation,
 } from "../../state/environments";
-import { useProjects } from "../../state/entities";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useProjects, useThreadShell } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -202,6 +203,23 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
  * past, and `nextRunAt` is a future instant — render "in 5m" style labels
  * for upcoming runs instead of a misleading "just now".
  */
+/**
+ * Where a task posts, how often it has run and who made it: what tells an
+ * automation an agent set up apart from one the user did.
+ */
+export function taskFactsLabel(task: ScheduledTask, threadTitle: string | null): string {
+  const target =
+    task.threadId === null
+      ? "New thread each run"
+      : threadTitle === null
+        ? "Thread no longer exists"
+        : `In "${threadTitle}"`;
+  const runs = `${task.runCount} ${task.runCount === 1 ? "run" : "runs"}`;
+  const last = task.lastRunAt === null ? "never ran" : `last ${relativeLabel(task.lastRunAt)}`;
+  const author = task.createdBy === "agent" ? "made by an agent" : `made by ${task.createdBy}`;
+  return [target, runs, last, author].join(" · ");
+}
+
 export function relativeLabel(value: string | null): string {
   if (!value) return "Not scheduled";
   const diffMs = new Date(value).getTime() - Date.now();
@@ -445,6 +463,9 @@ function ScheduledTaskRow({
   const [busy, setBusy] = useState(false);
   const [deliveriesOpen, setDeliveriesOpen] = useState(false);
   const isWebhook = task.schedule.type === "webhook";
+  const boundThread = useThreadShell(
+    task.threadId === null ? null : scopeThreadRef(environmentId, task.threadId),
+  );
   const toggle = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
     label: "scheduled task enabled",
   });
@@ -494,6 +515,7 @@ function ScheduledTaskRow({
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
           ) : null}
           {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
+          <span className="basis-full">{taskFactsLabel(task, boundThread?.title ?? null)}</span>
         </div>
       }
       control={
