@@ -17,6 +17,7 @@ import {
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
 import { relativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -61,6 +62,12 @@ export function ThreadAutomationsPanel(props: {
   });
   const navigate = useNavigate();
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
+  // The environment-wide pause holds every task, whatever its own switch says.
+  const allTasksPaused = useEnvironmentSettings(
+    props.environmentId,
+    (settings) => settings.scheduledTasksPaused,
+  );
+  const updateEnvironmentSettings = useUpdateEnvironmentSettings(props.environmentId);
 
   const boundTasks = (tasksQuery.data?.tasks ?? []).filter(
     (task) => task.threadId === props.threadId,
@@ -151,6 +158,26 @@ export function ThreadAutomationsPanel(props: {
         </p>
       ) : null}
 
+      {allTasksPaused && boundTasks.some((task) => task.enabled) ? (
+        <div
+          className={cn(
+            "flex items-center justify-between gap-2 py-1 text-2xs text-warning",
+            THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
+          )}
+          data-testid="thread-automations-paused"
+        >
+          <span>All tasks are paused. Nothing here runs on its own.</span>
+          <ThreadDetailsControl
+            size="xs"
+            variant="ghost"
+            disabled={!canOperate}
+            onClick={() => updateEnvironmentSettings({ scheduledTasksPaused: false })}
+          >
+            Resume all tasks
+          </ThreadDetailsControl>
+        </div>
+      ) : null}
+
       <ul className="m-0 list-none p-0">
         {boundTasks.map((task) => (
           <li
@@ -176,11 +203,13 @@ export function ThreadAutomationsPanel(props: {
               </span>
               <p className="truncate text-2xs text-muted-foreground">
                 {scheduleLabel(task.schedule)}
-                {task.enabled && task.nextRunAt !== null
-                  ? ` · next ${relativeLabel(task.nextRunAt)}`
-                  : task.enabled
-                    ? ""
-                    : " · paused"}
+                {!task.enabled
+                  ? " · off"
+                  : allTasksPaused
+                    ? " · held, all tasks are paused"
+                    : task.nextRunAt !== null
+                      ? ` · next ${relativeLabel(task.nextRunAt)}`
+                      : ""}
               </p>
             </div>
             <Tooltip>
@@ -229,7 +258,7 @@ export function ThreadAutomationsPanel(props: {
             <Switch
               checked={task.enabled}
               disabled={!canOperate || busyTaskId !== null}
-              aria-label={task.enabled ? `Pause ${task.title}` : `Resume ${task.title}`}
+              aria-label={task.enabled ? `Turn off ${task.title}` : `Turn on ${task.title}`}
               onCheckedChange={(enabled) => void toggleEnabled(task, enabled)}
             />
           </li>

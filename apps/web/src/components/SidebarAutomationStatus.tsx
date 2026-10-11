@@ -33,7 +33,7 @@ export function SidebarAutomationStatus({
     ...(enabledCount > 0 || tasksPaused
       ? [
           tasksPaused
-            ? `${enabledCount} ${enabledCount === 1 ? "automation" : "automations"} paused`
+            ? `${enabledCount} ${enabledCount === 1 ? "automation is" : "automations are"} on but held: all tasks paused`
             : `${enabledCount} ${enabledCount === 1 ? "automation" : "automations"} on`,
         ]
       : []),
