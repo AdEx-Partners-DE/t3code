@@ -9,12 +9,15 @@ import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Exit from "effect/Exit";
+import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 import * as CodexInstallation from "./CodexInstallation.ts";
 
@@ -59,19 +62,24 @@ const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
   const crypto = yield* Crypto.Crypto;
   const sha256 = Hex.encode(yield* crypto.digest("SHA-256", archive).pipe(Effect.orDie));
   let runtimeRenameFailures = input.runtimeRenameFailures ?? 0;
+  const failedRenames = yield* Queue.unbounded<void>();
   const lockingFs: FileSystem.FileSystem = {
     ...fs,
     // Suspended so each retry of the same effect is a fresh attempt, like the real rename.
     rename: (from, to) =>
       Effect.suspend(() =>
         /[/\\]runtime$/u.test(from) && runtimeRenameFailures-- > 0
-          ? Effect.fail(
-              PlatformError.systemError({
-                _tag: "PermissionDenied",
-                module: "FileSystem",
-                method: "rename",
-                pathOrDescriptor: from,
-              }),
+          ? Queue.offer(failedRenames, undefined).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "PermissionDenied",
+                    module: "FileSystem",
+                    method: "rename",
+                    pathOrDescriptor: from,
+                  }),
+                ),
+              ),
             )
           : fs.rename(from, to),
       ),
@@ -113,7 +121,15 @@ const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
       ),
     ),
   );
-  return { installation, fs, baseDir, localBinaryPath, probeLog, downloads: () => downloads };
+  return {
+    installation,
+    fs,
+    baseDir,
+    localBinaryPath,
+    probeLog,
+    failedRenames,
+    downloads: () => downloads,
+  };
 });
 const terminalState = (installation: CodexInstallation.CodexInstallation["Service"]) =>
   installation.changes.pipe(
@@ -465,8 +481,7 @@ const makeWindowsTar = (fs: FileSystem.FileSystem, commands: Array<string>) =>
     }).pipe(Effect.orDie),
   );
 
-// Live clock: the Windows rename retry waits between attempts.
-it.live("installs on Windows via System32 tar with CRLF output and a locked runtime", () =>
+it.effect("installs on Windows via System32 tar with CRLF output and a locked runtime", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const commands: Array<string> = [];
@@ -476,15 +491,20 @@ it.live("installs on Windows via System32 tar with CRLF output and a locked runt
       runtimeRenameFailures: 3,
     });
     yield* h.installation.start;
+    // Each failed attempt has scheduled its retry before the test fiber resumes.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      yield* Queue.take(h.failedRenames);
+      yield* TestClock.adjust("100 millis");
+    }
     expect(yield* terminalState(h.installation)).toMatchObject({ phase: "succeeded" });
     expect(commands).toEqual([
       "C:\\Windows\\System32\\tar.exe",
       "C:\\Windows\\System32\\tar.exe",
       "C:\\Windows\\System32\\tar.exe",
     ]);
-    // A real Windows host joins with backslashes; compare with one separator.
-    expect((yield* h.installation.resolve()).executablePath.replaceAll("\\", "/")).toBe(
-      `${h.baseDir.replaceAll("\\", "/")}/tools/codex/0.156.1/bin/codex.exe`,
+    const path = yield* Path.Path;
+    expect((yield* h.installation.resolve()).executablePath).toBe(
+      path.join(h.baseDir, "tools", "codex", "0.156.1", "bin", "codex.exe"),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
