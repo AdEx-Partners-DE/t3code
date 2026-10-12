@@ -1127,6 +1127,9 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:thread-checklists",
       tag: ORCHESTRATION_V2_WS_METHODS.listThreadChecklists,
       staleTimeMs: 30_000,
+      // Queues, silent runs and last replies change without the client asking.
+      // Without this the sidebar shows what was true when it was first opened.
+      refreshIntervalMs: 30_000,
     }),
     threadChecklist: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:thread-checklist",

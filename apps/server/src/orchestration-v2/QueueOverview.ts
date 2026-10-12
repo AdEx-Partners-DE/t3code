@@ -96,23 +96,35 @@ export const make = Effect.gen(function* () {
   // A run that is under way but whose thread has gone silent looks exactly
   // like one that works. The time of the last event tells them apart.
   const readActiveRuns = Effect.gen(function* () {
-    const rows = yield* sql<{ readonly thread_id: string; readonly last_event_at: string | null }>`
-      SELECT
-        runs.thread_id,
-        (
-          SELECT MAX(events.occurred_at)
-          FROM orchestration_events AS events
-          WHERE events.stream_id = runs.thread_id AND events.event_type <> 'thread.visited'
-        ) AS last_event_at
-      FROM orchestration_v2_projection_runs AS runs
-      WHERE runs.status IN ('preparing', 'starting', 'running')
-      GROUP BY runs.thread_id
+    const active = yield* sql<{ readonly thread_id: string }>`
+      SELECT DISTINCT thread_id
+      FROM orchestration_v2_projection_runs
+      WHERE status IN ('preparing', 'starting', 'running')
     `;
-    return rows.flatMap((row): ReadonlyArray<ActiveRun> =>
-      row.last_event_at === null
-        ? []
-        : [{ threadId: row.thread_id as ThreadId, lastEventAt: row.last_event_at }],
+    // The last event by sequence, through the index on (aggregate_kind,
+    // stream_id, sequence). Taking MAX(occurred_at) instead read every event
+    // of the thread: 300 ms and more for a long thread, on every refresh.
+    const runs = yield* Effect.forEach(
+      active,
+      (row) =>
+        sql<{ readonly occurred_at: string }>`
+          SELECT occurred_at
+          FROM orchestration_events
+          WHERE aggregate_kind = 'thread' AND stream_id = ${row.thread_id}
+            AND event_type <> 'thread.visited'
+          ORDER BY sequence DESC
+          LIMIT 1
+        `.pipe(
+          Effect.map((events): ReadonlyArray<ActiveRun> => {
+            const last = events[0];
+            return last === undefined
+              ? []
+              : [{ threadId: row.thread_id as ThreadId, lastEventAt: last.occurred_at }];
+          }),
+        ),
+      { concurrency: 1 },
     );
+    return runs.flat();
   });
 
   // One indexed lookup per open thread. The text is cut in the database
