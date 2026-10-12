@@ -3,6 +3,7 @@ import type { EnvironmentId, ThreadChecklistItem } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import * as Schema from "effect/Schema";
+import { useNavigate } from "@tanstack/react-router";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useMemo } from "react";
 
@@ -338,11 +339,19 @@ function CockpitBurn({
         : buildUsageBurn({ points: history.points, nowMs, hours: BURN_HOURS }),
     [history, nowMs],
   );
+  const navigate = useNavigate();
   if (burn === null || history === null || history.points.length === 0) return null;
   const scale = Math.max(burn.peak, 1);
   const barWidth = 100 / BURN_HOURS;
   return (
-    <div className="flex items-end gap-2" data-testid="sidebar-cockpit-burn">
+    // The numbers behind the bars live on the Usage page; a click goes there.
+    <button
+      type="button"
+      onClick={() => void navigate({ to: "/usage" })}
+      aria-label="Open usage"
+      className="flex cursor-pointer items-end gap-2 rounded-sm text-left hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      data-testid="sidebar-cockpit-burn"
+    >
       <svg
         viewBox="0 0 100 24"
         preserveAspectRatio="none"
@@ -372,6 +381,6 @@ function CockpitBurn({
         </span>{" "}
         pts/h
       </span>
-    </div>
+    </button>
   );
 }
