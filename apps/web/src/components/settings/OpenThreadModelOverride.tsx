@@ -183,7 +183,7 @@ function OpenThreadModelOverrideControls({
     const noun = SCOPE_NOUN[scope];
     const confirmed = await ensureLocalApi().dialogs.confirm(
       action === "apply"
-        ? `Set ${what} on every ${noun} on ${environmentLabel}? Each thread uses it from its next message; a run under way is not touched.`
+        ? `Set ${what} on every ${noun} on ${environmentLabel}? Each thread uses it from its next message; a run under way is not touched. A thread that moves to another model or account loses its prompt cache: its next message pays its whole context again at the cache-write price.`
         : `Put back the models every ${noun} on ${environmentLabel} had before? Threads you have changed since keep your choice.`,
     );
     if (!confirmed) return;

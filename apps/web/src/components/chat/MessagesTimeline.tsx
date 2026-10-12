@@ -2915,6 +2915,13 @@ function AssistantMessageMeta({
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  const ranOn =
+    message.runId == null
+      ? undefined
+      : runModelAndAccount(
+          ctx.runs.find((candidate) => candidate.id === message.runId),
+          ctx.providerStatuses,
+        );
 
   return (
     <div className={cn("flex items-center gap-2 text-xs tabular-nums", className)}>
@@ -2941,6 +2948,13 @@ function AssistantMessageMeta({
           <AssistantForkButton projectedItem={projectedItem} />
         ) : null}
       </span>
+      {/* In a thread that moves between models and accounts, every reply says which
+          one wrote it, also when its turn has no "Worked for" row. */}
+      {ranOn === undefined ? null : (
+        <span data-testid="assistant-ran-on" className="min-w-0 truncate text-muted-foreground">
+          {ranOn}
+        </span>
+      )}
       {!message.streaming && (
         <Tooltip>
           <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
