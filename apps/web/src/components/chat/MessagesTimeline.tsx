@@ -2630,11 +2630,14 @@ function TimelineRowTimestamp({
   timestampFormat,
   className,
   alwaysVisible = false,
+  detail,
 }: {
   createdAt: string;
   timestampFormat: TimestampFormat;
   className?: string;
   alwaysVisible?: boolean;
+  /** A second line for the tooltip, e.g. the model and account a turn ran on. */
+  detail?: string | undefined;
 }) {
   return (
     <Tooltip>
@@ -2651,13 +2654,35 @@ function TimelineRowTimestamp({
       >
         {formatDayAwareTimestamp(createdAt, timestampFormat)}
       </TooltipTrigger>
-      <TooltipPopup>{formatChatTimestampTooltip(createdAt, timestampFormat)}</TooltipPopup>
+      <TooltipPopup>
+        {formatChatTimestampTooltip(createdAt, timestampFormat)}
+        {detail ? (
+          <>
+            <br />
+            {detail}
+          </>
+        ) : null}
+      </TooltipPopup>
     </Tooltip>
   );
 }
 
+/** The model and account a run worked on, in the names the model picker uses. */
+export function runModelAndAccount(
+  run: Pick<HandoffTimelineRun, "providerInstanceId" | "modelSelection"> | undefined,
+  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "displayName" | "models">>,
+): string | undefined {
+  if (run === undefined) return undefined;
+  const provider = providers.find((candidate) => candidate.instanceId === run.providerInstanceId);
+  const model =
+    provider?.models.find((candidate) => candidate.slug === run.modelSelection.model)?.name ??
+    run.modelSelection.model;
+  return `${model} · ${provider?.displayName ?? run.providerInstanceId}`;
+}
+
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
+  const run = ctx.runs.find((candidate) => candidate.id === row.runId);
 
   return (
     <div className="group/timeline-row relative flex items-center gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
@@ -2677,6 +2702,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         timestampFormat={ctx.timestampFormat}
         className="ms-auto"
         alwaysVisible
+        detail={runModelAndAccount(run, ctx.providerStatuses)}
       />
     </div>
   );

@@ -3365,3 +3365,26 @@ describe("thread entry with the real virtualizer", () => {
     }
   });
 });
+
+describe("runModelAndAccount", () => {
+  const providers = [
+    {
+      instanceId: "codex_stark_cli",
+      displayName: "OpenAI - Stark",
+      models: [{ slug: "gpt-6.1-sol", name: "GPT-6.1-Sol", isCustom: false }],
+    },
+  ] as never;
+  const run = (model: string, instanceId = "codex_stark_cli") =>
+    ({ providerInstanceId: instanceId, modelSelection: { instanceId, model } }) as never;
+
+  it("names the model and the account the way the picker does", async () => {
+    const { runModelAndAccount } = await import("./MessagesTimeline");
+    expect(runModelAndAccount(run("gpt-6.1-sol"), providers)).toBe("GPT-6.1-Sol · OpenAI - Stark");
+  });
+
+  it("falls back to the raw ids for a model or account that is gone", async () => {
+    const { runModelAndAccount } = await import("./MessagesTimeline");
+    expect(runModelAndAccount(run("old-model", "gone"), providers)).toBe("old-model · gone");
+    expect(runModelAndAccount(undefined, providers)).toBeUndefined();
+  });
+});
