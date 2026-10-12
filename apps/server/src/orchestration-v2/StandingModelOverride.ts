@@ -11,6 +11,7 @@
  */
 import { CommandId, ModelSelection, TrimmedNonEmptyString } from "@t3tools/contracts";
 import { ProviderInstanceId } from "@t3tools/contracts";
+import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { overriddenModelSelection, type ModelOverride } from "@t3tools/shared/modelOverride";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -86,8 +87,24 @@ export function standingOverrideFromApplied(
   };
 }
 
-const AppliedSelections = Schema.Record(Schema.String, Schema.Struct({ applied: ModelSelection }));
+const AppliedSelections = Schema.Record(
+  Schema.String,
+  Schema.Struct({ previous: ModelSelection, applied: ModelSelection }),
+);
 const decodeApplied = Schema.decodeUnknownOption(Schema.fromJsonString(AppliedSelections));
+const encodeApplied = Schema.encodeSync(Schema.fromJsonString(AppliedSelections));
+
+/**
+ * Whether the user has picked another model for this thread since the
+ * override set one on it. That choice is theirs: an automation's next message
+ * must not move the thread back.
+ */
+export function userChoseOtherModel(
+  applied: ModelSelection | undefined,
+  current: ModelSelection,
+): boolean {
+  return applied !== undefined && !modelSelectionsEqual(current, applied);
+}
 
 /** The override in force, or null. */
 export const readStandingOverride = Effect.gen(function* () {
@@ -146,6 +163,28 @@ export const alignThreadWithStandingOverride = (
     if (Option.isNone(registry)) return;
     const thread = yield* threads.getThreadShell(threadId);
     if (thread === null) return;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const savedPath = (yield* Path.Path).join(
+      (yield* ServerConfig.ServerConfig).stateDir,
+      MODEL_OVERRIDE_FILE_NAME,
+    );
+    const noneSaved: typeof AppliedSelections.Type = {};
+    const saved: typeof AppliedSelections.Type = yield* fileSystem.readFileString(savedPath).pipe(
+      Effect.map((contents) => Option.getOrElse(decodeApplied(contents), () => noneSaved)),
+      Effect.orElseSucceed(() => noneSaved),
+    );
+    if (userChoseOtherModel(saved[threadId]?.applied, thread.modelSelection)) {
+      yield* recordDecision({
+        kind: "model-override-applied",
+        threadId,
+        outcome: "kept-own-choice",
+        facts: {
+          reason,
+          current: `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`,
+        },
+      });
+      return;
+    }
     const next = standingSelectionFor({
       override,
       thread,
@@ -154,8 +193,7 @@ export const alignThreadWithStandingOverride = (
     if (next === null) return;
     yield* threads.dispatch({
       type: "thread.model-selection.set",
-      // One id per alignment: the same thread can need the same model again
-      // after the user changed it by hand, and a reused id would be dropped.
+      // One id per alignment: a reused id would be dropped.
       commandId: CommandId.make(
         `command:standing-model-override:${threadId}:${yield* Clock.currentTimeMillis}`,
       ),
@@ -163,6 +201,20 @@ export const alignThreadWithStandingOverride = (
       modelSelection: next,
       includeQueuedRuns: true,
     });
+    // Remembered like the threads the override covered at first: "Put back"
+    // restores this one too, and a later pick by the user is told apart.
+    yield* fileSystem
+      .writeFileString(
+        savedPath,
+        encodeApplied({
+          ...saved,
+          [threadId]: {
+            previous: saved[threadId]?.previous ?? thread.modelSelection,
+            applied: next,
+          },
+        }),
+      )
+      .pipe(Effect.ignore);
     yield* recordDecision({
       kind: "model-override-applied",
       threadId,

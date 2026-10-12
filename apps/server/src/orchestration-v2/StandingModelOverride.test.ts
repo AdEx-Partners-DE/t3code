@@ -1,7 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
-import { standingOverrideFromApplied, standingSelectionFor } from "./StandingModelOverride.ts";
+import {
+  standingOverrideFromApplied,
+  standingSelectionFor,
+  userChoseOtherModel,
+} from "./StandingModelOverride.ts";
 
 type Input = Parameters<typeof standingSelectionFor>[0];
 const thread = (overrides: Partial<Input["thread"]> = {}) =>
@@ -57,5 +61,21 @@ describe("standingOverrideFromApplied", () => {
     });
     expect(read([sol("high"), { instanceId: "grok", model: "grok-4.7" }])).toBeNull();
     expect(read([])).toBeNull();
+  });
+});
+
+describe("userChoseOtherModel", () => {
+  const sol = { instanceId: "codex", model: "gpt-6.1-sol" } as Parameters<
+    typeof userChoseOtherModel
+  >[1];
+  const opus = { instanceId: "claudeAgent", model: "claude-opus-5-5" } as typeof sol;
+
+  it("sees a pick made after the override set its model", () => {
+    expect(userChoseOtherModel(sol, opus)).toBe(true);
+  });
+
+  it("sees none while the thread still has what the override set, or was never covered", () => {
+    expect(userChoseOtherModel(sol, sol)).toBe(false);
+    expect(userChoseOtherModel(undefined, opus)).toBe(false);
   });
 });
