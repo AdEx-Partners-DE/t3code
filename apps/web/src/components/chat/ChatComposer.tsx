@@ -1606,6 +1606,8 @@ export interface ChatComposerProps {
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
+  /** The lock ends with the running turn, so the picker says to wait, not to start a new thread. */
+  lockedUntilTurnEnds?: boolean;
   providerStatuses: ServerProvider[];
   /** False until the environment's server config has arrived at least once. */
   providerCatalogKnown: boolean;
@@ -1758,6 +1760,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     runtimeMode,
     interactionMode: requestedInteractionMode,
     lockedProvider,
+    lockedUntilTurnEnds = false,
     providerStatuses,
     providerCatalogKnown,
     activeProjectDefaultModelSelection,
@@ -5586,6 +5589,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             : selectedModelForPickerWithCustomFallback
         }
         lockedProvider={lockedProvider}
+        lockedUntilTurnEnds={lockedUntilTurnEnds}
         lockedContinuationGroupKey={lockedContinuationGroupKey}
         instanceEntries={providerInstanceEntries}
         keybindings={keybindings}

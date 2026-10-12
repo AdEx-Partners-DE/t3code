@@ -87,14 +87,23 @@ function resolveThreadProviderSession(projection: Projection): ProviderSession |
   );
 }
 
-export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
-  if (projection == null) return false;
+/**
+ * Why a thread cannot move to another provider, or null when it can.
+ * `turn-in-progress` passes once the running turn ends; `not-portable` does
+ * not, so only that one is a reason to start a new thread.
+ */
+export function providerHandoffBlocker(
+  projection: Projection | null | undefined,
+): "turn-in-progress" | "not-portable" | null {
+  if (projection == null) return "not-portable";
   const session = resolveThreadProviderSession(projection);
   if (session !== null) {
-    return session.capabilities.sessions.supportsProviderSwitchingViaHandoff;
+    return session.capabilities.sessions.supportsProviderSwitchingViaHandoff
+      ? null
+      : "not-portable";
   }
-  if (resolveActiveThreadRun(projection) !== null) return false;
-  if (projection.thread.historyOrigin === "v1_import" || projection.runs.length === 0) return true;
+  if (resolveActiveThreadRun(projection) !== null) return "turn-in-progress";
+  if (projection.thread.historyOrigin === "v1_import" || projection.runs.length === 0) return null;
 
   // Detaching a stopped session removes it from the projection, but its native
   // provider thread remains available for the next turn's portable handoff.
@@ -104,7 +113,13 @@ export function threadSupportsProviderHandoff(projection: Projection | null | un
       thread.appThreadId === projection.thread.id &&
       thread.providerInstanceId === projection.thread.modelSelection.instanceId &&
       thread.nativeThreadRef !== null,
-  );
+  )
+    ? null
+    : "not-portable";
+}
+
+export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
+  return providerHandoffBlocker(projection) === null;
 }
 
 /** Automatic completion/notification runs are not messages in the user's queue. */

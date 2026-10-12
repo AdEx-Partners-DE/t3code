@@ -5,6 +5,7 @@ import {
   canDetachThreadProviderSession,
   canForkProjectedAssistantItem,
   deriveThreadQueueWorkflowState,
+  providerHandoffBlocker,
   resolveLatestMergeBackRun,
   threadSupportsProviderHandoff,
 } from "./threadWorkflows.ts";
@@ -64,6 +65,23 @@ describe("thread workflows", () => {
         providerThreads: [{ ...projection.providerThreads[0]!, nativeThreadRef: null }],
       }),
     ).toBe(false);
+
+    // A running turn blocks the move only until it ends; a provider thread
+    // without a native reference blocks it for good.
+    expect(providerHandoffBlocker(projection)).toBeNull();
+    expect(
+      providerHandoffBlocker({
+        ...projection,
+        runs: [{ ...projection.runs[0]!, status: "running" }],
+      }),
+    ).toBe("turn-in-progress");
+    expect(
+      providerHandoffBlocker({
+        ...projection,
+        providerThreads: [{ ...projection.providerThreads[0]!, nativeThreadRef: null }],
+      }),
+    ).toBe("not-portable");
+    expect(providerHandoffBlocker(null)).toBe("not-portable");
   });
 
   it("sorts queued messages and gates reorder and promotion from capabilities", () => {
