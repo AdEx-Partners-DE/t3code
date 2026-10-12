@@ -14,6 +14,7 @@ import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
@@ -340,6 +341,33 @@ describe.runIf(hostPlatform === "win32")("OpenCodeServerLedger on Windows", () =
         );
         const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failingQueries),
+        );
+        yield* ledger.reapOrphans;
+
+        expect(isAlive(server.pid)).toBe(true);
+        expect(yield* entries(stateDir)).toHaveLength(1);
+      }).pipe(provideHost),
+    60_000,
+  );
+
+  it.live(
+    "keeps the entry when taskkill does not stop the server",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+        const server = yield* spawnWindowsServer(SERVE_ARGS);
+        yield* recordFromKilledServer(stateDir, server.pid);
+
+        // Real process queries, but a taskkill that stops nothing.
+        const real = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const noTaskkill = ChildProcessSpawner.make((command) =>
+          (command as unknown as { readonly command: string }).command === "taskkill"
+            ? real.spawn(ChildProcess.make("cmd.exe", ["/d", "/c", "exit 1"]))
+            : real.spawn(command),
+        );
+        const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noTaskkill),
         );
         yield* ledger.reapOrphans;
 

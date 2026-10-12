@@ -1,6 +1,5 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -94,16 +93,24 @@ const parseDarwinPs = (output: string): ReadonlyArray<ObservedProcess> =>
   });
 
 // Windows has neither `/proc` nor `ps`; CIM reports the same facts. Start time is the creation
-// time in UTC ticks. `pgid` carries the parent, since Windows has no process groups.
+// time in UTC ticks. `pgid` carries the parent, since Windows has no process groups. A CIM error
+// would otherwise be non-terminating and still print `[]`, so it stops the script, which then
+// prints nothing.
 const WINDOWS_PROCESS_QUERY = (filter: string) =>
-  `ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter '${filter}' | ` +
+  `$ErrorActionPreference = 'Stop'; ` +
+  `ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter '${filter}' -ErrorAction Stop | ` +
   `ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; ppid = [int]$_.ParentProcessId; ` +
   `startTime = [string]$_.CreationDate.ToUniversalTime().Ticks; command = [string]$_.CommandLine } })`;
 
 /** A Windows process query that did not produce an answer; the process state is unknown. */
-class WindowsProcessQueryError extends Data.TaggedError("WindowsProcessQueryError")<{
-  readonly cause: unknown;
-}> {}
+class WindowsProcessQueryError extends Schema.TaggedError<WindowsProcessQueryError>()(
+  "WindowsProcessQueryError",
+  { filter: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `The Windows process query (${this.filter}) gave no answer.`;
+  }
+}
 
 /**
  * Throws unless the output is the JSON array the query prints, `[]` when nothing matched. The
@@ -228,7 +235,7 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
         Effect.flatMap((output) =>
           Effect.try({
             try: () => parseWindowsProcesses(output),
-            catch: (cause) => new WindowsProcessQueryError({ cause }),
+            catch: (cause) => new WindowsProcessQueryError({ filter, cause }),
           }),
         ),
       );
@@ -422,7 +429,10 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
             }),
           )
           .pipe(Effect.timeout("15 seconds"), Effect.ignore);
-        return true;
+        // Judged by the process rather than taskkill's output: the entry stays unless the server
+        // is known to be gone, so a later start can try again.
+        const after = yield* observeOrUnknown(entry.pid);
+        return after !== "unknown" && (after === undefined || after.startTime !== entry.startTime);
       }
       signalGroup(entry.pgid, "SIGTERM");
       for (let attempt = 0; attempt < STOP_POLL_ATTEMPTS && groupExists(entry.pgid); attempt++) {
