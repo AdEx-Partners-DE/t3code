@@ -281,6 +281,7 @@ import {
   formatDayAwareTimestamp,
   formatUpcomingTimestamp,
 } from "../../timestampFormat";
+import { formatRunContextUsage, type RunContextUsage } from "../../lib/contextWindow";
 import { FetchedToolOutput, V2ItemInspector } from "./V2ItemInspector";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
@@ -325,6 +326,8 @@ interface TimelineRowSharedState {
   providerStatuses: ReadonlyArray<ServerProvider>;
   /** Projection runs, for recovering handoff models on legacy items. */
   runs: ReadonlyArray<HandoffTimelineRun>;
+  /** How full the context was at the end of each run, by run id. */
+  runContextUsage: ReadonlyMap<string, RunContextUsage>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
@@ -514,6 +517,7 @@ interface MessagesTimelineProps {
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   providerStatuses: ReadonlyArray<ServerProvider>;
   runs: ReadonlyArray<HandoffTimelineRun>;
+  runContextUsage?: ReadonlyMap<string, RunContextUsage>;
   anchorMessageId: MessageId | null;
   onAnchorReady: (messageId: MessageId, anchorIndex: number) => void;
   onAnchorSizeChanged: (messageId: MessageId, size: number) => void;
@@ -620,6 +624,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   skills = EMPTY_TIMELINE_SKILLS,
   providerStatuses,
   runs: runsProp,
+  runContextUsage = NO_RUN_CONTEXT_USAGE,
   anchorMessageId,
   onAnchorReady,
   onAnchorSizeChanged,
@@ -1226,6 +1231,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       skills,
       providerStatuses,
       runs,
+      runContextUsage,
       activeThreadEnvironmentId,
       onRevertToTurnCount,
       onRunShellCommand,
@@ -1264,6 +1270,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       skills,
       providerStatuses,
       runs,
+      runContextUsage,
       activeThreadEnvironmentId,
       onRevertToTurnCount,
       onRunShellCommand,
@@ -2667,6 +2674,8 @@ function TimelineRowTimestamp({
   );
 }
 
+const NO_RUN_CONTEXT_USAGE: ReadonlyMap<string, RunContextUsage> = new Map();
+
 /** The model and account a run worked on, in the names the model picker uses. */
 export function runModelAndAccount(
   run: Pick<HandoffTimelineRun, "providerInstanceId" | "modelSelection"> | undefined,
@@ -2683,6 +2692,14 @@ export function runModelAndAccount(
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
   const run = ctx.runs.find((candidate) => candidate.id === row.runId);
+  const contextUsage = ctx.runContextUsage.get(row.runId);
+  // What the turn ran on and how much it knew at its end.
+  const detail = [
+    runModelAndAccount(run, ctx.providerStatuses),
+    contextUsage === undefined ? undefined : formatRunContextUsage(contextUsage),
+  ]
+    .filter((part) => part !== undefined)
+    .join(" · ");
 
   return (
     <div className="group/timeline-row relative flex items-center gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1">
@@ -2702,7 +2719,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         timestampFormat={ctx.timestampFormat}
         className="ms-auto"
         alwaysVisible
-        detail={runModelAndAccount(run, ctx.providerStatuses)}
+        detail={detail === "" ? undefined : detail}
       />
     </div>
   );

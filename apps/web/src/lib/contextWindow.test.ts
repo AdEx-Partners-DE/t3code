@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as DateTime from "effect/DateTime";
 import {
+  contextUsageByRun,
   deriveLatestContextWindowSnapshot,
+  formatRunContextUsage,
   formatContextWindowTokens,
   latestProviderTurnTokenUsage,
 } from "./contextWindow";
@@ -108,5 +110,35 @@ describe("latestProviderTurnTokenUsage", () => {
       usage(90_000, "2026-06-20T09:00:00.000Z"),
     ]);
     expect(latest?.usedTokens).toBe(300_000);
+  });
+});
+
+describe("context usage per run", () => {
+  const attempts = [
+    { id: "attempt:1", runId: "run:1" },
+    { id: "attempt:2", runId: "run:2" },
+  ] as never;
+  const turn = (runAttemptId: string | null, status: string, usedTokens: number, at: string) =>
+    ({
+      runAttemptId,
+      status,
+      tokenUsage: { usedTokens, maxTokens: 1_000_000, updatedAt: at },
+    }) as never;
+
+  it("takes the newest finished turn of each run and leaves a running one out", () => {
+    const usage = contextUsageByRun(attempts, [
+      turn("attempt:1", "completed", 100_000, "2026-10-12T10:00:00.000Z"),
+      turn("attempt:1", "completed", 412_000, "2026-10-12T10:05:00.000Z"),
+      turn("attempt:2", "running", 500_000, "2026-10-12T10:10:00.000Z"),
+      turn(null, "completed", 9, "2026-10-12T10:11:00.000Z"),
+    ]);
+    expect([...usage]).toEqual([["run:1", { usedTokens: 412_000, maxTokens: 1_000_000 }]]);
+  });
+
+  it("words the usage like the context meter", () => {
+    expect(formatRunContextUsage({ usedTokens: 412_000, maxTokens: 1_000_000 })).toBe(
+      "Context 412k of 1m (41%)",
+    );
+    expect(formatRunContextUsage({ usedTokens: 8_200, maxTokens: null })).toBe("Context 8.2k");
   });
 });

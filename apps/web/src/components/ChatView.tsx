@@ -513,6 +513,8 @@ import {
 import {
   deriveLatestContextWindowSnapshot,
   latestProviderTurnTokenUsage,
+  contextUsageByRun,
+  type RunContextUsage,
 } from "../lib/contextWindow";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
@@ -1739,6 +1741,23 @@ export default function ChatView(props: ChatViewProps) {
   const activeThreadLiveTokenUsage = useMemo(
     () => latestProviderTurnTokenUsage(serverProjection?.providerTurns ?? []),
     [serverProjection?.providerTurns],
+  );
+  // How full the context was at the end of each run, for the time of its turn.
+  // The projection arrays are rebuilt on every event, so the map is keyed by
+  // its content: the timeline's rows must not re-render while nothing changed.
+  const runContextUsageKey = useMemo(
+    () =>
+      JSON.stringify([
+        ...contextUsageByRun(
+          serverProjection?.attempts ?? [],
+          serverProjection?.providerTurns ?? [],
+        ),
+      ]),
+    [serverProjection?.attempts, serverProjection?.providerTurns],
+  );
+  const runContextUsage = useMemo(
+    () => new Map(JSON.parse(runContextUsageKey) as ReadonlyArray<[string, RunContextUsage]>),
+    [runContextUsageKey],
   );
   const serverVisibleTurnItems = useThreadVisibleTurnItems(routeThreadDetailRef);
   const serverThreadHistory = useThreadHistory(routeThreadDetailRef);
@@ -11611,6 +11630,7 @@ export default function ChatView(props: ChatViewProps) {
                   )?.serverConfig?.providers ?? EMPTY_PROVIDERS
                 }
                 runs={paintOnlyDisplayedTimeline ? [] : (serverProjection?.runs ?? [])}
+                runContextUsage={runContextUsage}
                 latestRun={paintOnlyDisplayedTimeline ? null : activeActivityRun}
                 runningRunId={paintOnlyDisplayedTimeline ? null : activeRunningTurnId}
                 turnDiffSummaries={
