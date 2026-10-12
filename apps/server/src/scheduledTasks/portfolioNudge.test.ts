@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { RunId, ThreadId } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { planPortfolioNudge } from "./portfolioNudge.ts";
+import { planPortfolioNudge, supervisedSendsSinceUser } from "./portfolioNudge.ts";
 
 type Thread = Parameters<typeof planPortfolioNudge>[0]["threads"][number];
 const at = (iso: string) => DateTime.makeUnsafe(iso);
@@ -114,5 +114,33 @@ describe("planPortfolioNudge", () => {
       nowMs: NOW,
     });
     expect(plan.targets).toEqual([]);
+  });
+});
+
+describe("supervisedSendsSinceUser", () => {
+  const lastSentAt = "2026-10-12T02:00:00.000Z";
+
+  it("keeps counting while the user has not written since", () => {
+    expect(
+      supervisedSendsSinceUser({
+        sends: 2,
+        lastSentAt,
+        userWroteAtMs: Date.parse("2026-10-12T01:00:00.000Z"),
+      }),
+    ).toBe(2);
+    expect(supervisedSendsSinceUser({ sends: 2, lastSentAt, userWroteAtMs: null })).toBe(2);
+  });
+
+  it("starts again once the user wrote after the last send", () => {
+    expect(
+      supervisedSendsSinceUser({
+        sends: 2,
+        lastSentAt,
+        userWroteAtMs: Date.parse("2026-10-12T03:00:00.000Z"),
+      }),
+    ).toBe(0);
+    expect(
+      supervisedSendsSinceUser({ sends: undefined, lastSentAt: undefined, userWroteAtMs: null }),
+    ).toBe(0);
   });
 });

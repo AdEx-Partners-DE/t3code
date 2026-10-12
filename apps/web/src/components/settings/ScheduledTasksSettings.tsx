@@ -1626,7 +1626,7 @@ function ScheduledTaskEditorDialog({
                           <span className="text-xs text-muted-foreground">
                             Only send on threads that do not need me: a model reads each last reply
                             and tells the agent to go on where it merely asked for leave. The prompt
-                            above is not sent. At most twice per thread.
+                            above is not sent. At most twice per thread until you write in it again.
                           </span>
                         </div>
                       </>

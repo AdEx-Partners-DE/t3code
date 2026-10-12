@@ -25,6 +25,22 @@ export const DEFAULT_MAX_PARALLEL = 2;
  */
 export const MAX_SUPERVISED_SENDS_PER_THREAD = 2;
 
+/**
+ * How often a supervised task has sent a thread on since its user last wrote
+ * in it. A message from the user starts the count again: they have seen the
+ * thread, so the next stop is a new one.
+ */
+export function supervisedSendsSinceUser(input: {
+  readonly sends: number | undefined;
+  readonly lastSentAt: string | undefined;
+  readonly userWroteAtMs: number | null;
+}): number {
+  const sends = input.sends ?? 0;
+  if (sends === 0 || input.userWroteAtMs === null || input.lastSentAt === undefined) return sends;
+  const lastSentAtMs = Date.parse(input.lastSentAt);
+  return Number.isFinite(lastSentAtMs) && input.userWroteAtMs > lastSentAtMs ? 0 : sends;
+}
+
 export interface PortfolioNudgePlan<T> {
   /** Threads to send to now, most recently finished first. */
   readonly targets: ReadonlyArray<T>;

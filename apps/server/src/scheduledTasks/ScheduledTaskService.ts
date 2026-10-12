@@ -54,7 +54,11 @@ import { isTaskHeldByPause } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { decideIdleTrigger, saysStopPhrase, underUsageBudget } from "./idleTrigger.ts";
-import { MAX_SUPERVISED_SENDS_PER_THREAD, planPortfolioNudge } from "./portfolioNudge.ts";
+import {
+  MAX_SUPERVISED_SENDS_PER_THREAD,
+  planPortfolioNudge,
+  supervisedSendsSinceUser,
+} from "./portfolioNudge.ts";
 import { recordDecision } from "../decisionLog.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
@@ -1383,6 +1387,7 @@ export const layer = Layer.effect(
             });
             let runsUsed = schedule.runsUsed ?? 0;
             const supervised: Record<string, number> = { ...schedule.supervised };
+            const supervisedAt: Record<string, string> = { ...schedule.supervisedAt };
             const nudged: Record<string, string> = { ...plan.remembered };
             let changed = Object.keys(nudged).length !== Object.keys(schedule.nudged ?? {}).length;
             for (const thread of plan.targets) {
@@ -1423,7 +1428,14 @@ export const layer = Layer.effect(
               // for leave it already has, and then with that model's instruction.
               let text = task.prompt;
               if (schedule.supervise === true) {
-                const sentOn = supervised[thread.id] ?? 0;
+                const sentOn = supervisedSendsSinceUser({
+                  sends: supervised[thread.id],
+                  lastSentAt: supervisedAt[thread.id],
+                  userWroteAtMs:
+                    thread.latestUserAuthoredMessageAt == null
+                      ? null
+                      : DateTime.toEpochMillis(thread.latestUserAuthoredMessageAt),
+                });
                 const verdict =
                   sentOn >= MAX_SUPERVISED_SENDS_PER_THREAD
                     ? null
@@ -1463,6 +1475,7 @@ export const layer = Layer.effect(
                   facts: { taskId: task.id, reason: verdict.reason, sentOn: sentOn + 1 },
                 });
                 supervised[thread.id] = sentOn + 1;
+                supervisedAt[thread.id] = iso(now);
                 text = verdict.instruction;
               }
               const fireKey = `${task.id}:${nowMs}:portfolio:${thread.id}`;
@@ -1496,7 +1509,7 @@ export const layer = Layer.effect(
                 ...schedule,
                 runsUsed,
                 nudged,
-                ...(schedule.supervise === true ? { supervised } : {}),
+                ...(schedule.supervise === true ? { supervised, supervisedAt } : {}),
               })},
                   run_count = run_count + ${runsUsed - (schedule.runsUsed ?? 0)},
                   last_run_at = ${runsUsed === (schedule.runsUsed ?? 0) ? row.last_run_at : iso(now)},

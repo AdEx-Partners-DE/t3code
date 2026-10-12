@@ -161,7 +161,7 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
   }),
   supervise: Schema.optional(Schema.Boolean).annotate({
     description:
-      "With allOpenThreads: a model reads each standing thread's last reply first. A thread that only asked for leave it already has gets an instruction to go on instead of the task's prompt; a thread that really needs the user is left alone. At most twice per thread.",
+      "With allOpenThreads: a model reads each standing thread's last reply first. A thread that only asked for leave it already has gets an instruction to go on instead of the task's prompt; a thread that really needs the user is left alone. At most twice per thread until the user writes in it again.",
   }),
   superviseDryRun: Schema.optional(Schema.Boolean).annotate({
     description:
@@ -169,6 +169,8 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
   }),
   /** With supervise: per thread, how often this task has sent it on. Kept by the server. */
   supervised: Schema.optional(Schema.Record(Schema.String, Schema.Int)),
+  /** With supervise: per thread, when this task last sent it on. Kept by the server. */
+  supervisedAt: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   /** With allOpenThreads: per thread, the run this task last reacted to. Kept by the server. */
   nudged: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   watchThreadId: Schema.optional(ThreadId).annotate({
