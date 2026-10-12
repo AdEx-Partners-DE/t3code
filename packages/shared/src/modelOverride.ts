@@ -15,7 +15,8 @@ export interface ModelOverride {
   readonly effort?: string | undefined;
 }
 
-type OverrideProvider = Pick<ServerProvider, "instanceId" | "models">;
+type OverrideProvider = Pick<ServerProvider, "instanceId" | "models"> &
+  Partial<Pick<ServerProvider, "driver">>;
 
 /**
  * Providers name their thinking option differently ("effort",
@@ -40,6 +41,28 @@ function effortOptionId(
 }
 
 /**
+ * Where a thread goes for the overriding model. An override names a model on
+ * one account, but it means the model: a thread on another account of the
+ * same provider that offers that model stays on its account. Moving it would
+ * hand the conversation over between accounts, which a long thread does not
+ * survive, and spend the other account's allowance.
+ */
+function overrideTarget(
+  providers: ReadonlyArray<OverrideProvider>,
+  current: Pick<ModelSelection, "instanceId" | "model">,
+  wanted: Pick<ModelSelection, "instanceId" | "model">,
+): Pick<ModelSelection, "instanceId" | "model"> {
+  if (wanted.instanceId === current.instanceId) return wanted;
+  const own = providers.find((provider) => provider.instanceId === current.instanceId);
+  const other = providers.find((provider) => provider.instanceId === wanted.instanceId);
+  return own?.driver !== undefined &&
+    own.driver === other?.driver &&
+    own.models.some((candidate) => candidate.slug === wanted.model)
+    ? { instanceId: current.instanceId, model: wanted.model }
+    : wanted;
+}
+
+/**
  * The selection `current` becomes under `override`, or null when nothing
  * changes. Moving to another model drops the old model's options, since they
  * belong to that model; staying on the model keeps them.
@@ -50,7 +73,10 @@ export function overriddenModelSelection(input: {
   readonly providers: ReadonlyArray<OverrideProvider>;
 }): ModelSelection | null {
   const { current, override } = input;
-  const target = override.model ?? current;
+  const target =
+    override.model === undefined
+      ? current
+      : overrideTarget(input.providers, current, override.model);
   const sameModel = target.instanceId === current.instanceId && target.model === current.model;
   let options = sameModel ? [...(current.options ?? [])] : [];
   if (override.effort !== undefined) {

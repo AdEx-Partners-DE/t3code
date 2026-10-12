@@ -95,3 +95,56 @@ describe("overriddenModelSelection", () => {
     expect(overriddenModelSelection({ current, override: {}, providers })).toBeNull();
   });
 });
+
+describe("overriddenModelSelection across accounts", () => {
+  const work = ProviderInstanceId.make("codex_work");
+  const driver = "codex" as ServerProvider["driver"];
+  const accounts = [
+    { instanceId: codex, driver, models: [model("gpt-6", null, []), model("gpt-7", null, [])] },
+    { instanceId: work, driver, models: [model("gpt-6", null, []), model("gpt-7", null, [])] },
+    {
+      instanceId: claude,
+      driver: "claudeAgent" as ServerProvider["driver"],
+      models: [model("opus", null, [])],
+    },
+  ];
+  const onWork: ModelSelection = { instanceId: work, model: "gpt-6" };
+
+  it("keeps a thread on its own account when that account has the model", () => {
+    expect(
+      overriddenModelSelection({
+        current: onWork,
+        override: { model: { instanceId: codex, model: "gpt-7" } },
+        providers: accounts,
+      }),
+    ).toEqual({ instanceId: work, model: "gpt-7" });
+    // Already on the model, on its own account: nothing to do.
+    expect(
+      overriddenModelSelection({
+        current: onWork,
+        override: { model: { instanceId: codex, model: "gpt-6" } },
+        providers: accounts,
+      }),
+    ).toBeNull();
+  });
+
+  it("moves to the named account when the thread's own cannot run the model", () => {
+    expect(
+      overriddenModelSelection({
+        current: onWork,
+        override: { model: { instanceId: claude, model: "opus" } },
+        providers: accounts,
+      }),
+    ).toEqual({ instanceId: claude, model: "opus" });
+    const withoutModel = accounts.map((account) =>
+      account.instanceId === work ? { ...account, models: [model("gpt-6", null, [])] } : account,
+    );
+    expect(
+      overriddenModelSelection({
+        current: onWork,
+        override: { model: { instanceId: codex, model: "gpt-7" } },
+        providers: withoutModel,
+      }),
+    ).toEqual({ instanceId: codex, model: "gpt-7" });
+  });
+});

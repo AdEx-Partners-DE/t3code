@@ -122,9 +122,13 @@ export const readStandingOverride = Effect.gen(function* () {
       Effect.map(decodeApplied),
       Effect.orElseSucceed(() => Option.none()),
     );
-  return Option.isNone(applied)
+  const derived = Option.isNone(applied)
     ? null
     : standingOverrideFromApplied(Object.values(applied.value).map((entry) => entry.applied));
+  // Kept once read: threads aligned later may stay on their own account, and
+  // the applied selections then no longer share one account to read it from.
+  if (derived !== null) yield* rememberStandingOverride(derived);
+  return derived;
 }).pipe(Effect.orElseSucceed(() => null));
 
 /**
