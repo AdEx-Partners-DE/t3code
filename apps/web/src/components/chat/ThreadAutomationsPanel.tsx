@@ -168,7 +168,7 @@ export function ThreadAutomationsPanel(props: {
       {boundTasks.some(isHeld) ? (
         <div
           className={cn(
-            "flex items-center justify-between gap-2 py-1 text-2xs text-warning",
+            "flex items-center justify-between gap-2 py-1 text-2xs text-warning-foreground",
             THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
           )}
           data-testid="thread-automations-paused"

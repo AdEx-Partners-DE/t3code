@@ -169,7 +169,7 @@ function CockpitStat(props: {
       type="button"
       aria-pressed={props.pressed}
       onClick={props.onClick}
-      className="flex min-w-0 cursor-pointer flex-col items-start rounded-sm bg-sidebar-row-hover/60 px-1.5 py-1 text-left hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset aria-pressed:bg-sidebar-row-hover aria-pressed:ring-1 aria-pressed:ring-sidebar-foreground/30 aria-pressed:ring-inset"
+      className="flex min-w-0 cursor-pointer flex-col items-start rounded-sm bg-sidebar-row-hover/60 px-1.5 py-1 text-left hover:bg-sidebar-row-hover hover:ring-1 hover:ring-sidebar-foreground/20 hover:ring-inset focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset aria-pressed:bg-sidebar-row-hover aria-pressed:ring-1 aria-pressed:ring-sidebar-foreground/30 aria-pressed:ring-inset"
     >
       {body}
     </button>
@@ -215,7 +215,7 @@ function CockpitWaitingQueues({
         type="button"
         data-testid="sidebar-cockpit-quiet"
         onClick={() => onFilter(new Set(quiet.map((run) => run.threadId)))}
-        className="cursor-pointer self-start rounded-sm text-left font-medium tabular-nums text-warning hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+        className="cursor-pointer self-start rounded-sm text-left font-medium tabular-nums text-warning-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
       >
         {quiet.length} running {quiet.length === 1 ? "turn" : "turns"} without a sign of life for{" "}
         {waitLabel(nowMs - Math.min(...quiet.map((run) => Date.parse(run.lastEventAt))))}
@@ -249,7 +249,9 @@ function CockpitWaitingQueues({
         onClick={() => onFilter(filterOn ? null : new Set(queues.map((queue) => queue.threadId)))}
         className="cursor-pointer self-start rounded-sm text-left tabular-nums hover:text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
       >
-        <span className={oldestMs >= STALE_QUEUE_MS ? "font-medium text-warning" : undefined}>
+        <span
+          className={oldestMs >= STALE_QUEUE_MS ? "font-medium text-warning-foreground" : undefined}
+        >
           {waiting} {waiting === 1 ? "message waits" : "messages wait"} in {queues.length}{" "}
           {queues.length === 1 ? "thread" : "threads"}, oldest {waitLabel(oldestMs)}
         </span>

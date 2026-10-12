@@ -1559,7 +1559,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           icon: null,
           className:
             Date.now() - Date.parse(props.queuedSince) >= QUEUE_STALE_MS
-              ? "text-warning"
+              ? // The readable warning tone: plain text-warning has a contrast of 2 on the light sidebar.
+                "text-warning-foreground"
               : "text-muted-foreground",
         }
       : null);
