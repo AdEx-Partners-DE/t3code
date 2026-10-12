@@ -62,7 +62,8 @@ export function SidebarCockpit({
         <span className="font-medium">Cockpit</span>
         {expanded ? null : (
           <span className="min-w-0 truncate tabular-nums">
-            {summary.open} open · {summary.working} working · {summary.needYou} need you
+            {summary.open} open · {summary.working + summary.waiting} active · {summary.needYou}{" "}
+            need you
             {filter === null ? "" : ` · list shows ${FILTER_LABEL[filter].toLowerCase()} only`}
           </span>
         )}
@@ -76,8 +77,10 @@ export function SidebarCockpit({
               pressed={filter === null}
               onClick={() => onFilter(null)}
             />
+            {/* "Active", not "Working": the count also holds threads that wait on
+                background work, whose rows say "Waiting". */}
             <CockpitStat
-              label="Working"
+              label="Active"
               value={summary.working + summary.waiting}
               pressed={filter === "working"}
               onClick={() => onFilter(filter === "working" ? null : "working")}
@@ -137,7 +140,7 @@ export function SidebarCockpit({
 }
 
 const FILTER_LABEL: Record<OpenThreadFilter, string> = {
-  working: "Working",
+  working: "Active",
   needYou: "Need you",
   idle: "Idle",
 };
