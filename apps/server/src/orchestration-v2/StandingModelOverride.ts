@@ -26,6 +26,9 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { isOpenThread, MODEL_OVERRIDE_FILE_NAME } from "./OpenThreadModelOverride.ts";
 import type * as ThreadManagement from "./ThreadManagementService.ts";
 
+/** Thread and model of every kept choice already written to the decision log since the server started. */
+const keptChoicesRecorded = new Set<string>();
+
 export const STANDING_OVERRIDE_FILE_NAME = "open-thread-model-override.active.json";
 
 const StoredOverride = Schema.Struct({
@@ -178,15 +181,18 @@ export const alignThreadWithStandingOverride = (
       Effect.orElseSucceed(() => noneSaved),
     );
     if (userChoseOtherModel(saved[threadId]?.applied, thread.modelSelection)) {
-      yield* recordDecision({
-        kind: "model-override-applied",
-        threadId,
-        outcome: "kept-own-choice",
-        facts: {
-          reason,
-          current: `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`,
-        },
-      });
+      const current = `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`;
+      // A task on a timer comes by every few minutes; the same choice is recorded once.
+      const key = `${threadId} ${current}`;
+      if (!keptChoicesRecorded.has(key)) {
+        keptChoicesRecorded.add(key);
+        yield* recordDecision({
+          kind: "model-override-applied",
+          threadId,
+          outcome: "kept-own-choice",
+          facts: { reason, current },
+        });
+      }
       return;
     }
     const next = standingSelectionFor({
