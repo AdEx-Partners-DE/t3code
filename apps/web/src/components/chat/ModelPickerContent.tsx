@@ -171,7 +171,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    * between the default Codex and a custom Codex Personal).
    */
   lockedProvider: ProviderDriverKind | null;
-  /** The lock ends with the running turn; the hint then says to wait instead of starting a new thread. */
+  /** A turn is running; the hint then says to try again afterwards instead of starting a new thread. */
   lockedUntilTurnEnds?: boolean;
   lockedContinuationGroupKey?: string | null;
   /**
@@ -859,7 +859,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   disabledInstanceIds: lockedDisabledInstanceIds,
                   getDisabledInstanceTooltip: (entry: ProviderInstanceEntry) =>
                     props.lockedUntilTurnEnds
-                      ? `${entry.displayName} can be chosen once the running turn has finished.`
+                      ? `${entry.displayName} cannot be chosen while a turn is running. Try again when it has finished.`
                       : `${entry.displayName} is unavailable in this thread. Start a new thread to switch providers.`,
                 }
               : {})}

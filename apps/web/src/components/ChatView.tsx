@@ -10763,7 +10763,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       if (!reason) return null;
       return providerSwitchBlocker === "turn-in-progress"
-        ? `${reason.description} You can switch once the running turn has finished.`
+        ? `${reason.description} Try again when the running turn has finished.`
         : `${reason.description} Start a new thread to use this model.`;
     },
     [

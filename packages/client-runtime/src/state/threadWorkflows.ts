@@ -89,8 +89,9 @@ function resolveThreadProviderSession(projection: Projection): ProviderSession |
 
 /**
  * Why a thread cannot move to another provider, or null when it can.
- * `turn-in-progress` passes once the running turn ends; `not-portable` does
- * not, so only that one is a reason to start a new thread.
+ * `turn-in-progress` is re-evaluated once the running turn ends and may then
+ * clear or become `not-portable`; only `not-portable` is a reason to start a
+ * new thread.
  */
 export function providerHandoffBlocker(
   projection: Projection | null | undefined,

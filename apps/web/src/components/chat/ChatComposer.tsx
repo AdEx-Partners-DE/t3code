@@ -1606,7 +1606,7 @@ export interface ChatComposerProps {
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
-  /** The lock ends with the running turn, so the picker says to wait, not to start a new thread. */
+  /** A turn is running, so the picker says to try again afterwards, not to start a new thread. */
   lockedUntilTurnEnds?: boolean;
   providerStatuses: ServerProvider[];
   /** False until the environment's server config has arrived at least once. */
