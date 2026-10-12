@@ -180,6 +180,184 @@ describe.each(observedPlatforms)("OpenCodeServerLedger observing as %s", (platfo
   );
 });
 
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** A long-lived process whose command line ends in the serve arguments, like `opencode.exe`. */
+const spawnWindowsProcess = (command: string, args: ReadonlyArray<string>) =>
+  Effect.acquireRelease(
+    Effect.gen(function* () {
+      const child = NodeChildProcess.spawn(command, args, { stdio: "ignore", windowsHide: true });
+      const exited = yield* Deferred.make<void>();
+      child.once("exit", () => Deferred.doneUnsafe(exited, Effect.void));
+      const pid = child.pid;
+      if (pid === undefined) return yield* Effect.die("spawn failed");
+      return { pid, kill: () => child.kill(), exited: Deferred.await(exited) };
+    }),
+    ({ kill }) => Effect.sync(kill),
+  );
+const IDLE_SCRIPT = "setInterval(() => {}, 1e6)";
+const spawnWindowsServer = (args: ReadonlyArray<string>) =>
+  spawnWindowsProcess(process.execPath, ["-e", IDLE_SCRIPT, ...args]);
+
+describe.runIf(hostPlatform === "win32")("OpenCodeServerLedger on Windows", () => {
+  const provideHost = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provide(NodeServices.layer),
+    );
+
+  /** Records `serverPid` for a T3 server that is then killed, as a deploy or a crash does. */
+  const recordFromKilledServer = (stateDir: string, serverPid: number) =>
+    Effect.gen(function* () {
+      const previousServer = yield* spawnWindowsServer([]);
+      const previousLedger = yield* OpenCodeServerLedger.make({
+        stateDir,
+        ownerPid: previousServer.pid,
+      });
+      yield* Effect.asVoid(previousLedger.record({ pid: serverPid, port: 4096, args: SERVE_ARGS }));
+      previousServer.kill();
+      yield* previousServer.exited;
+    });
+
+  const entries = (stateDir: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = path.join(stateDir, "opencode-servers");
+      const names = yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => []));
+      return yield* Effect.forEach(names, (name) =>
+        fs
+          .readFileString(path.join(directory, name))
+          .pipe(Effect.map((text) => ({ name, entry: JSON.parse(text) as { pid: number } }))),
+      );
+    });
+
+  it.live(
+    "stops a server left by a T3 server that was killed",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+        const orphan = yield* spawnWindowsServer(SERVE_ARGS);
+        yield* recordFromKilledServer(stateDir, orphan.pid);
+        expect(yield* entries(stateDir)).toHaveLength(1);
+
+        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+        yield* ledger.reapOrphans;
+
+        yield* orphan.exited.pipe(Effect.timeout("10 seconds"));
+        expect(yield* entries(stateDir)).toHaveLength(0);
+      }).pipe(provideHost),
+    60_000,
+  );
+
+  it.live(
+    "records and stops the server under npm's shell wrapper, not the wrapper",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+        // `cmd /c` stays the parent of the server, as with npm's `opencode.cmd` shim.
+        const wrapper = yield* spawnWindowsProcess("cmd.exe", [
+          "/d",
+          "/c",
+          process.execPath,
+          "-e",
+          IDLE_SCRIPT,
+          ...SERVE_ARGS,
+        ]);
+        // The server is the wrapper's child; give cmd a moment to start it.
+        yield* Effect.sleep("500 millis");
+        yield* recordFromKilledServer(stateDir, wrapper.pid);
+        const [recorded] = yield* entries(stateDir);
+        expect(recorded?.entry.pid).not.toBe(wrapper.pid);
+        const serverPid = recorded!.entry.pid;
+        // A killed wrapper leaves its child running.
+        wrapper.kill();
+        yield* wrapper.exited;
+        expect(isAlive(serverPid)).toBe(true);
+
+        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+        yield* ledger.reapOrphans;
+
+        expect(isAlive(serverPid)).toBe(false);
+        expect(yield* entries(stateDir)).toHaveLength(0);
+      }).pipe(provideHost),
+    60_000,
+  );
+
+  it.live(
+    "forgetting a server cancels its pending recording and leaves no entry",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+        const server = yield* spawnWindowsServer(SERVE_ARGS);
+        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+        // Returns at once: the process queries run in the background.
+        const forget = yield* ledger.track({ pid: server.pid, port: 4096, args: SERVE_ARGS });
+        yield* forget;
+        expect(yield* entries(stateDir)).toHaveLength(0);
+      }).pipe(provideHost),
+    60_000,
+  );
+
+  it.live(
+    "leaves the servers of a running T3 server alone",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+        const server = yield* spawnWindowsServer(SERVE_ARGS);
+        const runningOwner = yield* spawnWindowsServer([]);
+        const ownerLedger = yield* OpenCodeServerLedger.make({
+          stateDir,
+          ownerPid: runningOwner.pid,
+        });
+        yield* Effect.asVoid(ownerLedger.record({ pid: server.pid, port: 4096, args: SERVE_ARGS }));
+
+        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+        yield* ledger.reapOrphans;
+
+        expect(isAlive(server.pid)).toBe(true);
+        expect(yield* entries(stateDir)).toHaveLength(1);
+      }).pipe(provideHost),
+    60_000,
+  );
+
+  it.live(
+    "leaves a recycled pid alone when its start time does not match",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+        const server = yield* spawnWindowsServer(SERVE_ARGS);
+        yield* recordFromKilledServer(stateDir, server.pid);
+        const path = yield* Path.Path;
+        const [recorded] = yield* entries(stateDir);
+        const entryPath = path.join(stateDir, "opencode-servers", recorded!.name);
+        yield* fs.writeFileString(
+          entryPath,
+          JSON.stringify({ ...recorded!.entry, startTime: "0" }),
+        );
+
+        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+        yield* ledger.reapOrphans;
+
+        expect(isAlive(server.pid)).toBe(true);
+        expect(yield* entries(stateDir)).toHaveLength(0);
+      }).pipe(provideHost),
+    60_000,
+  );
+});
+
 describe.skipIf(observedPlatforms.length === 0)("OpenCode server startup", () => {
   it.live("stops the group when interrupted while the server is being recorded", () =>
     Effect.gen(function* () {
