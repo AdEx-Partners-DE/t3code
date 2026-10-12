@@ -313,6 +313,28 @@ const SCHEDULED_MESSAGE_ID_PREFIX = "scheduled-task-message:";
  * thread. Scheduled prompts carry the task id in their message id.
  */
 /** Whether a task pause still holds anything: it is over once every enabled task runs again. */
+/** The least time between two starts while a pile of due tasks is worked off. */
+export const TASK_START_GAP_MS = 20_000;
+/** From this many tasks due at once they count as a pile and start one by one. */
+export const TASK_PILE_SIZE = 3;
+
+/**
+ * Which of the due tasks start in this pass. Tasks that fall due together,
+ * after a pause, an update or a restart, would otherwise all start in the same
+ * second and stay in step from then on, with their load and their usage in one
+ * burst. A pile starts one task at a time, the longest due first, and the rest
+ * stay due; one or two due tasks start as they always did.
+ */
+export function dueTasksToStartNow<T>(
+  due: ReadonlyArray<T>,
+  lastPileStartMs: number | null,
+  nowMs: number,
+): ReadonlyArray<T> {
+  if (due.length < TASK_PILE_SIZE) return due;
+  if (lastPileStartMs !== null && nowMs - lastPileStartMs < TASK_START_GAP_MS) return [];
+  return due.slice(0, 1);
+}
+
 export function pauseIsOver(
   enabledTaskIds: ReadonlyArray<string>,
   exemptIds: ReadonlyArray<string>,
@@ -473,6 +495,8 @@ export const layer = Layer.effect(
     // times stay as they are, so the tasks run right after. Webhooks and
     // "run now" are not kept back.
     const updateHolding = yield* Ref.make(false);
+    // When a pile of due tasks last started one, so the next keeps its distance.
+    const lastScheduledStartMs = yield* Ref.make<number | null>(null);
     const isHeldForUpdate = Effect.gen(function* () {
       const endsAt = yield* currentUpdateHold;
       const holding = endsAt !== null;
@@ -1156,14 +1180,25 @@ export const layer = Layer.effect(
       const due = free.flatMap((task) =>
         task.nextRunAt === null ? [] : [{ task, dueAt: DateTime.makeUnsafe(task.nextRunAt) }],
       );
+      // Moving a missed fixed-time run on starts nothing, so all of them go at once.
+      const missed = due.filter(({ task, dueAt }) =>
+        isMissedFixedTimeRun(task.schedule, dueAt, now),
+      );
+      const startable = due.filter(
+        ({ task, dueAt }) => !isMissedFixedTimeRun(task.schedule, dueAt, now),
+      );
+      const nowMs = DateTime.toEpochMillis(now);
+      const starting = dueTasksToStartNow(startable, yield* Ref.get(lastScheduledStartMs), nowMs);
+      if (starting.length < startable.length && starting.length > 0) {
+        yield* Ref.set(lastScheduledStartMs, nowMs);
+      }
       yield* Effect.forEach(
-        due,
-        ({ task, dueAt }) =>
-          Effect.suspend(() =>
-            isMissedFixedTimeRun(task.schedule, dueAt, now)
-              ? rescheduleMissedRun(task, now)
-              : runTask(task, "scheduled"),
-          ).pipe(
+        [
+          ...missed.map(({ task }) => ({ task, effect: rescheduleMissedRun(task, now) })),
+          ...starting.map(({ task }) => ({ task, effect: runTask(task, "scheduled") })),
+        ],
+        ({ task, effect }) =>
+          Effect.suspend(() => effect).pipe(
             Effect.catch((cause) =>
               Effect.logWarning("Scheduled task run failed", { taskId: task.id, cause }),
             ),

@@ -339,6 +339,13 @@ it.effect(
           // The poll loop delays before its first pass, so the frozen test
           // clock must advance once to trigger it.
           yield* TestClock.adjust("6 seconds");
+          // Four tasks due at once are a pile and start one at a time with a
+          // gap, so the clock is moved on until the fourth has gone out.
+          yield* TestClock.adjust("25 seconds").pipe(
+            Effect.andThen(Effect.yieldNow),
+            Effect.forever,
+            Effect.forkScoped,
+          );
           yield* Deferred.await(lastDispatched);
           // The fourth dispatch implies the first three completions landed;
           // markRunning commits before dispatch, so due-third is 'running'.
