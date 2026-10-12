@@ -2,7 +2,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
 import { useNowMinute } from "../hooks/useNowMinute";
-import { useEnvironmentSettings } from "../hooks/useSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../hooks/useSettings";
 import { useEnvironmentQuery } from "../state/query";
 import { isTaskHeldByPause } from "@t3tools/contracts";
 import { serverEnvironment } from "../state/server";
@@ -11,7 +11,8 @@ import { relativeLabel } from "./settings/ScheduledTasksSettings";
 /**
  * One line in the sidebar saying what runs without the user: how many
  * scheduled tasks are on, and whether tasks or queues are paused. Shows
- * nothing when there is nothing to say. Clicking opens the task list.
+ * nothing when there is nothing to say. Clicking opens the task list. The
+ * pause of all queues is lifted here, where it is shown for all threads.
  */
 export function SidebarAutomationStatus({
   environmentId,
@@ -19,6 +20,7 @@ export function SidebarAutomationStatus({
   readonly environmentId: EnvironmentId;
 }) {
   const navigate = useNavigate();
+  const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const tasks = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   ).data?.tasks;
@@ -64,13 +66,25 @@ export function SidebarAutomationStatus({
     ...(queuesPaused ? ["queues paused"] : []),
   ];
   return (
-    <button
-      type="button"
-      data-testid="sidebar-automation-status"
-      onClick={() => void navigate({ to: "/settings/scheduled-tasks" })}
-      className="mx-0.5 flex cursor-pointer items-center px-2 pb-1 text-left text-2xs text-muted-foreground hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
-    >
-      {parts.join(" · ")}
-    </button>
+    <div className="mx-0.5 flex items-center gap-1.5 px-2 pb-1 text-2xs text-muted-foreground">
+      <button
+        type="button"
+        data-testid="sidebar-automation-status"
+        onClick={() => void navigate({ to: "/settings/scheduled-tasks" })}
+        className="min-w-0 cursor-pointer truncate text-left hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      >
+        {parts.join(" · ")}
+      </button>
+      {queuesPaused ? (
+        <button
+          type="button"
+          data-testid="sidebar-resume-queues"
+          onClick={() => void updateSettings({ threadQueuesPaused: false })}
+          className="shrink-0 cursor-pointer font-medium text-sidebar-foreground underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+        >
+          Resume queues
+        </button>
+      ) : null}
+    </div>
   );
 }

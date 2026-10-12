@@ -20,7 +20,7 @@ import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from 
 
 import { useAssetUrls } from "../../assets/assetUrls";
 import { ensureLocalApi } from "../../localApi";
-import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useThreadProjection } from "../../state/entities";
@@ -100,7 +100,6 @@ export function QueuedRunsControl({
   const canReorder = workflow?.canReorder === true;
   const queueHeld = workflow?.isHeld === true;
   // The environment-wide pause holds this queue too, whatever the thread says.
-  const updateEnvironmentSettings = useUpdateEnvironmentSettings(props.environmentId);
   const allQueuesPaused = useEnvironmentSettings(
     props.environmentId,
     (settings) => settings.threadQueuesPaused,
@@ -322,21 +321,15 @@ export function QueuedRunsControl({
               <ComposerBanner.Row render={<li />}>
                 <ComposerBanner.Content className="text-muted-foreground">
                   {allQueuesPaused
-                    ? "All queues are paused, in every thread. Send now starts one message; Resume all queues ends the pause."
+                    ? "All queues are paused. Send now starts one message here; the sidebar resumes all queues."
                     : queueHeld
                       ? "Nothing here starts until you resume."
                       : "Pausing lets the current run finish and holds the rest."}
                 </ComposerBanner.Content>
                 <ComposerBanner.Actions>
-                  {allQueuesPaused ? (
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      onClick={() => updateEnvironmentSettings({ threadQueuesPaused: false })}
-                    >
-                      Resume all queues
-                    </Button>
-                  ) : (
+                  {/* The pause of all queues is lifted where it is shown for all threads, in the
+                      sidebar, not from inside one thread. */}
+                  {allQueuesPaused ? null : (
                     <Button
                       size="xs"
                       variant="ghost"
