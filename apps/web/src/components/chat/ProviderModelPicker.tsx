@@ -19,7 +19,11 @@ import {
   getTriggerDisplayModelName,
 } from "./providerIconUtils";
 import { tightestUsageWindow } from "@t3tools/client-runtime/state/limit-switch-targets";
-import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
+import {
+  shortAccountName,
+  shouldShowInstanceBadge,
+  type ProviderInstanceEntry,
+} from "../../providerInstances";
 import {
   ComposerControl,
   ComposerControlChevron,
@@ -199,6 +203,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     showInstanceBadge && activeEntry && !selectedEntries && props.triggerLabel === undefined
       ? `${activeEntry.displayName} · `
       : "";
+  // With several accounts of one provider, say which one this thread runs on.
+  const accountLabel =
+    accountTooltipPrefix !== "" && activeEntry && !props.compact
+      ? shortAccountName(activeEntry.displayName)
+      : null;
   const usageTooltipSuffix =
     usageWindow && !selectedEntries
       ? ` · ${usageWindow.label} limit: ${Math.round(usageWindow.remainingPercent)}% left`
@@ -287,6 +296,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 />
               }
             >
+              {accountLabel === null ? null : (
+                <span className="text-muted-foreground" data-testid="model-picker-account">
+                  {accountLabel} ·{" "}
+                </span>
+              )}
               {props.triggerLabel ?? multipleLabel ?? triggerTitle}
             </TooltipTrigger>
             <TooltipPopup side="top">{triggerTooltipContent}</TooltipPopup>

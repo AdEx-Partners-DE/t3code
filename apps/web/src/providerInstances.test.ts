@@ -10,6 +10,7 @@ import {
   resolveDefaultProviderModelSelection,
   resolveProviderCatalogAvailability,
   resolveSelectableProviderInstance,
+  shortAccountName,
 } from "./providerInstances";
 
 function provider(input: {
@@ -656,5 +657,17 @@ describe("provider icon metadata", () => {
     ]);
     expect(entry?.acpRegistryIconUrl).toBe(iconUrl);
     expect(entry?.driverKind).toBe("acpRegistry");
+  });
+});
+
+describe("shortAccountName", () => {
+  it("keeps what follows the provider", () => {
+    expect(shortAccountName("OpenAI - Stark (CLI)")).toBe("Stark (CLI)");
+    expect(shortAccountName("Claude · Work")).toBe("Work");
+  });
+
+  it("keeps a name without a provider part and cuts a long one", () => {
+    expect(shortAccountName("Codex")).toBe("Codex");
+    expect(shortAccountName("OpenAI - A very long account name")).toBe("A very long a…");
   });
 });

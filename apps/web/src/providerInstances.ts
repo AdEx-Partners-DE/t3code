@@ -34,6 +34,18 @@ import {
 export { normalizeProviderAccentColor, shouldShowInstanceBadge };
 
 /**
+ * An account's name short enough to sit next to the model in the composer:
+ * what follows the provider in "OpenAI - Stark (CLI)", cut to a few letters.
+ */
+export function shortAccountName(displayName: string): string {
+  const name = displayName.trim();
+  const separator = name.search(/\s[-–·:]\s/);
+  const own = separator === -1 ? name : name.slice(separator + 3).trim();
+  const short = own === "" ? name : own;
+  return short.length <= 14 ? short : `${short.slice(0, 13).trimEnd()}…`;
+}
+
+/**
  * Local-only placeholder used while a draft has no provider it can safely
  * target. It must never be persisted or dispatched; the composer disables
  * send until a live provider replaces it.
