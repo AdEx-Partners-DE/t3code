@@ -43,6 +43,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   selectedModels?: ReadonlyArray<{ instanceId: ProviderInstanceId; model: string }>;
   onToggleModel?: (instanceId: ProviderInstanceId, model: string) => void;
   lockedProvider: ProviderDriverKind | null;
+  lockedUntilTurnEnds?: boolean;
   lockedContinuationGroupKey?: string | null;
   /** Instance entries rendered in the sidebar + used to resolve display name. */
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
@@ -346,6 +347,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               }
             : {})}
           lockedProvider={props.lockedProvider}
+          lockedUntilTurnEnds={props.lockedUntilTurnEnds ?? false}
           lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
           instanceEntries={props.instanceEntries}
           {...(props.keybindings ? { keybindings: props.keybindings } : {})}

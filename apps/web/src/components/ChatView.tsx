@@ -114,7 +114,7 @@ import {
   listLimitSwitchTargets,
   suggestLimitSwitch,
 } from "@t3tools/client-runtime/state/limit-switch-targets";
-import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
+import { providerHandoffBlocker } from "@t3tools/client-runtime/state/thread-workflows";
 import {
   codexFeedbackMessage,
   parseCodexFeedbackCommand,
@@ -2143,10 +2143,11 @@ export default function ChatView(props: ChatViewProps) {
   );
   const isProviderSubagent =
     serverThread !== null && isProviderNativeSubagentThread(serverThread.source);
-  const supportsProviderSwitchingViaHandoff = useMemo(
-    () => threadSupportsProviderHandoff(serverProjection),
+  const providerSwitchBlocker = useMemo(
+    () => providerHandoffBlocker(serverProjection),
     [serverProjection],
   );
+  const supportsProviderSwitchingViaHandoff = providerSwitchBlocker === null;
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
@@ -10871,9 +10872,18 @@ export default function ChatView(props: ChatViewProps) {
         currentProviderInstanceId: activeRuntime?.providerInstanceId ?? null,
         nextModelSelection: { instanceId, model },
       });
-      return reason ? `${reason.description} Start a new thread to use this model.` : null;
+      if (!reason) return null;
+      return providerSwitchBlocker === "turn-in-progress"
+        ? `${reason.description} You can switch once the running turn has finished.`
+        : `${reason.description} Start a new thread to use this model.`;
     },
-    [activeRuntime, activeThread, providerStatuses, supportsProviderSwitchingViaHandoff],
+    [
+      activeRuntime,
+      activeThread,
+      providerStatuses,
+      providerSwitchBlocker,
+      supportsProviderSwitchingViaHandoff,
+    ],
   );
 
   const onProviderModelSelect = useCallback(
@@ -11878,6 +11888,7 @@ export default function ChatView(props: ChatViewProps) {
                               runtimeMode={runtimeMode}
                               interactionMode={interactionMode}
                               lockedProvider={modelPickerLockedProvider}
+                              lockedUntilTurnEnds={providerSwitchBlocker === "turn-in-progress"}
                               providerStatuses={providerStatuses as ServerProvider[]}
                               providerCatalogKnown={serverConfig !== null}
                               activeProjectDefaultModelSelection={

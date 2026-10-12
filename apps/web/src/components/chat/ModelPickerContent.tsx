@@ -171,6 +171,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    * between the default Codex and a custom Codex Personal).
    */
   lockedProvider: ProviderDriverKind | null;
+  /** The lock ends with the running turn; the hint then says to wait instead of starting a new thread. */
+  lockedUntilTurnEnds?: boolean;
   lockedContinuationGroupKey?: string | null;
   /**
    * All configured provider instances in display order. Used to render
@@ -856,7 +858,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               ? {
                   disabledInstanceIds: lockedDisabledInstanceIds,
                   getDisabledInstanceTooltip: (entry: ProviderInstanceEntry) =>
-                    `${entry.displayName} is unavailable in this thread. Start a new thread to switch providers.`,
+                    props.lockedUntilTurnEnds
+                      ? `${entry.displayName} can be chosen once the running turn has finished.`
+                      : `${entry.displayName} is unavailable in this thread. Start a new thread to switch providers.`,
                 }
               : {})}
           />
