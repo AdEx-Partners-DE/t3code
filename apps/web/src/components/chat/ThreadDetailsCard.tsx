@@ -94,10 +94,14 @@ export function ThreadDetailsCard({
     const measure = () => {
       const frame = element.closest<HTMLElement>("[data-thread-details-card]");
       const next = element.offsetHeight + (frame ? frame.offsetHeight - frame.clientHeight : 0);
-      // Lineage scrolls as it expands. Counting it toward density would hide
-      // the section and workspace controls when the user asks to see more rows.
-      const lineage = element.querySelector<HTMLElement>("[data-thread-relationships-panel]");
-      const fittingHeight = next - (lineage?.offsetHeight ?? 0);
+      // Lineage, checklist and automations grow with the thread and scroll in the
+      // card. Counting them toward density would fold the card and hide them
+      // exactly when they hold the most.
+      const growing = element.querySelectorAll<HTMLElement>(
+        "[data-thread-relationships-panel], [data-thread-checklist-panel], [data-thread-automations-panel]",
+      );
+      let fittingHeight = next;
+      for (const section of growing) fittingHeight -= section.offsetHeight;
       setMeasurements((current) => {
         const heights = current.key === measurementKey ? current.heights : { full: 0, compact: 0 };
         const fullContentHeight =
