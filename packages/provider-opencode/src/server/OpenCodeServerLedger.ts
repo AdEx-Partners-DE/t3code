@@ -40,12 +40,23 @@ const OpenCodeServerEntryJson = Schema.fromJsonString(OpenCodeServerEntry);
 const decodeEntry = Schema.decodeUnknownOption(OpenCodeServerEntryJson);
 const encodeEntry = Schema.encodeEffect(OpenCodeServerEntryJson);
 
+/** A Windows process query that did not produce an answer; the process state is unknown. */
+class WindowsProcessQueryError extends Schema.TaggedError<WindowsProcessQueryError>()(
+  "WindowsProcessQueryError",
+  { filter: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `The Windows process query (${this.filter}) gave no answer.`;
+  }
+}
+
 /**
  * Local `opencode serve` processes run in their own process group so T3 can
  * stop the whole group, which also means they outlive a T3 server that is
- * SIGKILLed or crashes. Each spawn is recorded under the state directory and
- * removed on a graceful stop; the next server start stops whatever a dead
- * server left behind.
+ * SIGKILLed or crashes. On Windows they are not detached, but a killed
+ * process takes no children with it there either. Each spawn is recorded
+ * under the state directory and removed on a graceful stop; the next server
+ * start stops whatever a dead server left behind.
  */
 export class OpenCodeServerLedger extends Context.Service<
   OpenCodeServerLedger,
@@ -101,16 +112,6 @@ const WINDOWS_PROCESS_QUERY = (filter: string) =>
   `ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter '${filter}' -ErrorAction Stop | ` +
   `ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; ppid = [int]$_.ParentProcessId; ` +
   `startTime = [string]$_.CreationDate.ToUniversalTime().Ticks; command = [string]$_.CommandLine } })`;
-
-/** A Windows process query that did not produce an answer; the process state is unknown. */
-class WindowsProcessQueryError extends Schema.TaggedError<WindowsProcessQueryError>()(
-  "WindowsProcessQueryError",
-  { filter: Schema.String, cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return `The Windows process query (${this.filter}) gave no answer.`;
-  }
-}
 
 /**
  * Throws unless the output is the JSON array the query prints, `[]` when nothing matched. The
