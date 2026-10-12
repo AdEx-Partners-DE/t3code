@@ -274,6 +274,12 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
           generateThreadChecklist: (value) =>
             protect("generateThreadChecklist", nativeGeneration.generateThreadChecklist!(value)),
         }),
+    ...(nativeGeneration.judgeThreadBlocker === undefined
+      ? {}
+      : {
+          judgeThreadBlocker: (value) =>
+            protect("judgeThreadBlocker", nativeGeneration.judgeThreadBlocker!(value)),
+        }),
     generateReviewGuide: (value) =>
       protect("generateReviewGuide", nativeGeneration.generateReviewGuide(value)),
   };

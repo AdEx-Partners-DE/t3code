@@ -133,6 +133,7 @@ const EMPTY_DRAFT: DraftState = {
   idleWatchThreadId: "",
   idleAllOpenThreads: false,
   idleProjectOnly: false,
+  idleSupervise: false,
   idleMaxParallel: "2",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
@@ -189,7 +190,7 @@ function splitModelKey(value: string): ModelSelection | null {
 export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
   if (schedule.type === "webhook") return "On webhook";
   if (schedule.type === "idle") {
-    const runs = `${schedule.allOpenThreads ? (schedule.projectOnly ? "Open threads of this project, when idle" : "All open threads, when idle") : "When idle"}, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
+    const runs = `${schedule.allOpenThreads ? (schedule.projectOnly ? "Open threads of this project, when idle" : "All open threads, when idle") : "When idle"}${schedule.supervise === true ? ", supervised" : ""}, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
     return [
       runs,
       ...(schedule.stopPhrase === undefined ? [] : [`stops at "${schedule.stopPhrase}"`]),
@@ -1534,6 +1535,23 @@ function ScheduledTaskEditorDialog({
                           }
                         />
                         <span className="text-xs text-muted-foreground">are at work</span>
+                        <div className="flex w-full items-center gap-2">
+                          <Switch
+                            checked={draft.idleSupervise}
+                            onCheckedChange={(checked) =>
+                              setDraft((current) => ({
+                                ...current,
+                                idleSupervise: Boolean(checked),
+                              }))
+                            }
+                            aria-label="Only send on threads that do not need me"
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            Only send on threads that do not need me: a model reads each last reply
+                            and tells the agent to go on where it merely asked for leave. The prompt
+                            above is not sent. At most twice per thread.
+                          </span>
+                        </div>
                       </>
                     ) : null}
                     {draft.idleAllOpenThreads ? null : (

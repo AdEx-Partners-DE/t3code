@@ -18,7 +18,9 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildThreadBlockerPrompt,
   buildThreadChecklistPrompt,
+  readThreadBlockerVerdict,
   buildReviewGuidePrompt,
   buildThreadTitlePrompt,
 } from "./textGenerationPrompts.ts";
@@ -205,6 +207,18 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
       };
     });
 
+  const judgeThreadBlocker: NonNullable<ProviderTextGeneration["judgeThreadBlocker"]> = Effect.fn(
+    `${name}.judgeThreadBlocker`,
+  )(function* (input) {
+    const generated = yield* run({
+      operation: "judgeThreadBlocker",
+      cwd: input.cwd,
+      modelSelection: input.modelSelection,
+      ...buildThreadBlockerPrompt({ lastRequest: input.lastRequest, lastReply: input.lastReply }),
+    });
+    return readThreadBlockerVerdict(generated);
+  });
+
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = Effect.fn(
     `${name}.generateReviewGuide`,
   )(function* (input) {
@@ -223,6 +237,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     generateBranchName,
     generateThreadTitle,
     generateThreadChecklist,
+    judgeThreadBlocker,
     generateReviewGuide,
   } satisfies ProviderTextGeneration;
 }

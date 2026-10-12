@@ -68,6 +68,7 @@ export interface DraftState {
   readonly idleAllOpenThreads: boolean;
   /** With `idleAllOpenThreads`: only the threads of the task's project. */
   readonly idleProjectOnly: boolean;
+  readonly idleSupervise: boolean;
   /** With `idleAllOpenThreads`: how many threads may be at work at once. */
   readonly idleMaxParallel: string;
   /** Idle tasks: stop when the account has less than this percent left. Empty for no budget. */
@@ -162,6 +163,7 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
         allOpenThreads: true,
         maxParallel,
         ...(draft.idleProjectOnly ? { projectOnly: true } : {}),
+        ...(draft.idleSupervise ? { supervise: true } : {}),
       };
     }
     return {
@@ -204,6 +206,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     idleWatchThreadId: schedule.type === "idle" ? (schedule.watchThreadId ?? "") : "",
     idleAllOpenThreads: schedule.type === "idle" && schedule.allOpenThreads === true,
     idleProjectOnly: schedule.type === "idle" && schedule.projectOnly === true,
+    idleSupervise: schedule.type === "idle" && schedule.supervise === true,
     idleMaxParallel: schedule.type === "idle" ? String(schedule.maxParallel ?? 2) : "2",
     idleMinRemainingPercent:
       schedule.type === "idle" && schedule.minRemainingPercent !== undefined

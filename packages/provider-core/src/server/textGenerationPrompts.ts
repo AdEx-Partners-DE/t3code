@@ -513,6 +513,59 @@ Rules:
 - At most 40 items. Merge small finished steps into one "done" item rather than listing each.
 - If a previous checklist is given, keep the wording of items that are still valid and only move their status; drop items that no longer matter.`;
 
+const THREAD_BLOCKER_PROMPT = `A coding agent stopped and handed the work back to its user. Decide whether the user is really needed.
+
+Answer "needs_user" when going on takes something only the user can give:
+- a decision between options with different outcomes that the request does not settle,
+- a secret, a credential, a login, an approval in a system the agent cannot reach,
+- spending money, or anything that cannot be undone (deleting data, force pushes, sending messages to people, publishing),
+- information that exists only in the user's head.
+Answer "needs_user" as well when the work is finished and nothing is left to do, and whenever you are not sure.
+
+Answer "continue" only when the agent asks for leave it already has: "shall I go on?", "do you want me to fix this?", "let me know if I should run the tests", a plan it proposes and could simply carry out, a next step it names itself, or a summary that ends with offered follow-ups inside what was asked.
+
+For "continue", write an "instruction" of at most three sentences, addressed to the agent, in the language of its reply: tell it to go on with exactly the step it proposed, to decide small questions itself, and to stop only for a decision, a secret, money or something that cannot be undone. Do not add work it did not propose. For "needs_user" the instruction is null.
+
+Always give a "reason" in English of at most 160 characters naming what the agent is waiting for.`;
+
+export interface ThreadBlockerPromptInput {
+  readonly lastRequest: string;
+  readonly lastReply: string;
+}
+
+/** Only the tail of each text matters: a request ends in its ask, a reply in its question. */
+const BLOCKER_TEXT_BUDGET = 6000;
+
+export function buildThreadBlockerPrompt(input: ThreadBlockerPromptInput) {
+  const tail = (text: string) =>
+    text.length <= BLOCKER_TEXT_BUDGET ? text : `…${text.slice(-BLOCKER_TEXT_BUDGET)}`;
+  const request = input.lastRequest.trim() === "" ? "(not known)" : tail(input.lastRequest.trim());
+  const prompt = `${THREAD_BLOCKER_PROMPT}\n\nWhat the agent was last asked:\n${request}\n\nThe reply it stopped on:\n${tail(input.lastReply.trim())}`;
+  const outputSchema = Schema.Struct({
+    verdict: Schema.Literals(["continue", "needs_user"]),
+    // Required and nullable: providers with strict schemas refuse optional keys.
+    instruction: Schema.NullOr(Schema.String),
+    reason: Schema.String,
+  });
+  return { prompt, outputSchema };
+}
+
+/**
+ * Reads a judgement strictly: only a clear "continue" with something to say
+ * lets a thread go on. Everything else leaves it with the user.
+ */
+export function readThreadBlockerVerdict(generated: {
+  readonly verdict: string;
+  readonly instruction: string | null;
+  readonly reason: string;
+}): { kind: "sham"; instruction: string; reason: string } | { kind: "real"; reason: string } {
+  const reason = generated.reason.replace(/\s+/g, " ").trim().slice(0, 200);
+  const instruction = generated.instruction?.trim().slice(0, 600) ?? "";
+  return generated.verdict === "continue" && instruction !== ""
+    ? { kind: "sham", instruction, reason }
+    : { kind: "real", reason };
+}
+
 export interface ThreadChecklistPromptInput {
   readonly transcript: string;
   readonly previous?: ReadonlyArray<{ readonly text: string; readonly status: string }> | undefined;

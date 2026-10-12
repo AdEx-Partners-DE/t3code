@@ -87,6 +87,22 @@ export interface ThreadChecklistGenerationInput {
   modelSelection: ModelSelection;
 }
 
+export interface ThreadBlockerJudgementInput {
+  cwd: string;
+  /** What the thread was last asked to do. Empty when it is not known. */
+  lastRequest: string;
+  /** The reply the thread stopped on. */
+  lastReply: string;
+  /** What model and provider to use for the judgement. */
+  modelSelection: ModelSelection;
+}
+
+export type ThreadBlockerJudgementResult =
+  /** The agent could go on by itself; `instruction` tells it how. */
+  | { kind: "sham"; instruction: string; reason: string }
+  /** The thread waits for the user for a reason only they can settle. */
+  | { kind: "real"; reason: string };
+
 export interface ReviewGuideStackLayer {
   readonly number: number;
   readonly title: string | null;
@@ -174,6 +190,13 @@ export interface ProviderTextGeneration {
   readonly generateThreadChecklist?: (
     input: ThreadChecklistGenerationInput,
   ) => Effect.Effect<ThreadChecklistGenerationResult, TextGenerationError>;
+  /**
+   * Decide whether a thread that stopped really needs the user or only asked
+   * for leave it already has. Optional: a provider without it cannot supervise.
+   */
+  readonly judgeThreadBlocker?: (
+    input: ThreadBlockerJudgementInput,
+  ) => Effect.Effect<ThreadBlockerJudgementResult, TextGenerationError>;
   /** Explain a change request to the maintainer deciding whether it lands. */
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,

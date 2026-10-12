@@ -38,6 +38,7 @@ type TextGenerationOp =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateThreadChecklist"
+  | "judgeThreadBlocker"
   | "generateReviewGuide";
 
 const resolveInstance = (
@@ -87,6 +88,19 @@ export const make = Effect.gen(function* () {
                 }),
               )
             : textGeneration.generateThreadChecklist(input),
+        ),
+      ),
+    judgeThreadBlocker: (input) =>
+      resolveInstance(registry, "judgeThreadBlocker", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) =>
+          textGeneration.judgeThreadBlocker === undefined
+            ? Effect.fail(
+                new TextGenerationError({
+                  operation: "judgeThreadBlocker",
+                  detail: "This provider cannot judge blockers. Choose another model.",
+                }),
+              )
+            : textGeneration.judgeThreadBlocker(input),
         ),
       ),
     generateReviewGuide: (input) =>

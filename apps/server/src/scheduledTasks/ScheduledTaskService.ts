@@ -51,8 +51,10 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { isTaskHeldByPause } from "@t3tools/contracts";
 
+import * as ServerConfig from "../config.ts";
+import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { decideIdleTrigger, saysStopPhrase, underUsageBudget } from "./idleTrigger.ts";
-import { planPortfolioNudge } from "./portfolioNudge.ts";
+import { MAX_SUPERVISED_SENDS_PER_THREAD, planPortfolioNudge } from "./portfolioNudge.ts";
 import { recordDecision } from "../decisionLog.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
@@ -436,6 +438,9 @@ export const layer = Layer.effect(
     // Optional, so harnesses that build this service without settings still work.
     const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
+    // The supervisor's judgement; without these a supervised task leaves every thread alone.
+    const textGeneration = yield* Effect.serviceOption(TextGeneration.TextGeneration);
+    const serverConfig = yield* Effect.serviceOption(ServerConfig.ServerConfig);
     // "Pause all tasks" holds every task except the ones the user has switched
     // back on by hand since. A manual "run now" is the user asking, and still runs.
     const isHeldByPause = (taskId: string) =>
@@ -1198,6 +1203,45 @@ export const layer = Layer.effect(
               ),
             );
 
+    const lastRequestText = (threadId: ThreadId, runId: RunId) =>
+      threadManagement
+        .getThreadRecords(threadId, ["messages"], {
+          messageRoles: ["user"],
+          messageRunIds: [runId],
+        })
+        .pipe(
+          Effect.map(
+            (records) =>
+              records.messages.findLast((message) => message.text.trim() !== "")?.text ?? "",
+          ),
+        );
+
+    /**
+     * Asks a model whether a standing thread really needs the user. Null when
+     * no judgement could be had; the caller then leaves the thread alone.
+     */
+    const judgeBlocker = Effect.fn("ScheduledTaskService.judgeBlocker")(
+      function* (threadId: ThreadId, runId: RunId) {
+        if (
+          Option.isNone(textGeneration) ||
+          Option.isNone(serverSettings) ||
+          Option.isNone(serverConfig)
+        ) {
+          return null;
+        }
+        const lastReply = yield* lastReplyText(threadId, runId);
+        if (lastReply === null) return null;
+        return yield* textGeneration.value.judgeThreadBlocker!({
+          // A neutral directory: the judgement is made from the two texts alone.
+          cwd: serverConfig.value.stateDir,
+          lastRequest: yield* lastRequestText(threadId, runId),
+          lastReply,
+          modelSelection: (yield* serverSettings.value.getSettings).textGenerationModelSelection,
+        });
+      },
+      Effect.orElseSucceed(() => null),
+    );
+
     /** Headroom of the account a thread runs on; null when it is not known. */
     const remainingPercentOf = (instanceId: string) =>
       Option.isNone(providerRegistry)
@@ -1338,6 +1382,7 @@ export const layer = Layer.effect(
               nowMs,
             });
             let runsUsed = schedule.runsUsed ?? 0;
+            const supervised: Record<string, number> = { ...schedule.supervised };
             const nudged: Record<string, string> = { ...plan.remembered };
             let changed = Object.keys(nudged).length !== Object.keys(schedule.nudged ?? {}).length;
             for (const thread of plan.targets) {
@@ -1374,6 +1419,38 @@ export const layer = Layer.effect(
                 });
                 continue;
               }
+              // Supervised: the thread goes on only when a model finds it asked
+              // for leave it already has, and then with that model's instruction.
+              let text = task.prompt;
+              if (schedule.supervise === true) {
+                const sentOn = supervised[thread.id] ?? 0;
+                const verdict =
+                  sentOn >= MAX_SUPERVISED_SENDS_PER_THREAD
+                    ? null
+                    : yield* judgeBlocker(thread.id, thread.latestRunId);
+                if (verdict === null || verdict.kind === "real") {
+                  yield* recordDecision({
+                    kind: "supervisor-verdict",
+                    threadId: thread.id,
+                    outcome:
+                      sentOn >= MAX_SUPERVISED_SENDS_PER_THREAD
+                        ? "left-to-user-after-limit"
+                        : verdict === null
+                          ? "no-judgement"
+                          : "needs-user",
+                    facts: { taskId: task.id, reason: verdict?.reason ?? null, sentOn },
+                  });
+                  continue;
+                }
+                yield* recordDecision({
+                  kind: "supervisor-verdict",
+                  threadId: thread.id,
+                  outcome: "sent-on",
+                  facts: { taskId: task.id, reason: verdict.reason, sentOn: sentOn + 1 },
+                });
+                supervised[thread.id] = sentOn + 1;
+                text = verdict.instruction;
+              }
               const fireKey = `${task.id}:${nowMs}:portfolio:${thread.id}`;
               const sent = yield* Effect.exit(
                 threadManagement.sendToThread({
@@ -1382,7 +1459,7 @@ export const layer = Layer.effect(
                   threadId: thread.id,
                   messageId: MessageId.make(`${SCHEDULED_MESSAGE_ID_PREFIX}${fireKey}`),
                   scheduledTaskId: task.id,
-                  text: task.prompt,
+                  text,
                   attachments: [],
                   // No model: each thread goes on with the one it runs on.
                   mode: "queue",
@@ -1401,7 +1478,12 @@ export const layer = Layer.effect(
             if (!changed && runsUsed === (schedule.runsUsed ?? 0)) return;
             yield* sql`
               UPDATE scheduled_tasks
-              SET schedule_json = ${encodeScheduleJson({ ...schedule, runsUsed, nudged })},
+              SET schedule_json = ${encodeScheduleJson({
+                ...schedule,
+                runsUsed,
+                nudged,
+                ...(schedule.supervise === true ? { supervised } : {}),
+              })},
                   run_count = run_count + ${runsUsed - (schedule.runsUsed ?? 0)},
                   last_run_at = ${runsUsed === (schedule.runsUsed ?? 0) ? row.last_run_at : iso(now)},
                   last_run_status = ${runsUsed === (schedule.runsUsed ?? 0) ? row.last_run_status : "succeeded"}

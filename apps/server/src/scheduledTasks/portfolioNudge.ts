@@ -19,6 +19,11 @@ type PortfolioThread = Parameters<typeof standsStill>[0] &
   Pick<OrchestrationV2ThreadShell, "modelSelection">;
 
 export const DEFAULT_MAX_PARALLEL = 2;
+/**
+ * How often a supervised task sends one thread on. A supervisor and an agent
+ * that keep answering each other would otherwise go round in circles.
+ */
+export const MAX_SUPERVISED_SENDS_PER_THREAD = 2;
 
 export interface PortfolioNudgePlan<T> {
   /** Threads to send to now, most recently finished first. */
