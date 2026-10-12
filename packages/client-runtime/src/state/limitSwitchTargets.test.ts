@@ -225,6 +225,37 @@ describe("tightestUsageWindow", () => {
     ).toEqual({ label: "Weekly", remainingPercent: 37 });
   });
 
+  it("shows the weekly window although the session window is tighter", () => {
+    const windows = (session: number, weekly: number) => ({
+      usageLimits: {
+        checkedAt: "2026-10-10T11:59:00.000Z",
+        windows: [
+          { id: "primary", kind: "session" as const, label: "Session", usedPercent: session },
+          { id: "secondary", kind: "weekly" as const, label: "Weekly", usedPercent: weekly },
+        ],
+      },
+    });
+    expect(tightestUsageWindow(windows(70, 20))).toEqual({ label: "Weekly", remainingPercent: 80 });
+    // Nearly empty, the session window stops the next turn: then it is the one to show.
+    expect(tightestUsageWindow(windows(90, 20))).toEqual({
+      label: "Session",
+      remainingPercent: 10,
+    });
+    // Unless the weekly window is tighter still.
+    expect(tightestUsageWindow(windows(90, 95))).toEqual({ label: "Weekly", remainingPercent: 5 });
+  });
+
+  it("falls back to the session window for an account that reports no other", () => {
+    expect(
+      tightestUsageWindow({
+        usageLimits: {
+          checkedAt: "2026-10-10T11:59:00.000Z",
+          windows: [{ id: "primary", kind: "session", label: "Session", usedPercent: 40 }],
+        },
+      }),
+    ).toEqual({ label: "Session", remainingPercent: 60 });
+  });
+
   it("reports nothing for an account without usable windows", () => {
     expect(tightestUsageWindow({})).toBeNull();
     expect(

@@ -17,10 +17,16 @@ export interface LimitSwitchTarget {
   readonly remainingPercent: number | null;
 }
 
+/** Below this much left, the five-hour session window is worth showing instead of the weekly one. */
+export const SESSION_WINDOW_SHOWN_BELOW_PERCENT = 15;
+
 /**
- * The window an account is closest to running out of, for a compact "where do I
- * stand" readout. Null when the account reports no windows, so the caller shows
- * nothing rather than a full bar.
+ * The window to show for a compact "where do I stand" readout: the weekly or
+ * monthly window closest to running out. That is the allowance that goes
+ * unused or runs dry; the five-hour session window refills many times a day
+ * and is shown only when it is nearly empty, since that stops the next turn.
+ * Null when the account reports no windows, so the caller shows nothing
+ * rather than a full bar.
  */
 export function tightestUsageWindow(
   provider: Pick<ServerProvider, "usageLimits">,
@@ -29,16 +35,24 @@ export function tightestUsageWindow(
   if (!usage || usage.unavailable) return null;
   // Judged at the read itself, so rendering stays pure; the next probe replaces it.
   const readAtMs = Date.parse(usage.checkedAt);
-  const tightest = usage.windows
-    // A window whose reset has passed describes the previous period.
-    .filter((window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > readAtMs)
-    .reduce<ServerProviderUsageWindow | undefined>(
+  const tightestOf = (windows: ReadonlyArray<ServerProviderUsageWindow>) =>
+    windows.reduce<ServerProviderUsageWindow | undefined>(
       (current, window) =>
         current === undefined || window.usedPercent > current.usedPercent ? window : current,
       undefined,
     );
-  return tightest
-    ? { label: tightest.label, remainingPercent: Math.max(0, 100 - tightest.usedPercent) }
+  const current = usage.windows
+    // A window whose reset has passed describes the previous period.
+    .filter((window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > readAtMs);
+  const long = tightestOf(current.filter((window) => window.kind !== "session"));
+  const session = tightestOf(current.filter((window) => window.kind === "session"));
+  const sessionNearlyEmpty =
+    session !== undefined &&
+    100 - session.usedPercent < SESSION_WINDOW_SHOWN_BELOW_PERCENT &&
+    (long === undefined || session.usedPercent > long.usedPercent);
+  const shown = sessionNearlyEmpty ? session : (long ?? session);
+  return shown
+    ? { label: shown.label, remainingPercent: Math.max(0, 100 - shown.usedPercent) }
     : null;
 }
 
