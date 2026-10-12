@@ -12,6 +12,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
@@ -305,6 +307,44 @@ describe.runIf(hostPlatform === "win32")("OpenCodeServerLedger on Windows", () =
         const forget = yield* ledger.track({ pid: server.pid, port: 4096, args: SERVE_ARGS });
         yield* forget;
         expect(yield* entries(stateDir)).toHaveLength(0);
+      }).pipe(provideHost),
+    60_000,
+  );
+
+  it.live(
+    "stops nothing and keeps the entry when the process query fails",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+        const server = yield* spawnWindowsServer(SERVE_ARGS);
+        yield* recordFromKilledServer(stateDir, server.pid);
+
+        // PowerShell that exits without output, as a CIM failure on a busy machine does.
+        const failingQueries = ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: Stream.empty,
+              stderr: Stream.empty,
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+            }),
+          ),
+        );
+        const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failingQueries),
+        );
+        yield* ledger.reapOrphans;
+
+        expect(isAlive(server.pid)).toBe(true);
+        expect(yield* entries(stateDir)).toHaveLength(1);
       }).pipe(provideHost),
     60_000,
   );

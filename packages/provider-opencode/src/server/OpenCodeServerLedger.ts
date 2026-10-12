@@ -1,5 +1,6 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -99,9 +100,20 @@ const WINDOWS_PROCESS_QUERY = (filter: string) =>
   `ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; ppid = [int]$_.ParentProcessId; ` +
   `startTime = [string]$_.CreationDate.ToUniversalTime().Ticks; command = [string]$_.CommandLine } })`;
 
+/** A Windows process query that did not produce an answer; the process state is unknown. */
+class WindowsProcessQueryError extends Data.TaggedError("WindowsProcessQueryError")<{
+  readonly cause: unknown;
+}> {}
+
+/**
+ * Throws unless the output is the JSON array the query prints, `[]` when nothing matched. The
+ * spawner does not fail on a non-zero exit, so empty output from a PowerShell or CIM failure must
+ * not read as "no such process".
+ */
 const parseWindowsProcesses = (output: string): ReadonlyArray<ObservedProcess> => {
-  const rows: unknown = JSON.parse(output.trim() || "[]");
-  return (Array.isArray(rows) ? rows : []).flatMap((row: Record<string, unknown>) =>
+  const rows: unknown = JSON.parse(output);
+  if (!Array.isArray(rows)) throw new Error("Unexpected Windows process query output");
+  return rows.flatMap((row: Record<string, unknown>) =>
     typeof row.pid === "number" && typeof row.startTime === "string"
       ? [
           {
@@ -211,7 +223,15 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
           { stdin: "ignore", stderr: "ignore" },
         ),
       )
-      .pipe(Effect.timeout("15 seconds"), Effect.map(parseWindowsProcesses));
+      .pipe(
+        Effect.timeout("15 seconds"),
+        Effect.flatMap((output) =>
+          Effect.try({
+            try: () => parseWindowsProcesses(output),
+            catch: (cause) => new WindowsProcessQueryError({ cause }),
+          }),
+        ),
+      );
 
   const observe = (pid: number): Effect.Effect<ObservedProcess | undefined> => {
     if (platform === "linux") return observeLinux(pid).pipe(Effect.orElseSucceed(() => undefined));
@@ -264,11 +284,23 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
     return Effect.succeed([]);
   };
 
+  // A Windows query can fail on a busy machine (a PowerShell start, CIM). That says nothing about
+  // the process, so reaping treats it as unknown: it stops nothing and keeps the entry for a later
+  // start. Elsewhere a failed read means the process is gone.
+  const observeOrUnknown = (pid: number): Effect.Effect<ObservedProcess | undefined | "unknown"> =>
+    platform === "win32"
+      ? psWindows(`ProcessId=${pid}`).pipe(
+          Effect.map((found) => found.find((candidate) => candidate.pid === pid)),
+          Effect.orElseSucceed(() => "unknown" as const),
+        )
+      : observe(pid);
+
   const isRunning = (identity: ProcessIdentity) =>
-    observe(identity.pid).pipe(
-      Effect.map(
-        (observed) =>
-          observed !== undefined && !observed.zombie && observed.startTime === identity.startTime,
+    observeOrUnknown(identity.pid).pipe(
+      Effect.map((observed) =>
+        observed === "unknown"
+          ? ("unknown" as const)
+          : observed !== undefined && !observed.zombie && observed.startTime === identity.startTime,
       ),
     );
 
@@ -362,9 +394,11 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
 
   // Signals only a group whose recorded member still has the same pid, start
   // time, group, and full command line, so a recycled pid is never touched.
+  // Returns false when the recorded process could not be queried, so its entry is kept.
   const stopOrphan = (entry: OpenCodeServerEntry) =>
     Effect.gen(function* () {
-      const observed = yield* observe(entry.pid);
+      const observed = yield* observeOrUnknown(entry.pid);
+      if (observed === "unknown") return false;
       if (
         observed === undefined ||
         observed.zombie ||
@@ -372,7 +406,7 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
         (platform !== "win32" && observed.pgid !== entry.pgid) ||
         observed.command !== entry.command
       ) {
-        return;
+        return true;
       }
       yield* Effect.logInfo("Stopping an OpenCode server left by a previous T3 Code server", {
         pid: entry.pgid,
@@ -388,7 +422,7 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
             }),
           )
           .pipe(Effect.timeout("15 seconds"), Effect.ignore);
-        return;
+        return true;
       }
       signalGroup(entry.pgid, "SIGTERM");
       for (let attempt = 0; attempt < STOP_POLL_ATTEMPTS && groupExists(entry.pgid); attempt++) {
@@ -396,14 +430,16 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
       }
       // The group never emptied, so its pgid cannot have been reused.
       if (groupExists(entry.pgid)) signalGroup(entry.pgid, "SIGKILL");
+      return true;
     });
 
   const reapEntry = (entryPath: string) =>
     Effect.gen(function* () {
       const entry = decodeEntry(yield* fs.readFileString(entryPath));
       if (Option.isSome(entry) && entry.value.stateDir === input.stateDir) {
-        if (yield* isRunning(entry.value.owner)) return;
-        yield* stopOrphan(entry.value);
+        // Running or unknown: the entry stays for a later start.
+        if ((yield* isRunning(entry.value.owner)) !== false) return;
+        if (!(yield* stopOrphan(entry.value))) return;
       }
       yield* fs.remove(entryPath, { force: true });
     }).pipe(
