@@ -279,7 +279,11 @@ const layerTest = Layer.mergeAll(
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
   Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
+  // "Continue threads after a server update" is on by default and then a
+  // restart no longer holds the queues. The lifecycle tests here cover the
+  // hold, so they run with it off; ProviderRuntimeRecoveryService.test.ts
+  // covers the setting on.
+  Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: false })),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
