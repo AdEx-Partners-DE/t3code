@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -76,6 +77,8 @@ export class CodexAppServerClient extends Context.Service<
         params: unknown,
       ) => Effect.Effect<void, CodexError.CodexAppServerError>,
     ) => Effect.Effect<void>;
+    /** Resolves with the reason once the app-server connection ends, such as the process exiting. */
+    readonly terminated: Effect.Effect<CodexError.CodexAppServerError>;
   }
 >()("effect-codex-app-server/client/CodexAppServerClient") {}
 
@@ -99,6 +102,7 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
   stdio: Stdio.Stdio,
   options: CodexAppServerClientOptions = {},
   terminationError?: Effect.Effect<CodexError.CodexAppServerError>,
+  exited?: Effect.Effect<CodexError.CodexAppServerError>,
 ): Effect.fn.Return<CodexAppServerClient["Service"], never, Scope.Scope> {
   const requestHandlers = new Map<string, ServerRequestHandler>();
   const notificationHandlers = new Map<string, Array<ServerNotificationHandler>>();
@@ -196,9 +200,12 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
       : Effect.fail(CodexError.CodexAppServerRequestError.methodNotFound(request.method));
   };
 
+  const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
   const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
     stdio,
+    onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
     ...(terminationError ? { terminationError } : {}),
+    ...(exited ? { exited } : {}),
     ...(options.logIncoming !== undefined ? { logIncoming: options.logIncoming } : {}),
     ...(options.logOutgoing !== undefined ? { logOutgoing: options.logOutgoing } : {}),
     ...(options.logger ? { logger: options.logger } : {}),
@@ -260,6 +267,7 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
       Effect.sync(() => {
         unknownNotificationHandler = handler;
       }),
+    terminated: Deferred.await(termination),
   });
 });
 
@@ -273,5 +281,6 @@ const makeChildProcessClient = Effect.fn(
   "effect-codex-app-server/CodexAppServerClient.makeChildProcessClient",
 )(function* (handle: ChildProcessSpawner.ChildProcessHandle, options: CodexAppServerClientOptions) {
   yield* Stream.runDrain(handle.stderr).pipe(Effect.ignore, Effect.forkScoped);
-  return yield* make(makeChildStdio(handle), options, makeTerminationError(handle));
+  const terminationError = makeTerminationError(handle);
+  return yield* make(makeChildStdio(handle), options, terminationError, terminationError);
 });
