@@ -108,6 +108,10 @@ class FakePtyProcess implements PtyAdapter.PtyProcess {
     }
   }
 
+  get exitListenerCount(): number {
+    return this.exitListeners.size;
+  }
+
   emitExit(event: PtyAdapter.PtyExitEvent): void {
     for (const listener of this.exitListeners) {
       listener(event);
@@ -1831,6 +1835,32 @@ it.layer(
       process.emitExit({ exitCode: 0, signal: 15 });
       yield* TestClock.adjust("10 seconds");
 
+      assert.deepEqual(process.killSignals, ["SIGTERM"]);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("releases the exit listener when kill escalation is interrupted", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make("sequential");
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        processKillGraceMs: 10_000,
+      }).pipe(Effect.provideService(Scope.Scope, scope));
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      const sigterm = yield* Deferred.make<void>();
+      process.onKill = (signal) => {
+        if (signal === "SIGTERM") Deferred.doneUnsafe(sigterm, Effect.void);
+      };
+      yield* manager.close({ threadId: "thread-1" });
+      yield* Deferred.await(sigterm);
+      assert.isAbove(process.exitListenerCount, 0);
+
+      yield* Scope.close(scope, Exit.void);
+
+      assert.equal(process.exitListenerCount, 0);
       assert.deepEqual(process.killSignals, ["SIGTERM"]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
