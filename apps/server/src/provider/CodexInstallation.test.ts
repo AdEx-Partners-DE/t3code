@@ -482,8 +482,9 @@ it.live("installs on Windows via System32 tar with CRLF output and a locked runt
       "C:\\Windows\\System32\\tar.exe",
       "C:\\Windows\\System32\\tar.exe",
     ]);
-    expect((yield* h.installation.resolve()).executablePath).toBe(
-      `${h.baseDir}/tools/codex/0.156.1/bin/codex.exe`,
+    // A real Windows host joins with backslashes; compare with one separator.
+    expect((yield* h.installation.resolve()).executablePath.replaceAll("\\", "/")).toBe(
+      `${h.baseDir.replaceAll("\\", "/")}/tools/codex/0.156.1/bin/codex.exe`,
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
