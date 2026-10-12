@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { waitingQueuesOf } from "./QueueOverview.ts";
+import { REPLY_PREVIEW_LENGTH, replyPreview, waitingQueuesOf } from "./QueueOverview.ts";
 
 describe("waitingQueuesOf", () => {
   it("keeps open threads only and puts the longest wait first", () => {
@@ -18,5 +18,19 @@ describe("waitingQueuesOf", () => {
       },
       { threadId: "thread:new", waiting: 1, held: 0, oldestQueuedAt: "2026-10-11T16:00:00.000Z" },
     ]);
+  });
+});
+
+describe("replyPreview", () => {
+  it("folds a reply into one line", () => {
+    expect(replyPreview("Done.\n\n- fixed the test\n- pushed")).toBe(
+      "Done. - fixed the test - pushed",
+    );
+  });
+
+  it("cuts a long reply at a word and marks the cut", () => {
+    const preview = replyPreview("word ".repeat(100));
+    expect(preview.length).toBeLessThanOrEqual(REPLY_PREVIEW_LENGTH + 1);
+    expect(preview.endsWith("word…")).toBe(true);
   });
 });

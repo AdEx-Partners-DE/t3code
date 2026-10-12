@@ -38,6 +38,23 @@ export interface ActiveRun {
   readonly lastEventAt: string;
 }
 
+export interface LastReply {
+  readonly threadId: ThreadId;
+  readonly text: string;
+  readonly at: string;
+}
+
+export const REPLY_PREVIEW_LENGTH = 220;
+
+/** A reply as one short line: whitespace folded, cut at a word where one is near. */
+export function replyPreview(text: string): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  if (line.length <= REPLY_PREVIEW_LENGTH) return line;
+  const cut = line.slice(0, REPLY_PREVIEW_LENGTH);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > REPLY_PREVIEW_LENGTH - 40 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
 /** Keeps the rows of open threads, the longest wait first. */
 export function waitingQueuesOf(
   rows: ReadonlyArray<QueuedRow>,
@@ -98,7 +115,36 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  // One indexed lookup per open thread. The text is cut in the database
+  // first, so a long reply never leaves it whole.
+  const readLastReplies = Effect.gen(function* () {
+    const shell = yield* threads.getShellSnapshot();
+    const replies = yield* Effect.forEach(
+      shell.threads.filter(isOpenThread),
+      (thread) =>
+        sql<{ readonly text: string | null; readonly created_at: string }>`
+          SELECT substr(json_extract(payload_json, '$.text'), 1, 2000) AS text, created_at
+          FROM orchestration_v2_projection_messages
+          WHERE thread_id = ${thread.id} AND role = 'assistant' AND streaming = 0
+            AND trim(json_extract(payload_json, '$.text')) <> ''
+          ORDER BY created_at DESC
+          LIMIT 1
+        `.pipe(
+          Effect.map((rows): ReadonlyArray<LastReply> => {
+            const row = rows[0];
+            return row === undefined || row.text === null
+              ? []
+              : [{ threadId: thread.id, text: replyPreview(row.text), at: row.created_at }];
+          }),
+        ),
+      { concurrency: 1 },
+    );
+    return replies.flat();
+  });
+
   return {
+    /** For each open thread that has one, the start of its last reply. */
+    readLastReplies,
     /** The open threads with a waiting queue, the longest wait first. */
     read,
     /** Every thread with a run under way and when it last showed a sign of life. */

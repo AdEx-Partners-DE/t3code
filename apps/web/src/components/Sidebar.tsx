@@ -338,6 +338,7 @@ const NO_WAITING_QUEUES: ReadonlyMap<string, { count: number; since: string }> =
 const NO_ACTIVE_RUNS: ReadonlyMap<string, string> = new Map();
 /** A turn under way with no event for this long is called quiet on its row. */
 const QUIET_RUN_MS = 5 * 60_000;
+const NO_LAST_REPLIES: ReadonlyMap<string, string> = new Map();
 const EMPTY_QUERY_INPUT = {};
 
 /**
@@ -349,8 +350,9 @@ function WaitingQueuesSource(props: {
   environmentId: EnvironmentId;
   onChange: (queues: ReadonlyMap<string, { count: number; since: string }>) => void;
   onActiveRuns: (lastEventAtByThread: ReadonlyMap<string, string>) => void;
+  onLastReplies: (lastReplyByThread: ReadonlyMap<string, string>) => void;
 }) {
-  const { onChange, onActiveRuns } = props;
+  const { onChange, onActiveRuns, onLastReplies } = props;
   const data = useEnvironmentQuery(
     serverEnvironment.threadChecklists({
       environmentId: props.environmentId,
@@ -359,6 +361,14 @@ function WaitingQueuesSource(props: {
   ).data;
   const queues = data?.waitingQueues;
   const activeRuns = data?.activeRuns;
+  const lastReplies = data?.lastReplies;
+  useEffect(() => {
+    onLastReplies(
+      lastReplies === undefined || lastReplies.length === 0
+        ? NO_LAST_REPLIES
+        : new Map(lastReplies.map((reply) => [reply.threadId, reply.text])),
+    );
+  }, [lastReplies, onLastReplies]);
   useEffect(() => {
     onActiveRuns(
       activeRuns === undefined || activeRuns.length === 0
@@ -546,6 +556,7 @@ function SidebarThreadTooltip({
   branchMismatch,
   terminalStatus,
   terminalProcessCount,
+  lastReply,
 }: {
   thread: SidebarThreadSummary;
   project: ProjectFaviconProject | null;
@@ -563,6 +574,7 @@ function SidebarThreadTooltip({
   } | null;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
+  lastReply: string | null;
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
   const previousProviderNames = thread.providerInstanceHistory
@@ -581,6 +593,14 @@ function SidebarThreadTooltip({
           ) : null
         }
       >
+        {lastReply === null ? null : (
+          <div
+            className="line-clamp-4 min-w-0 wrap-break-word text-foreground/90"
+            data-testid="thread-hover-last-reply"
+          >
+            {lastReply}
+          </div>
+        )}
         {projectDisplayName ? (
           <div className="flex min-w-0 items-center gap-2">
             {project ? <ProjectFavicon project={project} className="size-3 shrink-0" /> : null}
@@ -1269,6 +1289,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // When anything last happened in a thread with a run under way; null when
   // unknown. A run that has gone silent otherwise reads as plain "Working".
   lastEventAt: string | null;
+  // The start of the agent's last reply, shown in the hover card; null when unknown.
+  lastReply: string | null;
   // Settled rows un-settle, snoozed rows wake, and cards settle.
   variantAction: SidebarSweepAction;
   // False on environments whose server predates thread.settle/unsettle:
@@ -1585,6 +1607,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
+      lastReply={props.lastReply}
     />
   );
 
@@ -2618,6 +2641,8 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           branchMismatch={branchMismatch}
           terminalStatus={terminalStatus}
           terminalProcessCount={runningTerminalIds.length}
+          // A search row already shows the matching text.
+          lastReply={null}
         />
       </Tooltip>
     </li>
@@ -3155,6 +3180,7 @@ export default function Sidebar() {
   );
   const [waitingQueues, setWaitingQueues] = useState(NO_WAITING_QUEUES);
   const [activeRunLastEventAt, setActiveRunLastEventAt] = useState(NO_ACTIVE_RUNS);
+  const [lastReplies, setLastReplies] = useState(NO_LAST_REPLIES);
   const listIsFiltered = openThreadFilter !== null || queueFilterThreadIds !== null;
   const draggableThreadKeys = listIsFiltered ? NO_THREAD_KEYS : allDraggableThreadKeys;
   const activeReorderableThreadKeys = listIsFiltered
@@ -5666,6 +5692,7 @@ export default function Sidebar() {
               environmentId={serverConfigs.keys().next().value!}
               onChange={setWaitingQueues}
               onActiveRuns={setActiveRunLastEventAt}
+              onLastReplies={setLastReplies}
             />
           ) : null}
           {isSearchingThreads ? null : (
@@ -5863,6 +5890,7 @@ export default function Sidebar() {
                             queuedCount={waitingQueues.get(thread.id)?.count ?? 0}
                             queuedSince={waitingQueues.get(thread.id)?.since ?? null}
                             lastEventAt={activeRunLastEventAt.get(thread.id) ?? null}
+                            lastReply={lastReplies.get(thread.id) ?? null}
                             // Snoozed rows wake, settled rows un-settle, and cards settle.
                             variantAction={
                               section === "snoozed"

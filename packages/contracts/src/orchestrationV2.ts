@@ -3914,6 +3914,14 @@ export const OrchestrationV2RpcSchemas = {
        * rewrite on their own only after a few turns, not after every one.
        */
       turnsBehind: Schema.optional(NonNegativeInt),
+      /**
+       * The start of each open thread's last reply, so a row can say what the
+       * agent last said without the thread being opened. Read on request and
+       * cut short on the server; the thread overview itself carries no text.
+       */
+      lastReplies: Schema.optional(
+        Schema.Array(Schema.Struct({ threadId: ThreadId, text: Schema.String, at: IsoDateTime })),
+      ),
       /** Set when one thread was asked for; null when it has no checklist yet. */
       checklist: Schema.optional(Schema.NullOr(ThreadChecklist)),
       waitingQueues: Schema.optional(
