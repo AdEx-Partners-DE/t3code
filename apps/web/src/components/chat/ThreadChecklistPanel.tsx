@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import {
@@ -8,6 +8,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
+  ProjectId,
   ThreadChecklist,
   ThreadChecklistItem,
   ThreadId,
@@ -21,12 +22,14 @@ import {
   CopyIcon,
   CornerDownLeftIcon,
   LocateFixedIcon,
+  MessageSquarePlusIcon,
   RefreshCwIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { resolveComposerDraftKey, useComposerDraftStore } from "../../composerDraftStore";
 import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
+import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useEnvironmentQuery } from "../../state/query";
 import { useThreadShell } from "../../state/entities";
@@ -62,7 +65,12 @@ export function checklistItemText(item: ThreadChecklistItem): string {
 }
 
 /** Quotes the item into the message being written in that thread, so the user only adds what to do with it. */
-export function quoteChecklistItem(threadRef: ScopedThreadRef, item: ThreadChecklistItem): void {
+export function quoteChecklistItem(
+  threadRef: ScopedThreadRef,
+  item: ThreadChecklistItem,
+  /** A line above the quote saying where it is from, for a message read without the thread. */
+  lead?: string,
+): void {
   const store = useComposerDraftStore.getState();
   const key = resolveComposerDraftKey(store, threadRef);
   const existing = (key ? store.draftsByThreadKey[key]?.prompt : undefined) ?? "";
@@ -71,7 +79,32 @@ export function quoteChecklistItem(threadRef: ScopedThreadRef, item: ThreadCheck
     .map((line) => `> ${line}`)
     .join("\n");
   const before = existing.trim() === "" ? "" : `${existing.trimEnd()}\n\n`;
-  store.setPrompt(threadRef, `${before}${quote}\n\n`);
+  store.setPrompt(threadRef, `${before}${lead === undefined ? "" : `${lead}\n`}${quote}\n\n`);
+}
+
+/**
+ * Opens a new thread in the item's project with the item quoted in its
+ * composer. Nothing is sent: the user says what the new thread should do.
+ */
+export function useChecklistFollowUp() {
+  const handleNewThread = useNewThreadHandler();
+  return useCallback(
+    async (input: {
+      readonly environmentId: EnvironmentId;
+      readonly projectId: ProjectId;
+      readonly threadTitle: string;
+      readonly item: ThreadChecklistItem;
+    }) => {
+      const opened = await handleNewThread(scopeProjectRef(input.environmentId, input.projectId));
+      if (opened === null || opened === undefined) return;
+      quoteChecklistItem(
+        scopeThreadRef(input.environmentId, opened.threadId),
+        input.item,
+        `From the thread "${input.threadTitle}":`,
+      );
+    },
+    [handleNewThread],
+  );
 }
 
 /** A checklist item as a row that opens what can be done with it. */
@@ -81,6 +114,8 @@ export function ChecklistItemMenu(props: {
   readonly onShow: () => void;
   readonly takeUpLabel: string;
   readonly onTakeUp: () => void;
+  /** Starts a new thread about the item; left out where the project is not known. */
+  readonly onFollowUp?: (() => void) | undefined;
 }) {
   const { item } = props;
   return (
@@ -118,6 +153,12 @@ export function ChecklistItemMenu(props: {
           <CornerDownLeftIcon />
           {props.takeUpLabel}
         </MenuItem>
+        {props.onFollowUp === undefined ? null : (
+          <MenuItem onClick={props.onFollowUp}>
+            <MessageSquarePlusIcon />
+            Start a new thread with this
+          </MenuItem>
+        )}
         <MenuItem
           onClick={() => void writeTextToClipboard(checklistItemText(item), "checklist item")}
         >
@@ -164,6 +205,7 @@ export function ThreadChecklistPanel(props: {
     serverEnvironment.refreshThreadChecklist.permissionAtom(environmentId),
   );
   const refresh = useAtomCommand(serverEnvironment.refreshThreadChecklist);
+  const followUp = useChecklistFollowUp();
   // What the last refresh returned, until the query catches up.
   const [fresh, setFresh] = useState<ThreadChecklist | null>(null);
   const [busy, setBusy] = useState(false);
@@ -330,6 +372,17 @@ export function ThreadChecklistPanel(props: {
                       takeUpLabel="Take up in the composer"
                       onTakeUp={() =>
                         quoteChecklistItem(scopeThreadRef(environmentId, threadId), item)
+                      }
+                      onFollowUp={
+                        shell === null || shell === undefined
+                          ? undefined
+                          : () =>
+                              void followUp({
+                                environmentId,
+                                projectId: shell.projectId,
+                                threadTitle: shell.title,
+                                item,
+                              })
                       }
                     />
                   </li>

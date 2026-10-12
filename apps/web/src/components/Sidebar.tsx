@@ -5365,6 +5365,7 @@ export default function Sidebar() {
         ? [...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads].map((thread) => ({
             environmentId: thread.environmentId,
             id: thread.id,
+            projectId: thread.projectId,
             title: thread.title,
             projectName:
               projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,

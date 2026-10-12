@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadChecklistItem, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadChecklistItem, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
@@ -11,6 +11,7 @@ import {
   CHECKLIST_STATUS_ORDER,
   ChecklistItemMenu,
   quoteChecklistItem,
+  useChecklistFollowUp,
 } from "./chat/ThreadChecklistPanel";
 import { revealInTimelineWhenLoaded } from "./chat/timelineReveal";
 import { relativeLabel } from "./settings/ScheduledTasksSettings";
@@ -28,6 +29,7 @@ import { ToggleGroup, Toggle } from "./ui/toggle-group";
 export interface PortfolioThread {
   readonly environmentId: EnvironmentId;
   readonly id: ThreadId;
+  readonly projectId: ProjectId;
   readonly title: string;
   readonly projectName: string | null;
   /** The thread's latest run, to tell a checklist that is behind. */
@@ -59,6 +61,7 @@ export function PortfolioChecklistDialog({
   const input = useMemo(() => ({}), []);
   const query = useEnvironmentQuery(serverEnvironment.threadChecklists({ environmentId, input }));
   const refresh = useAtomCommand(serverEnvironment.refreshThreadChecklist, "update checklist");
+  const followUp = useChecklistFollowUp();
   const [status, setStatus] = useState<ThreadChecklistItem["status"]>(initialStatus ?? "attention");
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
@@ -212,6 +215,15 @@ export function PortfolioChecklistDialog({
                               item,
                             );
                             openThread(row.thread);
+                          }}
+                          onFollowUp={() => {
+                            onClose();
+                            void followUp({
+                              environmentId: row.thread.environmentId,
+                              projectId: row.thread.projectId,
+                              threadTitle: row.thread.title,
+                              item,
+                            });
                           }}
                         />
                       </li>
