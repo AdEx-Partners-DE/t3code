@@ -8,7 +8,11 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { instantFailureRetryCommand, isTransientStartFailure } from "./InstantFailureRetry.ts";
+import {
+  instantFailureRetryCommand,
+  isTransientStartFailure,
+  selectionBeforeMove,
+} from "./InstantFailureRetry.ts";
 
 type Projection = Parameters<typeof instantFailureRetryCommand>[0];
 type Run = OrchestrationV2ThreadProjection["runs"][number];
@@ -169,5 +173,57 @@ describe("instantFailureRetryCommand", () => {
       completedAt: at("2026-10-11T08:00:30.000Z"),
     });
     expect(instantFailureRetryCommand(projection({ runs: [run(), later] }), runId)).toBeNull();
+  });
+});
+
+describe("a turn that fails on the handoff after the thread was moved", () => {
+  const other = ProviderInstanceId.make("codex_stark_cli");
+  const before = run({
+    id: RunId.make("run:0"),
+    ordinal: 0,
+    status: "completed",
+    providerInstanceId: other,
+    modelSelection: { instanceId: other, model: "gpt-6-astra" },
+  });
+  const handoff = failure(
+    "provider_error",
+    "Insufficient context allowance for the provider handoff. Compact the target conversation or use a larger-context model; the current request has not been truncated.",
+  );
+  const moved = projection({ runs: [before, run()], turnItems: [handoff] });
+
+  it("finds the account the thread worked on before", () => {
+    expect(selectionBeforeMove(moved.runs, runId)).toEqual({
+      instanceId: other,
+      model: "gpt-6-astra",
+    });
+    // Not moved: the run before was on the same account.
+    expect(
+      selectionBeforeMove(
+        [run({ id: RunId.make("run:0"), ordinal: 0, status: "completed" }), run()],
+        runId,
+      ),
+    ).toBeNull();
+    expect(selectionBeforeMove([run()], runId)).toBeNull();
+  });
+
+  it("sends the turn again on that account", () => {
+    const backTo = selectionBeforeMove(moved.runs, runId);
+    const command = instantFailureRetryCommand(moved, runId, backTo);
+    expect(command).toMatchObject({
+      type: "message.dispatch",
+      text: "Fix the build.",
+      modelSelection: { instanceId: other, model: "gpt-6-astra" },
+    });
+  });
+
+  it("does not retry the handoff failure without an account to go back to", () => {
+    expect(instantFailureRetryCommand(moved, runId, null)).toBeNull();
+    // A start failure of another kind still retries on the same account.
+    const command = instantFailureRetryCommand(
+      projection({ runs: [before, run()] }),
+      runId,
+      selectionBeforeMove(moved.runs, runId),
+    );
+    expect(command).toMatchObject({ modelSelection: { instanceId: instance, model: "gpt-5.4" } });
   });
 });

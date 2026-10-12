@@ -21,9 +21,11 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { recordDecision } from "../decisionLog.ts";
+import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { isNativeMaintenanceCommand } from "./Orchestrator.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -47,13 +49,51 @@ export function isTransientStartFailure(
 }
 
 /**
+ * A turn that could not start because the thread had just been moved to
+ * another account or provider and its history does not fit the handoff. The
+ * same message on the same account fails again, but the account the thread
+ * was on still has the conversation.
+ */
+export function isHandoffBudgetFailure(
+  failure: Pick<OrchestrationV2ProviderFailure, "message">,
+): boolean {
+  return /Insufficient context allowance for the provider handoff/i.test(failure.message);
+}
+
+/**
+ * Where a thread worked before it was moved: the selection of its last
+ * finished run on another provider instance than the failed run's.
+ */
+export function selectionBeforeMove(
+  runs: ReadonlyArray<
+    Pick<
+      OrchestrationV2ThreadProjection["runs"][number],
+      "id" | "ordinal" | "status" | "providerInstanceId" | "modelSelection"
+    >
+  >,
+  failedRunId: RunId,
+): OrchestrationV2ThreadProjection["runs"][number]["modelSelection"] | null {
+  const failed = runs.find((candidate) => candidate.id === failedRunId);
+  if (failed === undefined) return null;
+  const last = runs
+    .filter((candidate) => candidate.ordinal < failed.ordinal && candidate.status === "completed")
+    .toSorted((left, right) => left.ordinal - right.ordinal)
+    .at(-1);
+  return last === undefined || last.providerInstanceId === failed.providerInstanceId
+    ? null
+    : last.modelSelection;
+}
+
+/**
  * The message to send again for `failedRunId`, or null when the run is not a
- * start failure worth retrying. `projection` needs the thread's runs, the
+ * start failure worth retrying. With `backTo`, a turn that failed on the
+ * handoff is sent again on the account the thread came from. `projection` needs the thread's runs, the
  * failed run's messages and its error items.
  */
 export function instantFailureRetryCommand(
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "messages" | "turnItems">,
   failedRunId: RunId,
+  backTo: OrchestrationV2ThreadProjection["runs"][number]["modelSelection"] | null = null,
 ): OrchestrationV2Command | null {
   const { thread } = projection;
   if (thread.archivedAt !== null || thread.deletedAt !== null) return null;
@@ -93,7 +133,9 @@ export function instantFailureRetryCommand(
   const failures = projection.turnItems.flatMap((item) =>
     item.type === "error" && item.runId === run.id ? [item.failure] : [],
   );
-  if (failures.length === 0 || !failures.every(isTransientStartFailure)) return null;
+  if (failures.length === 0) return null;
+  const backToPrevious = backTo !== null && failures.every(isHandoffBudgetFailure);
+  if (!backToPrevious && !failures.every(isTransientStartFailure)) return null;
   return {
     type: "message.dispatch",
     commandId: CommandId.make(`command:instant-retry:${run.id}`),
@@ -107,10 +149,12 @@ export function instantFailureRetryCommand(
     notification: {
       source: { kind: "system" },
       outcome: "updated",
-      summary: "The turn failed to start and was sent again",
+      summary: backToPrevious
+        ? "This thread's history does not fit a move to another account; the turn was sent again on the account it came from"
+        : "The turn failed to start and was sent again",
       detail: message.text,
     },
-    modelSelection: run.modelSelection,
+    modelSelection: backToPrevious ? backTo : run.modelSelection,
     // A server notice may only be queued; in a thread whose turn just failed
     // nothing is running, so it starts at once.
     dispatchMode: { type: "queue_after_active" },
@@ -127,6 +171,7 @@ export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
     const retry = Effect.fn("InstantFailureRetry.retry")(function* (input: {
       readonly threadId: OrchestrationV2ThreadProjection["thread"]["id"];
       readonly runId: RunId;
@@ -141,13 +186,33 @@ export const layer = Layer.effectDiscard(
         ["runs", "messages", "turnItems"],
         { messageRunIds: [input.runId], turnItemRunIds: [input.runId], turnItemTypes: ["error"] },
       );
-      const command = instantFailureRetryCommand(projection, input.runId);
+      const before = selectionBeforeMove(projection.runs, input.runId);
+      // Back on the old account, but on the model the thread was moved to
+      // when that account has it: the move was about the model.
+      const failed = projection.runs.find((candidate) => candidate.id === input.runId);
+      const providers = Option.isNone(registry) ? [] : yield* registry.value.getProviders;
+      const backTo =
+        before !== null &&
+        failed !== undefined &&
+        providers
+          .find((provider) => provider.instanceId === before.instanceId)
+          ?.models.some((model) => model.slug === failed.modelSelection.model)
+          ? { ...failed.modelSelection, instanceId: before.instanceId }
+          : before;
+      const command = instantFailureRetryCommand(projection, input.runId, backTo);
+      const wentBack =
+        command !== null &&
+        command.type === "message.dispatch" &&
+        backTo !== null &&
+        command.modelSelection === backTo;
       yield* recordDecision({
         kind: "start-failure-retry",
         threadId: input.threadId,
-        outcome: command === null ? "not-retried" : "retried",
+        outcome:
+          command === null ? "not-retried" : wentBack ? "retried-on-previous-account" : "retried",
         facts: {
           runId: input.runId,
+          ...(wentBack ? { backTo: `${backTo.instanceId}/${backTo.model}` } : {}),
           failures: projection.turnItems.flatMap((item) =>
             item.type === "error"
               ? [`${item.failure.class}: ${item.failure.message.slice(0, 160)}`]
