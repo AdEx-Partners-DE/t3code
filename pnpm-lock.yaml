@@ -167,7 +167,7 @@ patchedDependencies:
   expo-glass-effect@58.0.3: f750041c45ab838a3530451dc7b50d6640a79141037a1b0499c5e3412a860c57
   expo-sharing@58.0.13: fe40d857765bcd6a77aac1fed275e5b8f9415c29b972decdce05fb96de5665e6
   expo-widgets@58.0.11: d00838b5b215a4c45f89b8b7d34878d158528756fbcf281bae1cbd6f0752deed
-  node-pty@1.2.0-beta.15: f2fe901c61cde17986240002d05c172d5d0272d83ffaab8d0ebeb922763be414
+  node-pty@1.2.0-beta.15: f1e680afec85f650699ea756f91f469844ec4c976f4f168492a45c6b3f67d651
   react-native-gesture-handler@3.2.1: 3037216c0dd1b14e8877441bde1a7404d1c6e9c09f835bd184c3cdba4aa066ad
   react-native-keyboard-controller@1.22.6: 6e448411781347cd0b87868ee279117514a399801c18f233ddca4fa3935be75d
   react-native-nitro-markdown@0.5.8: 642b47830730acff3761fe29cf54271d18b493c0070c750097850b7ea032e00c
@@ -681,7 +681,7 @@ importers:
         version: 6.2.2
       node-pty:
         specifier: ^1.2.0-beta.15
-        version: 1.2.0-beta.15(patch_hash=f2fe901c61cde17986240002d05c172d5d0272d83ffaab8d0ebeb922763be414)
+        version: 1.2.0-beta.15(patch_hash=f1e680afec85f650699ea756f91f469844ec4c976f4f168492a45c6b3f67d651)
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
@@ -21219,7 +21219,7 @@ snapshots:
 
   node-mock-http@1.0.5: {}
 
-  node-pty@1.2.0-beta.15(patch_hash=f2fe901c61cde17986240002d05c172d5d0272d83ffaab8d0ebeb922763be414):
+  node-pty@1.2.0-beta.15(patch_hash=f1e680afec85f650699ea756f91f469844ec4c976f4f168492a45c6b3f67d651):
     dependencies:
       node-addon-api: 7.1.1
 
