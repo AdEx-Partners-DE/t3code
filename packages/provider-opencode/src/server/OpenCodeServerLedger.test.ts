@@ -205,6 +205,21 @@ const spawnWindowsProcess = (command: string, args: ReadonlyArray<string>) =>
     }),
     ({ kill }) => Effect.sync(kill),
   );
+/** A PowerShell that exits 1 without output, as a CIM failure on a busy machine does. */
+const failedQuery = () =>
+  ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+    isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    unref: Effect.succeed(Effect.void),
+    stdin: Sink.drain,
+    stdout: Stream.empty,
+    stderr: Stream.empty,
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
 const IDLE_SCRIPT = "setInterval(() => {}, 1e6)";
 const spawnWindowsServer = (args: ReadonlyArray<string>) =>
   spawnWindowsProcess(process.execPath, ["-e", IDLE_SCRIPT, ...args]);
@@ -372,6 +387,42 @@ describe.runIf(hostPlatform === "win32")("OpenCodeServerLedger on Windows", () =
         yield* ledger.reapOrphans;
 
         expect(isAlive(server.pid)).toBe(true);
+        expect(yield* entries(stateDir)).toHaveLength(1);
+      }).pipe(provideHost),
+    60_000,
+  );
+
+  it.live(
+    "records on a later try after its process queries kept failing",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+        const server = yield* spawnWindowsServer(SERVE_ARGS);
+
+        // The first three PowerShell queries fail (the owner query and its two retries).
+        const real = yield* ChildProcessSpawner.ChildProcessSpawner;
+        let failuresLeft = 3;
+        // Decided when each attempt runs: a retry runs the same spawn effect again.
+        const flaky = ChildProcessSpawner.make((command) =>
+          Effect.suspend(() =>
+            (command as unknown as { readonly command: string }).command === "powershell.exe" &&
+            failuresLeft-- > 0
+              ? Effect.succeed(failedQuery())
+              : real.spawn(command),
+          ),
+        );
+        const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, flaky),
+        );
+        const recordServer = ledger
+          .record({ pid: server.pid, port: 4096, args: SERVE_ARGS })
+          .pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, flaky));
+
+        yield* Effect.asVoid(recordServer);
+        expect(yield* entries(stateDir)).toHaveLength(0);
+        // The failed owner query was not kept, so the next recording asks again and succeeds.
+        yield* Effect.asVoid(recordServer);
         expect(yield* entries(stateDir)).toHaveLength(1);
       }).pipe(provideHost),
     60_000,

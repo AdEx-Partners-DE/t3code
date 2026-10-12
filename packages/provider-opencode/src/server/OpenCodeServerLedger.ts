@@ -1,11 +1,14 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -75,6 +78,8 @@ const ENTRY_DIRECTORY = "opencode-servers";
 const ENTRY_FILE = /^\d+\.json$/;
 const STOP_POLL_INTERVAL = "50 millis";
 const STOP_POLL_ATTEMPTS = 40;
+/** Windows queries run off the server start, so a failed one can wait and ask again. */
+const WINDOWS_QUERY_RETRY = { times: 2, schedule: Schedule.spaced("1 second") };
 
 interface ObservedProcess {
   readonly pid: number;
@@ -241,6 +246,8 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
         ),
       );
 
+  type WindowsQueryFailure = Effect.Error<ReturnType<typeof psWindows>>;
+
   const observe = (pid: number): Effect.Effect<ObservedProcess | undefined> => {
     if (platform === "linux") return observeLinux(pid).pipe(Effect.orElseSucceed(() => undefined));
     if (platform === "win32") {
@@ -283,6 +290,7 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
       // The spawned process is the shell running npm's `opencode.cmd` shim; `opencode.exe` is
       // its child, and it is what outlives a killed T3 server.
       return psWindows(`ProcessId=${pgid} OR ParentProcessId=${pgid}`).pipe(
+        Effect.retry(WINDOWS_QUERY_RETRY),
         Effect.map((found) =>
           found.toSorted((left, right) => Number(left.pid === pgid) - Number(right.pid === pgid)),
         ),
@@ -314,15 +322,24 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
 
   const ownerPid = input.ownerPid ?? process.pid;
   // Read on first use: on Windows a process query takes a PowerShell start, which server
-  // startup should not wait for.
-  const ownerIdentity = yield* Effect.cached(
-    observe(ownerPid).pipe(
+  // startup should not wait for. Only an answer is kept: a Windows query that still fails after
+  // its retries is asked again at the next recording rather than leaving this server unrecorded.
+  const readOwner: Effect.Effect<ObservedProcess | undefined, WindowsQueryFailure> =
+    platform === "win32"
+      ? psWindows(`ProcessId=${ownerPid}`).pipe(
+          Effect.retry(WINDOWS_QUERY_RETRY),
+          Effect.map((found) => found.find((candidate) => candidate.pid === ownerPid)),
+        )
+      : observe(ownerPid);
+  const ownerIdentity = yield* Effect.cachedWithTTL(
+    readOwner.pipe(
       Effect.map((ownerProcess) =>
         ownerProcess === undefined
           ? undefined
           : { pid: ownerPid, startTime: ownerProcess.startTime },
       ),
     ),
+    (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
   );
 
   const record = (server: Parameters<OpenCodeServerLedger["Service"]["track"]>[0]) =>
@@ -332,7 +349,7 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
       // The spawned process leads the group. If it already exited (a wrapper
       // that left the server running), any live member identifies the group:
       // a group id is not reused while the group has members.
-      const owner = yield* ownerIdentity;
+      const owner = yield* ownerIdentity.pipe(Effect.orElseSucceed(() => undefined));
       const leader = platform === "win32" ? undefined : yield* observe(pgid);
       const members =
         leader !== undefined && !leader.zombie && leader.pgid === pgid
