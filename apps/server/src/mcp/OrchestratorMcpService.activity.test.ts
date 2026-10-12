@@ -623,6 +623,7 @@ it("readThread names the thread that sent a message with t3_thread_send", async 
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        Layer.mock(GitWorkflow.GitWorkflowService)({}),
         NodeCrypto.layer,
       ),
     ),
