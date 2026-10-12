@@ -108,6 +108,15 @@ const claudeAdapter = {
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("provider execution is disabled in launch tests"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
+// A second account of the same provider, configured as its own instance.
+const otherCodexModelSelection = {
+  instanceId: ProviderInstanceId.make("codex_work"),
+  model: modelSelection.model,
+} as const;
+const otherCodexAdapter = {
+  ...adapter,
+  instanceId: otherCodexModelSelection.instanceId,
+} as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
@@ -125,7 +134,11 @@ interface HarnessOptions {
 
 function makeHarness(options: HarnessOptions = {}) {
   const layerDatabase = SqlitePersistence.layerMemory;
-  const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([adapter, claudeAdapter]);
+  const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+    adapter,
+    claudeAdapter,
+    otherCodexAdapter,
+  ]);
   const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
     { name: "thread-launch" },
     layerRegistry,
@@ -374,8 +387,17 @@ it.effect.each(
   },
 );
 
-it.effect("runs a thread-bound automation on the provider the thread uses now", () => {
-  const harness = makeHarness();
+it.effect.each([
+  { switchedTo: "another provider", selection: claudeModelSelection },
+  { switchedTo: "another account of the same provider", selection: otherCodexModelSelection },
+])("runs a thread-bound automation on $switchedTo the thread uses now", ({ selection }) => {
+  const harness = makeHarness({
+    serverSettings: {
+      providerInstances: {
+        [otherCodexModelSelection.instanceId]: { driver: adapter.driver, config: {} },
+      },
+    },
+  });
   const layerScheduledTasks = ScheduledTasks.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -409,12 +431,12 @@ it.effect("runs a thread-bound automation on the provider the thread uses now", 
       createdBy: "agent",
       creationSource: "mcp",
     });
-    // ...and the user then switches the thread to Claude.
+    // ...and the user then switches the thread away from that instance.
     yield* threads.dispatch({
       type: "thread.model-selection.set",
-      commandId: CommandId.make("command:switch-to-claude"),
+      commandId: CommandId.make("command:switch-selection"),
       threadId: launched.threadId,
-      modelSelection: claudeModelSelection,
+      modelSelection: selection,
     });
 
     const result = yield* tasks.runNow({ id: task.id });
@@ -422,8 +444,8 @@ it.effect("runs a thread-bound automation on the provider the thread uses now", 
     const projection = yield* threads.getThreadProjection(launched.threadId);
     const message = projection.messages.find((item) => item.scheduledTaskId === task.id);
     const run = projection.runs.find((item) => item.id === message?.runId);
-    assert.deepStrictEqual(run?.modelSelection, claudeModelSelection);
-    assert.deepStrictEqual(projection.thread.modelSelection, claudeModelSelection);
+    assert.deepStrictEqual(run?.modelSelection, selection);
+    assert.deepStrictEqual(projection.thread.modelSelection, selection);
   }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerScheduledTasks)));
 });
 
