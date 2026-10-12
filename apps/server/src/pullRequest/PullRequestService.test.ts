@@ -478,6 +478,7 @@ function makeService(input: {
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
+  readonly onListShells?: () => void;
 }) {
   // Built into the test's own scope rather than provided call by call: the marks store owns a
   // database, and `Effect.provide` would close it the moment the service was handed back.
@@ -498,9 +499,12 @@ function makeService(input: {
         }),
         Layer.mock(ProjectService.ProjectService)({
           listShells: (options) =>
-            Effect.succeed(
-              input.projects.filter((project) => options?.projectIds?.includes(project.id) ?? true),
-            ),
+            Effect.sync(() => {
+              input.onListShells?.();
+              return input.projects.filter(
+                (project) => options?.projectIds?.includes(project.id) ?? true,
+              );
+            }),
           getShell: (projectId) =>
             Effect.succeed(Option.fromNullishOr(input.projects.find((p) => p.id === projectId))),
         }),
@@ -2422,6 +2426,44 @@ it.effect("routes a hosted reference to another repository through a project on 
 
     assert.strictEqual(summary.number, 7);
     assert.deepStrictEqual(seen, [{ cwd: "/web", repository: "acme/api", host: "github.com" }]);
+  }),
+);
+
+it.effect("shares the project list behind cross-repository references for half a minute", () =>
+  Effect.gen(function* () {
+    let listings = 0;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "frontend", title: "web", workspaceRoot: "/web", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequestSummary: (input) =>
+            Effect.succeed(changeRequest(input.number, "2026-07-02T00:00:00Z")),
+        }),
+      ],
+      onListShells: () => {
+        listings += 1;
+      },
+    });
+    const read = (number: number) =>
+      service.summary(
+        { projectId: "frontend" as ProjectId, host: "github.com", repository: "acme/api", number },
+        { recoverTransientFailure: false },
+      );
+
+    // A sweep reads every linked pull request; the project list behind them is read once.
+    yield* Effect.forEach([7, 8, 9], read, { concurrency: 3, discard: true });
+    assert.strictEqual(listings, 1);
+
+    yield* TestClock.adjust("31 seconds");
+    yield* read(10);
+    assert.strictEqual(listings, 2);
+
+    // A full refresh reads the projects again at once.
+    yield* service.invalidate({});
+    yield* read(11);
+    assert.strictEqual(listings, 3);
   }),
 );
 

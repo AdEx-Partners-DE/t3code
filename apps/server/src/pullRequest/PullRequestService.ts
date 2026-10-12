@@ -179,6 +179,11 @@ const DIFF_STALE_WINDOW = Duration.minutes(10);
 /** How long one host's signed-in login is believed without asking its CLI again. */
 const VIEWER_CACHE_TTL = Duration.minutes(10);
 const SEARCH_VISIBILITY_TTL = Duration.minutes(10);
+/**
+ * How long the project list behind a cross-repository reference is shared. A project added or
+ * repointed is routed to within this window; its own repository is always read fresh.
+ */
+const ROUTE_CANDIDATES_CACHE_TTL = Duration.seconds(30);
 const STALE_DETAIL_WINDOW = Duration.minutes(10);
 const isPullRequestProviderError = Schema.is(PullRequestProviderError);
 const LIST_CACHE_CAPACITY = 64;
@@ -898,6 +903,17 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  // The pull request sweeps resolve every linked pull request in another repository than its
+  // project's own through this listing, so they share it rather than re-reading and enriching
+  // every project once per pull request.
+  const routeCandidates = yield* Cache.makeWith(
+    (host: string) => listWorkspaceProjects(host === "" ? {} : { host }),
+    {
+      capacity: 16,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? ROUTE_CANDIDATES_CACHE_TTL : Duration.zero),
+    },
+  );
+
   /**
    * The project whose checkout and credentials serve a reference. The project's own
    * repository is the default; a reference that names a `host` may instead point at any
@@ -933,8 +949,9 @@ export const make = Effect.gen(function* () {
         const repositoryKey = canonicalRepositoryKey(`${host}/${repository}`.toLowerCase());
         // Azure SSH and legacy clone hosts differ from the browser URL's host. Compare
         // the complete repository identity before narrowing those checkouts by host.
-        return listWorkspaceProjects(
-          repositoryKey.startsWith("dev.azure.com/") ? {} : { host },
+        return getCached(
+          routeCandidates,
+          repositoryKey.startsWith("dev.azure.com/") ? "" : host,
         ).pipe(
           Effect.flatMap(({ supported }) => {
             const onHost = supported.filter((candidate) => candidate.host === host);
@@ -3395,6 +3412,7 @@ export const make = Effect.gen(function* () {
       everyFileRevisionEpoch = ++epochCounter;
       viewersByHost.clear();
       yield* Cache.invalidateAll(viewerFlights);
+      yield* Cache.invalidateAll(routeCandidates);
     }
     if (options?.notifyReaders) {
       yield* SubscriptionRef.set(pullRequestRefreshes, ++epochCounter);
