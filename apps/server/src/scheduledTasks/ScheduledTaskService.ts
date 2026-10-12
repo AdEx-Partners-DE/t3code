@@ -468,9 +468,9 @@ export const layer = Layer.effect(
             ),
             Effect.orElseSucceed(() => false),
           );
-    // Switching a held task on is the user resuming that one task. There is
-    // no way to resume all at once; the pause is over when the last task it
-    // still held has been switched on again.
+    // Switching a held task on is the user resuming that one task. The pause
+    // is over when the last task it still held has been switched on again,
+    // or when the user resumes all at once.
     const exemptFromPause = (taskId: string) =>
       Option.isNone(serverSettings)
         ? Effect.void

@@ -450,20 +450,18 @@ function ScheduledTaskEnvironmentSection({
             description={
               paused
                 ? heldCount === 0
-                  ? "No task is held right now. New tasks stay off until you switch them on; the first one you switch on ends the pause."
-                  : `${heldCount} ${heldCount === 1 ? "task is" : "tasks are"} paused. Switch a task on to resume just that one; there is no resuming all at once. The pause ends when the last of them runs again.`
-                : `Pauses every task in this environment at once. Afterwards each task is switched on again by itself. ${enabledCount} of ${tasks.length} enabled.`
+                  ? "No task is held right now. New tasks stay off until you switch them on."
+                  : `${heldCount} ${heldCount === 1 ? "task is" : "tasks are"} paused and read off below. Switch a single task on to resume just that one, or resume all of them here.`
+                : `Switches every task in this environment off at once. Afterwards switch single tasks on again, or resume all. ${enabledCount} of ${tasks.length} enabled.`
             }
             control={
-              paused ? null : (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => updateEnvironmentSettings({ scheduledTasksPaused: true })}
-                >
-                  Pause all tasks
-                </Button>
-              )
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => updateEnvironmentSettings({ scheduledTasksPaused: !paused })}
+              >
+                {paused ? "Resume all tasks" : "Pause all tasks"}
+              </Button>
             }
           />
           {tasks.length === 0 ? (
