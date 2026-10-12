@@ -170,3 +170,71 @@ it.effect("refuses a preferences update when the caller's turn ends while it wai
     );
   }),
 );
+
+it("names the pauses a patch would lift, and nothing when it sets one or leaves them", () => {
+  const paused = { scheduledTasksPaused: true, threadQueuesPaused: true };
+  const running = { scheduledTasksPaused: false, threadQueuesPaused: false };
+  expect(EnvironmentHandlers.liftedPauses({ scheduledTasksPaused: false }, paused)).toEqual([
+    "scheduledTasksPaused",
+  ]);
+  expect(
+    EnvironmentHandlers.liftedPauses(
+      { scheduledTasksPaused: false, threadQueuesPaused: false },
+      paused,
+    ),
+  ).toEqual(["scheduledTasksPaused", "threadQueuesPaused"]);
+  // Setting a pause, repeating "off" where nothing is paused, or leaving the fields out is fine.
+  expect(EnvironmentHandlers.liftedPauses({ scheduledTasksPaused: true }, running)).toEqual([]);
+  expect(EnvironmentHandlers.liftedPauses({ scheduledTasksPaused: false }, running)).toEqual([]);
+  expect(EnvironmentHandlers.liftedPauses({}, paused)).toEqual([]);
+});
+
+it.effect("lets a thread set a pause and refuses to let it lift one", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const settings = yield* Settings.ServerSettingsService;
+    const call = (args: Record<string, unknown>) =>
+      server.callTool({ name: "t3_environment_preferences_update", arguments: args }).pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, caller),
+        Effect.provideService(
+          McpSchema.McpServerClient,
+          McpSchema.McpServerClient.of({
+            clientId: 1,
+            protocolVersion: "2025-06-18",
+            clientCapabilities: {},
+            clientInfo: { name: "preferences", version: "1" },
+            initializePayload: {
+              protocolVersion: "2025-06-18",
+              capabilities: {},
+              clientInfo: { name: "preferences", version: "1" },
+            },
+            getClient: Effect.die("unused"),
+          }),
+        ),
+      );
+    expect((yield* call({ scheduledTasksPaused: true, threadQueuesPaused: true })).isError).toBe(
+      false,
+    );
+    for (const lift of [{ scheduledTasksPaused: false }, { threadQueuesPaused: false }]) {
+      expect((yield* call(lift)).isError).toBe(true);
+    }
+    // Another preference still goes through while the pauses stay on.
+    expect((yield* call({ newWorktreesStartFromOrigin: true })).isError).toBe(false);
+    const after = yield* settings.getSettings;
+    expect(after.scheduledTasksPaused).toBe(true);
+    expect(after.threadQueuesPaused).toBe(true);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerEnvironmentToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
+          }),
+        ),
+        Layer.provide(layerEnvironment),
+        Layer.provideMerge(Settings.layerTest()),
+      ),
+    ),
+  ),
+);

@@ -17,7 +17,7 @@ import {
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
 import { relativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
-import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { isTaskHeldByPause } from "@t3tools/contracts";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -74,7 +74,6 @@ export function ThreadAutomationsPanel(props: {
   );
   const isHeld = (task: ScheduledTask) =>
     task.enabled && isTaskHeldByPause(task.id, allTasksPaused, pauseExemptIds);
-  const updateEnvironmentSettings = useUpdateEnvironmentSettings(props.environmentId);
 
   const boundTasks = (tasksQuery.data?.tasks ?? []).filter(
     (task) => task.threadId === props.threadId,
@@ -174,14 +173,6 @@ export function ThreadAutomationsPanel(props: {
           data-testid="thread-automations-paused"
         >
           <span>Paused by "Pause all tasks". Switch a task on to resume just that one.</span>
-          <ThreadDetailsControl
-            size="xs"
-            variant="ghost"
-            disabled={!canOperate}
-            onClick={() => updateEnvironmentSettings({ scheduledTasksPaused: false })}
-          >
-            Resume all tasks
-          </ThreadDetailsControl>
         </div>
       ) : null}
 

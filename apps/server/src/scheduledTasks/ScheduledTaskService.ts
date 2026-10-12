@@ -311,6 +311,14 @@ const SCHEDULED_MESSAGE_ID_PREFIX = "scheduled-task-message:";
  * Whether a prompt this task sent earlier is still queued or running in its
  * thread. Scheduled prompts carry the task id in their message id.
  */
+/** Whether a task pause still holds anything: it is over once every enabled task runs again. */
+export function pauseIsOver(
+  enabledTaskIds: ReadonlyArray<string>,
+  exemptIds: ReadonlyArray<string>,
+): boolean {
+  return enabledTaskIds.every((taskId) => exemptIds.includes(taskId));
+}
+
 export function hasPendingScheduledPrompt(
   taskId: string,
   runs: ReadonlyArray<{ readonly status: string; readonly userMessageId?: string | null }>,
@@ -460,24 +468,33 @@ export const layer = Layer.effect(
             ),
             Effect.orElseSucceed(() => false),
           );
-    // Switching a held task on is the user resuming that one task.
+    // Switching a held task on is the user resuming that one task. There is
+    // no way to resume all at once; the pause is over when the last task it
+    // still held has been switched on again.
     const exemptFromPause = (taskId: string) =>
       Option.isNone(serverSettings)
         ? Effect.void
-        : serverSettings.value.getSettings.pipe(
-            Effect.flatMap((settings) =>
-              settings.scheduledTasksPaused &&
-              !settings.scheduledTasksPauseExemptIds.includes(taskId)
-                ? serverSettings.value.updateSettings({
-                    scheduledTasksPauseExemptIds: [
-                      ...settings.scheduledTasksPauseExemptIds,
-                      taskId,
-                    ],
-                  })
-                : Effect.void,
-            ),
-            Effect.ignore,
-          );
+        : Effect.gen(function* () {
+            const settings = yield* serverSettings.value.getSettings;
+            if (
+              !settings.scheduledTasksPaused ||
+              settings.scheduledTasksPauseExemptIds.includes(taskId)
+            ) {
+              return;
+            }
+            const exempt = [...settings.scheduledTasksPauseExemptIds, taskId];
+            const enabled = yield* sql<{ readonly task_id: string }>`
+              SELECT task_id FROM scheduled_tasks WHERE enabled = 1
+            `;
+            yield* serverSettings.value.updateSettings(
+              pauseIsOver(
+                enabled.map((row) => row.task_id),
+                exempt,
+              )
+                ? { scheduledTasksPaused: false }
+                : { scheduledTasksPauseExemptIds: exempt },
+            );
+          }).pipe(Effect.ignore);
     // Each pause starts with nothing resumed, and lifting it leaves no list behind.
     if (Option.isSome(serverSettings)) {
       const settingsService = serverSettings.value;

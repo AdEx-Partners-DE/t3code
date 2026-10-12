@@ -39,6 +39,23 @@ export function preferences(settings: ServerSettings) {
     },
   };
 }
+/**
+ * The pauses a patch would lift. A pause is the user's stop sign for work
+ * that runs without them; an agent held back by one must not remove it.
+ */
+export function liftedPauses(
+  patch: { readonly scheduledTasksPaused?: boolean; readonly threadQueuesPaused?: boolean },
+  current: Pick<ServerSettings, "scheduledTasksPaused" | "threadQueuesPaused">,
+): ReadonlyArray<string> {
+  return [
+    ...(current.scheduledTasksPaused && patch.scheduledTasksPaused === false
+      ? ["scheduledTasksPaused"]
+      : []),
+    ...(current.threadQueuesPaused && patch.threadQueuesPaused === false
+      ? ["threadQueuesPaused"]
+      : []),
+  ];
+}
 const access = Effect.gen(function* () {
   const context = yield* readCaller();
   const environment = yield* Environment.ServerEnvironment;
@@ -72,6 +89,16 @@ export const layer = McpToolAccess.toLayer(EnvironmentToolkit, {
         // The turn may have ended, or the thread's modes changed, while this waited for the lock.
         yield* check;
         const { settings } = yield* access;
+        const lifted = liftedPauses(
+          patch,
+          yield* settings.getSettings.pipe(Effect.mapError(unavailable)),
+        );
+        if (scope.thread !== undefined && lifted.length > 0) {
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: `The user paused this (${lifted.join(", ")}). Only the user can lift a pause, in Settings. Do not work around it: say that the pause is on and stop.`,
+          });
+        }
         return preferences(
           yield* settings.updateSettings(patch).pipe(Effect.mapError(unavailable)),
         );
