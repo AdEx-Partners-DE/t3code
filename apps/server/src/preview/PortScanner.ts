@@ -81,6 +81,9 @@ const WINDOWS_LISTENER_TIMEOUT_MS = 5_000;
 const WINDOWS_NETSTAT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const WEB_PROBE_TIMEOUT = Duration.seconds(1);
 const WEB_PROBE_CACHE_TTL_MS = Duration.toMillis(Duration.seconds(15));
+/** Bounds how long a cached Windows image name can outlive its process if Windows reuses the PID. */
+const WINDOWS_PROCESS_NAME_TTL_MS = Duration.toMillis(Duration.seconds(60));
+const WINDOWS_PROCESS_NAME_CONCURRENCY = 4;
 const WEB_PROBE_CONCURRENCY = 16;
 const NAVIGATION_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -416,7 +419,9 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
   const scanSemaphore = yield* Semaphore.make(1);
   const lsofMissingRef = yield* Ref.make(false);
   /** Windows image names by PID; netstat reports only PIDs. */
-  const windowsProcessNamesRef = yield* Ref.make<ReadonlyMap<number, string | null>>(new Map());
+  const windowsProcessNamesRef = yield* Ref.make<
+    ReadonlyMap<number, { readonly name: string | null; readonly expiresAtMillis: number }>
+  >(new Map());
   /** Confirmed owners of listening socket inodes. */
   const socketOwnersRef = yield* Ref.make<
     ReadonlyMap<string, { readonly pid: number; readonly processName: string | null }>
@@ -663,15 +668,21 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     return { discovered, configured } satisfies WebProbeSnapshot;
   });
 
-  // `tasklist` costs ~200ms per PID, so look up only visible servers and only once per PID.
+  // `tasklist` costs ~200-300ms per PID, so look up only visible servers, a few at a time, and
+  // reuse each name until its TTL expires.
   const withWindowsProcessNames = Effect.fn("PortDiscovery.withWindowsProcessNames")(function* (
     snapshot: WebProbeSnapshot,
   ) {
     const servers = [...snapshot.discovered, ...snapshot.configured.values()];
     const pids = new Set(servers.flatMap((server) => (server.pid === null ? [] : [server.pid])));
-    const cached = yield* Ref.get(windowsProcessNamesRef);
+    const nowMillis = yield* Clock.currentTimeMillis;
+    const cached = [...(yield* Ref.get(windowsProcessNamesRef))].filter(
+      ([pid, entry]) => pids.has(pid) && entry.expiresAtMillis > nowMillis,
+    );
+    const cachedPids = new Set(cached.map(([pid]) => pid));
+    const expiresAtMillis = nowMillis + WINDOWS_PROCESS_NAME_TTL_MS;
     const fetched = yield* Effect.forEach(
-      [...pids].filter((pid) => !cached.has(pid)),
+      [...pids].filter((pid) => !cachedPids.has(pid)),
       (pid) =>
         processRunner
           .run({
@@ -685,18 +696,23 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
             Effect.map((result) =>
               result.code !== null && result.code !== 0
                 ? []
-                : [[pid, parseTasklistProcessName(result.stdout, pid)] as const],
+                : [
+                    [
+                      pid,
+                      { name: parseTasklistProcessName(result.stdout, pid), expiresAtMillis },
+                    ] as const,
+                  ],
             ),
             Effect.orElseSucceed(() => []),
           ),
-      { concurrency: "unbounded" },
+      { concurrency: WINDOWS_PROCESS_NAME_CONCURRENCY },
     );
-    const names = new Map([...cached, ...fetched.flat()].filter(([pid]) => pids.has(pid)));
+    const names = new Map([...cached, ...fetched.flat()]);
     yield* Ref.set(windowsProcessNamesRef, names);
     const withName = (server: DiscoveredLocalServer): DiscoveredLocalServer =>
       server.pid === null || server.processName !== null
         ? server
-        : { ...server, processName: names.get(server.pid) ?? null };
+        : { ...server, processName: names.get(server.pid)?.name ?? null };
     return {
       discovered: snapshot.discovered.map(withName),
       configured: new Map([...snapshot.configured].map(([key, server]) => [key, withName(server)])),
@@ -723,8 +739,6 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
     }
     if (hostPlatform === "win32") {
       if (terminalByProcessId.size === 0 && configuredUrls.length === 0) {
-        // Idle scans skip the pruning in withWindowsProcessNames, and Windows may reuse a PID.
-        yield* Ref.set(windowsProcessNamesRef, new Map());
         return { discovered: [], configured: new Map() } satisfies WebProbeSnapshot;
       }
       const recoverWindowsProbeFailure = recoverProcessProbeFailure("windows-listeners");
