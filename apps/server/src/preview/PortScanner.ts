@@ -304,6 +304,10 @@ const parseWindowsListenerLine = (
   };
 };
 
+/** `ProcessRunner` reports a nonzero exit as a result, not a failure. */
+const exitedWithError = (result: ProcessRunner.ProcessRunOutput): boolean =>
+  result.code !== null && result.code !== 0;
+
 /** Reads the image name from `tasklist.exe /FO CSV /NH /FI "PID eq <pid>"` output. */
 const parseTasklistProcessName = (raw: string, pid: number): string | null => {
   for (const line of raw.split(/\r?\n/g)) {
@@ -694,7 +698,7 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
           .pipe(
             // Only a completed lookup is cached; failures retry on the next scan.
             Effect.map((result) =>
-              result.code !== null && result.code !== 0
+              exitedWithError(result)
                 ? []
                 : [
                     [
@@ -752,8 +756,12 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
       const listeners = yield* Effect.all([runNetstat("tcp"), runNetstat("tcpv6")], {
         concurrency: 2,
       }).pipe(
+        // One failed query leaves a partial snapshot that could hide another process sharing a
+        // port across IPv4/IPv6, so fall back to configured URLs instead.
         Effect.map(([tcp4, tcp6]) =>
-          parseWindowsListenerOutput(`${tcp4.stdout}\n${tcp6.stdout}`, terminalByProcessId),
+          exitedWithError(tcp4) || exitedWithError(tcp6)
+            ? null
+            : parseWindowsListenerOutput(`${tcp4.stdout}\n${tcp6.stdout}`, terminalByProcessId),
         ),
         Effect.catchTags({
           ProcessSpawnError: recoverWindowsProbeFailure,

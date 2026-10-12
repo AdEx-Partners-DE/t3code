@@ -413,7 +413,7 @@ it.live("startup removes only stale staging directories", () =>
     const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-install-test-" });
     const managed = `${baseDir}/tools/codex`;
     // utimes takes seconds when given numbers.
-    const stale = ((yield* Clock.currentTimeMillis) - 2 * 60 * 60_000) / 1000;
+    const stale = ((yield* Clock.currentTimeMillis) - 25 * 60 * 60_000) / 1000;
     for (const name of [".install-stale", ".active-stale", ".install-live"]) {
       yield* fs.makeDirectory(`${managed}/${name}`, { recursive: true });
     }

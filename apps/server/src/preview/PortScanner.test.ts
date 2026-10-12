@@ -880,3 +880,46 @@ effectIt.effect(
     }).pipe(Effect.provide(layer));
   },
 );
+
+effectIt.effect("ignores a partial Windows netstat snapshot when one query exits nonzero", () => {
+  const fetchFn = (() =>
+    Promise.resolve(
+      new Response("hello", { headers: { "content-type": "text/html" } }),
+    )) as typeof globalThis.fetch;
+  const layer = PortScanner.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerNoProc,
+        Layer.succeed(ProcessRunner.ProcessRunner, {
+          run: (input) => {
+            const isIpv6 = input.args.includes("tcpv6");
+            return Effect.succeed({
+              stdout: isIpv6
+                ? ""
+                : "  TCP    127.0.0.1:5173         0.0.0.0:0              LISTENING       1234\r\n",
+              stderr: "",
+              code: isIpv6 ? ChildProcessSpawner.ExitCode(1) : null,
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            });
+          },
+        }),
+        Layer.succeed(HostProcess.Platform, "win32"),
+        FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn))),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const scanner = yield* PortScanner.PortDiscovery;
+    yield* scanner.registerTerminalProcesses({
+      threadId: "scanner-thread",
+      terminalId: "scanner-terminal",
+      processIds: [1234],
+    });
+    expect(yield* scanner.scan()).toEqual([]);
+  }).pipe(Effect.provide(layer));
+});

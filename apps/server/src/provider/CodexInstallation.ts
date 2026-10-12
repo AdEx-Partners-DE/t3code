@@ -28,7 +28,7 @@ import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 
 const DRIVER = ProviderDriverKind.make("codex");
-const STAGING_STALE_AFTER_MS = 60 * 60_000;
+const STAGING_STALE_AFTER_MS = 24 * 60 * 60_000;
 const Version = Schema.String.check(Schema.isPattern(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/u));
 const ActiveRelease = Schema.Struct({ version: Version });
 const InstalledRelease = Schema.Struct({
@@ -703,8 +703,9 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
   yield* Effect.gen(function* () {
     // Clear staging directories left behind by an interrupted install so they
     // neither leak disk nor make an otherwise empty runtime look removable. Two
-    // servers can share a home, so one touched within the last hour may be
-    // another server's install in progress and stays.
+    // servers can share a home, and writes below a staging directory do not
+    // refresh its mtime, so only directories far older than any real install
+    // (download is capped at 45 minutes) are treated as abandoned.
     let canRemove = false;
     if (yield* fs.exists(managedDirectory)) {
       const entries = yield* fs
