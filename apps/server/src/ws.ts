@@ -1966,7 +1966,11 @@ const layerWsRpc = (
             ? openThreadModelOverride.restore({ commandId: input.commandId })
             : openThreadModelOverride.apply({
                 commandId: input.commandId,
-                override: { model: input.model, effort: input.effort },
+                override: {
+                  model: input.model,
+                  effort: input.effort,
+                  keepOwnAccount: input.keepOwnAccount,
+                },
               })
           ).pipe(
             Effect.mapError(

@@ -110,11 +110,29 @@ describe("overriddenModelSelection across accounts", () => {
   ];
   const onWork: ModelSelection = { instanceId: work, model: "gpt-6" };
 
-  it("keeps a thread on its own account when that account has the model", () => {
+  it("moves a thread to the named account, also when only the account differs", () => {
     expect(
       overriddenModelSelection({
         current: onWork,
         override: { model: { instanceId: codex, model: "gpt-7" } },
+        providers: accounts,
+      }),
+    ).toEqual({ instanceId: codex, model: "gpt-7" });
+    // Same model on another subscription: choosing it is asking for the move.
+    expect(
+      overriddenModelSelection({
+        current: onWork,
+        override: { model: { instanceId: codex, model: "gpt-6" } },
+        providers: accounts,
+      }),
+    ).toEqual({ instanceId: codex, model: "gpt-6" });
+  });
+
+  it("keeps a thread on its own account when asked to and that account has the model", () => {
+    expect(
+      overriddenModelSelection({
+        current: onWork,
+        override: { model: { instanceId: codex, model: "gpt-7" }, keepOwnAccount: true },
         providers: accounts,
       }),
     ).toEqual({ instanceId: work, model: "gpt-7" });
@@ -122,7 +140,7 @@ describe("overriddenModelSelection across accounts", () => {
     expect(
       overriddenModelSelection({
         current: onWork,
-        override: { model: { instanceId: codex, model: "gpt-6" } },
+        override: { model: { instanceId: codex, model: "gpt-6" }, keepOwnAccount: true },
         providers: accounts,
       }),
     ).toBeNull();

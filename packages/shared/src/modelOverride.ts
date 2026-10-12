@@ -13,6 +13,11 @@ export interface ModelOverride {
   readonly model?: Pick<ModelSelection, "instanceId" | "model"> | undefined;
   /** A thinking level such as "low", "medium" or "high". Absent keeps the level. */
   readonly effort?: string | undefined;
+  /**
+   * Leave a thread on its own account when that account offers the model.
+   * Without it the override means what it names: that model on that account.
+   */
+  readonly keepOwnAccount?: boolean | undefined;
 }
 
 type OverrideProvider = Pick<ServerProvider, "instanceId" | "models"> &
@@ -42,17 +47,19 @@ function effortOptionId(
 
 /**
  * Where a thread goes for the overriding model. An override names a model on
- * one account, but it means the model: a thread on another account of the
- * same provider that offers that model stays on its account. Moving it would
- * hand the conversation over between accounts, which a long thread does not
- * survive, and spend the other account's allowance.
+ * one account and by default means exactly that, so choosing another
+ * subscription moves the threads to it. With `keepOwnAccount` it means only
+ * the model: a thread on another account of the same provider that offers the
+ * model stays there, which spares a handover between accounts and the other
+ * account's allowance.
  */
 function overrideTarget(
   providers: ReadonlyArray<OverrideProvider>,
   current: Pick<ModelSelection, "instanceId" | "model">,
   wanted: Pick<ModelSelection, "instanceId" | "model">,
+  keepOwnAccount: boolean,
 ): Pick<ModelSelection, "instanceId" | "model"> {
-  if (wanted.instanceId === current.instanceId) return wanted;
+  if (wanted.instanceId === current.instanceId || !keepOwnAccount) return wanted;
   const own = providers.find((provider) => provider.instanceId === current.instanceId);
   const other = providers.find((provider) => provider.instanceId === wanted.instanceId);
   return own?.driver !== undefined &&
@@ -76,7 +83,7 @@ export function overriddenModelSelection(input: {
   const target =
     override.model === undefined
       ? current
-      : overrideTarget(input.providers, current, override.model);
+      : overrideTarget(input.providers, current, override.model, override.keepOwnAccount === true);
   const sameModel = target.instanceId === current.instanceId && target.model === current.model;
   let options = sameModel ? [...(current.options ?? [])] : [];
   if (override.effort !== undefined) {

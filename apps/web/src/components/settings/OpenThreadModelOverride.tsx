@@ -16,6 +16,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { useSettingsScope } from "./SettingsScopeContext";
 
@@ -64,6 +65,7 @@ function OpenThreadModelOverrideControls({
   const restore = useAtomCommand(serverEnvironment.overrideOpenThreadModels);
   const [modelKey, setModelKey] = useState(KEEP);
   const [effort, setEffort] = useState(KEEP);
+  const [keepOwnAccount, setKeepOwnAccount] = useState(false);
   const [filter, setFilter] = useState("");
   const [pending, setPending] = useState(false);
   // What the server holds in force. It also reaches threads that open later,
@@ -174,6 +176,7 @@ function OpenThreadModelOverrideControls({
                 ? {}
                 : { model: { instanceId: chosen.instanceId, model: chosen.model } }),
               ...(effortValue === KEEP ? {} : { effort: effortValue }),
+              ...(keepOwnAccount && chosen !== null ? { keepOwnAccount: true } : {}),
             },
           }),
           (threads) =>
@@ -208,7 +211,11 @@ function OpenThreadModelOverrideControls({
   const standingText =
     standing === null
       ? null
-      : [standingModel, standing.effort === undefined ? null : `thinking ${standing.effort}`]
+      : [
+          standingModel,
+          standing.effort === undefined ? null : `thinking ${standing.effort}`,
+          standing.keepOwnAccount === true ? "each thread stays on its own account" : null,
+        ]
           .filter((part) => part !== null)
           .join(", ");
 
@@ -256,6 +263,17 @@ function OpenThreadModelOverrideControls({
           ))}
         </SelectPopup>
       </Select>
+      {/* The list names an account with each model, and choosing one moves the threads to
+          that account. This keeps them where they are and changes only the model. */}
+      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Switch
+          checked={keepOwnAccount}
+          disabled={chosen === null}
+          onCheckedChange={(checked) => setKeepOwnAccount(checked === true)}
+          aria-label="Keep each thread on its own account"
+        />
+        Keep each thread on its own account
+      </label>
       <Button
         size="xs"
         disabled={pending || !allowed || (chosen === null && effortValue === KEEP)}

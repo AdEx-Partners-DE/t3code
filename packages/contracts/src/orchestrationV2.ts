@@ -3853,6 +3853,11 @@ export const OrchestrationV2RpcSchemas = {
       ),
       effort: Schema.optional(TrimmedNonEmptyString),
       /**
+       * Leave each thread on its own account when that account offers the
+       * model. Without it the threads move to the account the model names.
+       */
+      keepOwnAccount: Schema.optional(Schema.Boolean),
+      /**
        * Put back the selections the last overrides replaced instead of setting
        * one. The way back shares this method because the RPC group is as
        * large as the type checker takes.
@@ -3872,6 +3877,7 @@ export const OrchestrationV2RpcSchemas = {
             Schema.Struct({ instanceId: ProviderInstanceId, model: TrimmedNonEmptyString }),
           ),
           effort: Schema.optional(TrimmedNonEmptyString),
+          keepOwnAccount: Schema.optional(Schema.Boolean),
         }),
       ),
       /** The selection of every thread the call covered, changed or already there, for clients to line their composers up. */

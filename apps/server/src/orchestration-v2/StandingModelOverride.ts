@@ -36,6 +36,7 @@ const StoredOverride = Schema.Struct({
     Schema.Struct({ instanceId: ProviderInstanceId, model: TrimmedNonEmptyString }),
   ),
   effort: Schema.optional(TrimmedNonEmptyString),
+  keepOwnAccount: Schema.optional(Schema.Boolean),
 });
 const decodeStored = Schema.decodeUnknownOption(Schema.fromJsonString(StoredOverride));
 const encodeStored = Schema.encodeSync(Schema.fromJsonString(StoredOverride));
@@ -55,6 +56,7 @@ export const rememberStandingOverride = (override: ModelOverride) =>
       encodeStored({
         ...(override.model === undefined ? {} : { model: override.model }),
         ...(override.effort === undefined ? {} : { effort: override.effort }),
+        ...(override.keepOwnAccount === true ? { keepOwnAccount: true } : {}),
       } as typeof StoredOverride.Type),
     );
   }).pipe(Effect.ignore);
@@ -183,7 +185,7 @@ export const alignThreadWithStandingOverride = (
     if (userChoseOtherModel(saved[threadId]?.applied, thread.modelSelection)) {
       const current = `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`;
       // A task on a timer comes by every few minutes; the same choice is recorded once.
-      const key = `${threadId} ${current}`;
+      const key = `${threadId}\0${current}`;
       if (!keptChoicesRecorded.has(key)) {
         keptChoicesRecorded.add(key);
         yield* recordDecision({
