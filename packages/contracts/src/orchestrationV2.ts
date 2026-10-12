@@ -3924,6 +3924,11 @@ export const OrchestrationV2RpcSchemas = {
       ),
       /** Set when one thread was asked for; null when it has no checklist yet. */
       checklist: Schema.optional(Schema.NullOr(ThreadChecklist)),
+      /**
+       * Set while an update waits to go in: until then no task starts by
+       * itself, so a task that reads "on" is seen to be kept back.
+       */
+      tasksHeldForUpdateUntil: Schema.optional(IsoDateTime),
       waitingQueues: Schema.optional(
         Schema.Array(
           Schema.Struct({

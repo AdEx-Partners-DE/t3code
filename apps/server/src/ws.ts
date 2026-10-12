@@ -251,6 +251,7 @@ import * as UsageLimitHistory from "./usage/UsageLimitHistory.ts";
 import * as OpenThreadModelOverride from "./orchestration-v2/OpenThreadModelOverride.ts";
 import * as OpenThreadNudge from "./orchestration-v2/OpenThreadNudge.ts";
 import * as ThreadChecklist from "./orchestration-v2/ThreadChecklist.ts";
+import { currentUpdateHold } from "./scheduledTasks/updateHold.ts";
 import * as QueueOverview from "./orchestration-v2/QueueOverview.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
@@ -2000,11 +2001,19 @@ const layerWsRpc = (
                 turnsBehind: yield* threadChecklist.turnsBehind(input.threadId, checklist),
               };
             }
+            const updateHoldEndsAt = yield* currentUpdateHold;
             return {
               checklists: yield* threadChecklist.listOpen,
               waitingQueues: yield* queueOverview.read,
               activeRuns: yield* queueOverview.readActiveRuns,
               lastReplies: yield* queueOverview.readLastReplies,
+              ...(updateHoldEndsAt === null
+                ? {}
+                : {
+                    tasksHeldForUpdateUntil: DateTime.formatIso(
+                      DateTime.makeUnsafe(updateHoldEndsAt),
+                    ),
+                  }),
             };
           }).pipe(
             Effect.mapError(

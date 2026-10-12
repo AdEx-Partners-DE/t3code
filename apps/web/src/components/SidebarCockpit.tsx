@@ -210,6 +210,15 @@ function CockpitWaitingQueues({
   const input = useMemo(() => ({}), []);
   const result = useAtomValue(serverEnvironment.threadChecklists({ environmentId, input }));
   const queues = Option.getOrNull(AsyncResult.value(result))?.waitingQueues ?? [];
+  const heldUntil = Option.getOrNull(AsyncResult.value(result))?.tasksHeldForUpdateUntil;
+  // Tasks read "on" while an update keeps them back, so say that they wait and until when.
+  const holdLine =
+    heldUntil === undefined || Date.parse(heldUntil) <= nowMs ? null : (
+      <span data-testid="sidebar-cockpit-update-hold" className="font-medium tabular-nums">
+        An update is waiting to go in: tasks start again in{" "}
+        {waitLabel(Date.parse(heldUntil) - nowMs)} at the latest
+      </span>
+    );
   const quiet = (Option.getOrNull(AsyncResult.value(result))?.activeRuns ?? []).filter(
     (run) => nowMs - Date.parse(run.lastEventAt) >= QUIET_RUN_MS,
   );
@@ -228,6 +237,7 @@ function CockpitWaitingQueues({
   if (queues.length === 0) {
     return (
       <>
+        {holdLine}
         {quietLine}
         {filterOn ? (
           <button
@@ -245,6 +255,7 @@ function CockpitWaitingQueues({
   const oldestMs = nowMs - Date.parse(queues[0]!.oldestQueuedAt);
   return (
     <>
+      {holdLine}
       {quietLine}
       <button
         type="button"
