@@ -257,3 +257,44 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
     }),
   );
 });
+
+describe("reading the banked resets at most once per interval", () => {
+  it("is due when never asked or when the last request is old enough", () => {
+    expect(ClaudeResetCredits.resetCreditsReadDue(null, 1_000)).toBe(true);
+    expect(
+      ClaudeResetCredits.resetCreditsReadDue(
+        1_000,
+        1_000 + ClaudeResetCredits.RESET_CREDITS_READ_INTERVAL_MS - 1,
+      ),
+    ).toBe(false);
+    expect(
+      ClaudeResetCredits.resetCreditsReadDue(
+        1_000,
+        1_000 + ClaudeResetCredits.RESET_CREDITS_READ_INTERVAL_MS,
+      ),
+    ).toBe(true);
+  });
+
+  effectIt.effect("asks once, keeps the answer, and keeps it through a refused request", () =>
+    Effect.gen(function* () {
+      const answers: Array<number | undefined> = [3, undefined, 5];
+      let calls = 0;
+      const reader = yield* ClaudeResetCredits.makeThrottledResetCreditsReader(() =>
+        Effect.sync(() => answers[calls++]),
+      );
+      expect(yield* reader.read("1.0.0")).toBe(3);
+      expect(yield* reader.read("1.0.0")).toBe(3);
+      expect(calls).toBe(1);
+      yield* TestClock.adjust(ClaudeResetCredits.RESET_CREDITS_READ_INTERVAL_MS);
+      // Refused this time: the last known count stays.
+      expect(yield* reader.read("1.0.0")).toBe(3);
+      expect(calls).toBe(2);
+      yield* TestClock.adjust(ClaudeResetCredits.RESET_CREDITS_READ_INTERVAL_MS);
+      expect(yield* reader.read("1.0.0")).toBe(5);
+      // A redeem forgets the count, so the next read asks at once.
+      yield* reader.forget;
+      yield* reader.read("1.0.0");
+      expect(calls).toBe(4);
+    }),
+  );
+});
