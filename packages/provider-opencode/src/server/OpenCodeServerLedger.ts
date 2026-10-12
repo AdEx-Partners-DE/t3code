@@ -91,6 +91,43 @@ const parseDarwinPs = (output: string): ReadonlyArray<ObservedProcess> =>
     ];
   });
 
+// Windows has neither `/proc` nor `ps`; CIM reports the same facts. Start time is the creation
+// time in UTC ticks. `pgid` carries the parent, since Windows has no process groups.
+const WINDOWS_PROCESS_QUERY = (filter: string) =>
+  `ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter '${filter}' | ` +
+  `ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; ppid = [int]$_.ParentProcessId; ` +
+  `startTime = [string]$_.CreationDate.ToUniversalTime().Ticks; command = [string]$_.CommandLine } })`;
+
+const parseWindowsProcesses = (output: string): ReadonlyArray<ObservedProcess> => {
+  const rows: unknown = JSON.parse(output.trim() || "[]");
+  return (Array.isArray(rows) ? rows : []).flatMap((row: Record<string, unknown>) =>
+    typeof row.pid === "number" && typeof row.startTime === "string"
+      ? [
+          {
+            pid: row.pid,
+            pgid: typeof row.ppid === "number" ? row.ppid : -1,
+            startTime: row.startTime,
+            command: typeof row.command === "string" ? row.command : "",
+            zombie: false,
+          },
+        ]
+      : [],
+  );
+};
+
+/**
+ * Whether a command line ends in the serve arguments. Windows command lines quote each argument
+ * (`"serve" "--hostname=127.0.0.1" "--port=4096"`), and the npm shim pads them with spaces.
+ */
+const endsWithServeArgs = (command: string, args: ReadonlyArray<string>, platform: string) =>
+  platform === "win32"
+    ? command
+        .replaceAll('"', "")
+        .replace(/\s+/g, " ")
+        .trimEnd()
+        .endsWith(` ${args.join(" ")}`)
+    : command.endsWith(` ${args.join(" ")}`);
+
 const signalGroup = (pgid: number, signal: NodeJS.Signals) => {
   try {
     signalProcessGroup(pgid, signal);
@@ -121,8 +158,9 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const platform = yield* HostProcess.Platform;
   const directory = path.join(input.stateDir, ENTRY_DIRECTORY);
-  // Windows servers are not detached and are never recorded.
-  const recordable = platform === "linux" || platform === "darwin";
+  // Windows servers are not detached, but a T3 server that is killed rather than stopped still
+  // leaves them running: Windows does not end a process's children with it.
+  const recordable = platform === "linux" || platform === "darwin" || platform === "win32";
 
   /** Observes `pid`, or nothing when it is not in `group` (if given). */
   const observeLinux = (pid: number, group?: number) =>
@@ -163,8 +201,25 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
       )
       .pipe(Effect.timeout("5 seconds"), Effect.map(parseDarwinPs));
 
+  const psWindows = (filter: string) =>
+    spawner
+      .string(
+        ChildProcess.make(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PROCESS_QUERY(filter)],
+          { stdin: "ignore", stderr: "ignore" },
+        ),
+      )
+      .pipe(Effect.timeout("15 seconds"), Effect.map(parseWindowsProcesses));
+
   const observe = (pid: number): Effect.Effect<ObservedProcess | undefined> => {
     if (platform === "linux") return observeLinux(pid).pipe(Effect.orElseSucceed(() => undefined));
+    if (platform === "win32") {
+      return psWindows(`ProcessId=${pid}`).pipe(
+        Effect.map((found) => found.find((candidate) => candidate.pid === pid)),
+        Effect.orElseSucceed(() => undefined),
+      );
+    }
     if (platform === "darwin") {
       return psDarwin(["-p", String(pid)]).pipe(
         Effect.map((found) => found.find((candidate) => candidate.pid === pid)),
@@ -195,6 +250,16 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
         Effect.orElseSucceed(() => []),
       );
     }
+    if (platform === "win32") {
+      // The spawned process is the shell running npm's `opencode.cmd` shim; `opencode.exe` is
+      // its child, and it is what outlives a killed T3 server.
+      return psWindows(`ProcessId=${pgid} OR ParentProcessId=${pgid}`).pipe(
+        Effect.map((found) =>
+          found.toSorted((left, right) => Number(left.pid === pgid) - Number(right.pid === pgid)),
+        ),
+        Effect.orElseSucceed(() => []),
+      );
+    }
     return Effect.succeed([]);
   };
 
@@ -207,9 +272,17 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
     );
 
   const ownerPid = input.ownerPid ?? process.pid;
-  const ownerProcess = yield* observe(ownerPid);
-  const owner =
-    ownerProcess === undefined ? undefined : { pid: ownerPid, startTime: ownerProcess.startTime };
+  // Read on first use: on Windows a process query takes a PowerShell start, which server
+  // startup should not wait for.
+  const ownerIdentity = yield* Effect.cached(
+    observe(ownerPid).pipe(
+      Effect.map((ownerProcess) =>
+        ownerProcess === undefined
+          ? undefined
+          : { pid: ownerPid, startTime: ownerProcess.startTime },
+      ),
+    ),
+  );
 
   const track: OpenCodeServerLedger["Service"]["track"] = (server) =>
     Effect.gen(function* () {
@@ -218,16 +291,17 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
       // The spawned process leads the group. If it already exited (a wrapper
       // that left the server running), any live member identifies the group:
       // a group id is not reused while the group has members.
-      const leader = yield* observe(pgid);
+      const owner = yield* ownerIdentity;
+      const leader = platform === "win32" ? undefined : yield* observe(pgid);
       const members =
         leader !== undefined && !leader.zombie && leader.pgid === pgid
           ? [leader]
           : (yield* observeGroup(pgid)).filter((candidate) => !candidate.zombie);
       const member =
-        members.find((candidate) => candidate.command.endsWith(` ${server.args.join(" ")}`)) ??
+        members.find((candidate) => endsWithServeArgs(candidate.command, server.args, platform)) ??
         members[0];
       if (owner === undefined || member === undefined) {
-        if (groupExists(pgid)) {
+        if (platform === "win32" || groupExists(pgid)) {
           yield* Effect.logWarning(
             "Could not record an OpenCode server; it will keep running if this server crashes",
             { pid: pgid, port: server.port },
@@ -277,7 +351,7 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
         observed === undefined ||
         observed.zombie ||
         observed.startTime !== entry.startTime ||
-        observed.pgid !== entry.pgid ||
+        (platform !== "win32" && observed.pgid !== entry.pgid) ||
         observed.command !== entry.command
       ) {
         return;
@@ -286,6 +360,18 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
         pid: entry.pgid,
         port: entry.port,
       });
+      if (platform === "win32") {
+        // The recorded process is the server itself; `/T` takes anything it started along.
+        yield* spawner
+          .string(
+            ChildProcess.make("taskkill", ["/PID", String(entry.pid), "/T", "/F"], {
+              stdin: "ignore",
+              stderr: "ignore",
+            }),
+          )
+          .pipe(Effect.timeout("15 seconds"), Effect.ignore);
+        return;
+      }
       signalGroup(entry.pgid, "SIGTERM");
       for (let attempt = 0; attempt < STOP_POLL_ATTEMPTS && groupExists(entry.pgid); attempt++) {
         yield* Effect.sleep(STOP_POLL_INTERVAL);
