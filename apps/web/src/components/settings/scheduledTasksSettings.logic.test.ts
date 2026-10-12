@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ScheduledTaskId,
   type ScheduledTask,
+  ThreadId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -236,6 +237,38 @@ describe("idle scheduled tasks", () => {
       maxRuns: 4,
       minPauseMs: 90_000,
     });
+  });
+
+  it("keeps supervision and left-out threads of an all-threads task through open and save", () => {
+    const draft = taskToDraft({
+      ...idleTask,
+      schedule: {
+        type: "idle",
+        maxRuns: 4,
+        minPauseMs: 90_000,
+        runsUsed: 3,
+        allOpenThreads: true,
+        maxParallel: 3,
+        supervise: true,
+        supervised: { "thread:a": 2 },
+        excludeThreadIds: [ThreadId.make("thread:legal")],
+      },
+    });
+    expect(draft.idleSupervise).toBe(true);
+    expect(draft.idleExcludeThreadIds).toEqual(["thread:legal"]);
+    // The server's own counters are not sent back.
+    expect(scheduleFromDraft(draft)).toEqual({
+      type: "idle",
+      maxRuns: 4,
+      minPauseMs: 90_000,
+      allOpenThreads: true,
+      maxParallel: 3,
+      supervise: true,
+      excludeThreadIds: ["thread:legal"],
+    });
+    expect(scheduleFromDraft({ ...draft, idleSupervise: false, idleExcludeThreadIds: [] })).toEqual(
+      { type: "idle", maxRuns: 4, minPauseMs: 90_000, allOpenThreads: true, maxParallel: 3 },
+    );
   });
 
   it("refuses a missing or unbounded run limit", () => {
