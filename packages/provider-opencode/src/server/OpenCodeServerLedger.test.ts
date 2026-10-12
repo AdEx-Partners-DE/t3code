@@ -221,7 +221,7 @@ describe.runIf(hostPlatform === "win32")("OpenCodeServerLedger on Windows", () =
         stateDir,
         ownerPid: previousServer.pid,
       });
-      yield* Effect.asVoid(previousLedger.track({ pid: serverPid, port: 4096, args: SERVE_ARGS }));
+      yield* Effect.asVoid(previousLedger.record({ pid: serverPid, port: 4096, args: SERVE_ARGS }));
       previousServer.kill();
       yield* previousServer.exited;
     });
@@ -294,6 +294,22 @@ describe.runIf(hostPlatform === "win32")("OpenCodeServerLedger on Windows", () =
   );
 
   it.live(
+    "forgetting a server cancels its pending recording and leaves no entry",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+        const server = yield* spawnWindowsServer(SERVE_ARGS);
+        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+        // Returns at once: the process queries run in the background.
+        const forget = yield* ledger.track({ pid: server.pid, port: 4096, args: SERVE_ARGS });
+        yield* forget;
+        expect(yield* entries(stateDir)).toHaveLength(0);
+      }).pipe(provideHost),
+    60_000,
+  );
+
+  it.live(
     "leaves the servers of a running T3 server alone",
     () =>
       Effect.gen(function* () {
@@ -305,7 +321,7 @@ describe.runIf(hostPlatform === "win32")("OpenCodeServerLedger on Windows", () =
           stateDir,
           ownerPid: runningOwner.pid,
         });
-        yield* Effect.asVoid(ownerLedger.track({ pid: server.pid, port: 4096, args: SERVE_ARGS }));
+        yield* Effect.asVoid(ownerLedger.record({ pid: server.pid, port: 4096, args: SERVE_ARGS }));
 
         const ledger = yield* OpenCodeServerLedger.make({ stateDir });
         yield* ledger.reapOrphans;

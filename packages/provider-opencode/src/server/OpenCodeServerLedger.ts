@@ -1,6 +1,7 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -284,7 +285,7 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
     ),
   );
 
-  const track: OpenCodeServerLedger["Service"]["track"] = (server) =>
+  const record = (server: Parameters<OpenCodeServerLedger["Service"]["track"]>[0]) =>
     Effect.gen(function* () {
       if (!recordable) return Effect.void;
       const pgid = server.pid;
@@ -340,7 +341,24 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
           Effect.as(Effect.void),
         ),
       ),
+      Effect.withSpan("OpenCodeServerLedger.record"),
     );
+
+  const track: OpenCodeServerLedger["Service"]["track"] = (server) =>
+    platform !== "win32"
+      ? record(server)
+      : // A process query on Windows starts PowerShell, which takes seconds on a busy machine.
+        // The server start does not wait for it, and a start that is interrupted (a provider
+        // check that gave up) does not cancel it; forgetting the server cancels it instead.
+        Effect.gen(function* () {
+          const recording = yield* Effect.forkDetach(record(server));
+          return Fiber.interrupt(recording).pipe(
+            Effect.andThen(fs.remove(path.join(directory, `${server.pid}.json`), { force: true })),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not forget a stopped OpenCode server", { cause }),
+            ),
+          );
+        });
 
   // Signals only a group whose recorded member still has the same pid, start
   // time, group, and full command line, so a recycled pid is never touched.
@@ -404,7 +422,8 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
     );
   });
 
-  return { track, reapOrphans };
+  // `record` is `track` without the Windows background fork, for callers that need the entry.
+  return { track, record, reapOrphans };
 });
 
 /** Tracks servers under `stateDir`, the server's own state directory. */
