@@ -64,6 +64,9 @@ const REVIEW_METADATA_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 // much faster than the file count (50k files took about 30 seconds). Past this many, the
 // totals are reported incomplete instead.
 const REVIEW_UNTRACKED_MAX_FILES = 5_000;
+// git add reads every untracked file to hash it, so a few thousand files of build output or
+// exports can still outlast the git timeout (5.7 GB in 3,757 files did on every refresh).
+const REVIEW_UNTRACKED_MAX_BYTES = 256 * 1024 * 1024;
 const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 // Patches the clients render are parsed against git's default a/ and b/ path
 // prefixes. A repository or global diff.noprefix or diff.mnemonicPrefix would
@@ -2700,6 +2703,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     );
     if (paths.length === 0) return { env: undefined };
     if (paths.length > REVIEW_UNTRACKED_MAX_FILES) return null;
+    const sizes = yield* Effect.forEach(
+      paths,
+      (relativePath) =>
+        fileSystem.stat(path.resolve(cwd, relativePath)).pipe(
+          Effect.map((info) => Number(info.size)),
+          Effect.orElseSucceed(() => 0),
+        ),
+      { concurrency: 16 },
+    );
+    if (sizes.reduce((sum, size) => sum + size, 0) > REVIEW_UNTRACKED_MAX_BYTES) return null;
     const env = yield* prepareReviewIndex(cwd, paths).pipe(
       Effect.catchTags({
         PlatformError: (cause) =>
@@ -2764,14 +2777,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   ) {
     const { baseRef, mergeBase } = yield* resolveReviewMergeBase(cwd, branch);
     const untracked = yield* prepareUntrackedReviewIndex(cwd, []);
-    if (untracked === null) {
-      return yield* new GitCommandError({
-        operation: "GitVcsDriver.readBranchChangeTotals",
-        command: "git ls-files",
-        cwd,
-        detail: "Too many untracked files to count.",
-      });
-    }
+    // Too many or too large untracked files to count on every refresh: no totals, which is
+    // expected for such a folder and not a failure.
+    if (untracked === null) return undefined;
     const readNumstat = (ref: string) =>
       executeGit(
         "GitVcsDriver.readBranchChangeTotals",

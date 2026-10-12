@@ -2267,6 +2267,22 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("skips Changes totals instead of hashing untracked files beyond the size limit", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* writeTextFile(cwd, "export.bin", "");
+        yield* fileSystem.truncate(`${cwd}/export.bin`, 257 * 1024 * 1024);
+        yield* writeTextFile(cwd, "README.md", "changed\n");
+
+        const status = yield* driver.statusDetailsLocal(cwd, { includeBranchChanges: true });
+        assert.isTrue(status.hasWorkingTreeChanges);
+        assert.isUndefined(status.branchChanges);
+      }),
+    );
+
     it.effect("Changes does not show newer base commits as deletions", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
