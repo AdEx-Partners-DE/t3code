@@ -282,6 +282,10 @@ import {
   formatUpcomingTimestamp,
 } from "../../timestampFormat";
 import { formatRunContextUsage, type RunContextUsage } from "../../lib/contextWindow";
+import { limitLeftAt } from "../usage/usageLimitTrend";
+import { serverEnvironment } from "../../state/server";
+import { AsyncResult } from "effect/reactivity";
+import * as Option from "effect/Option";
 import { FetchedToolOutput, V2ItemInspector } from "./V2ItemInspector";
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
@@ -2676,6 +2680,15 @@ function TimelineRowTimestamp({
 
 const NO_RUN_CONTEXT_USAGE: ReadonlyMap<string, RunContextUsage> = new Map();
 
+// Recorded limit readings of the last days, asked for once per session: the
+// key must hold still or every turn row would ask anew.
+const LIMIT_HISTORY_DAY_MS = 24 * 60 * 60_000;
+const LIMIT_HISTORY_INPUT = {
+  since: new Date(
+    Math.floor(Date.now() / LIMIT_HISTORY_DAY_MS) * LIMIT_HISTORY_DAY_MS - 8 * LIMIT_HISTORY_DAY_MS,
+  ).toISOString(),
+};
+
 /** The model and account a run worked on, in the names the model picker uses. */
 export function runModelAndAccount(
   run: Pick<HandoffTimelineRun, "providerInstanceId" | "modelSelection"> | undefined,
@@ -2693,10 +2706,25 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
   const ctx = use(TimelineRowCtx);
   const run = ctx.runs.find((candidate) => candidate.id === row.runId);
   const contextUsage = ctx.runContextUsage.get(row.runId);
-  // What the turn ran on and how much it knew at its end.
+  const limitHistory = Option.getOrNull(
+    AsyncResult.value(
+      useAtomValue(
+        serverEnvironment.usageLimitHistory({
+          environmentId: ctx.activeThreadEnvironmentId,
+          input: LIMIT_HISTORY_INPUT,
+        }),
+      ),
+    ),
+  );
+  const limitLeft =
+    run === undefined || limitHistory === null
+      ? null
+      : limitLeftAt(limitHistory.points, run.providerInstanceId, Date.parse(row.endedAt));
+  // What the turn ran on, how much it knew at its end and what the account had left then.
   const detail = [
     runModelAndAccount(run, ctx.providerStatuses),
     contextUsage === undefined ? undefined : formatRunContextUsage(contextUsage),
+    limitLeft ?? undefined,
   ]
     .filter((part) => part !== undefined)
     .join(" · ");

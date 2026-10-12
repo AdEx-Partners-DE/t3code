@@ -1,7 +1,12 @@
 import { ProviderDriverKind, ProviderInstanceId, type UsageLimitHistory } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildUsageLimitTrend, forecastUsageWindow, usedPerDay } from "./usageLimitTrend";
+import {
+  buildUsageLimitTrend,
+  forecastUsageWindow,
+  limitLeftAt,
+  usedPerDay,
+} from "./usageLimitTrend";
 
 const SINCE = Date.parse("2026-10-10T00:00:00.000Z");
 const NOW = Date.parse("2026-10-11T00:00:00.000Z");
@@ -218,5 +223,39 @@ describe("resets in the trend", () => {
     const [account] = buildUsageLimitTrend({ history, providers, sinceMs: SINCE, nowMs: NOW });
     expect(account?.lines[0]?.resetMarks).toEqual([50]);
     expect(account?.lines[0]?.unusedAtResets).toBe(30);
+  });
+});
+
+describe("limitLeftAt", () => {
+  const instanceId = ProviderInstanceId.make("codex_stark_cli");
+  const point = (at: string, kind: "weekly" | "session", usedPercent: number, resetsAt?: string) =>
+    ({
+      at,
+      instanceId,
+      windowId: kind,
+      kind,
+      label: kind === "weekly" ? "Weekly" : "Session",
+      usedPercent,
+      ...(resetsAt === undefined ? {} : { resetsAt }),
+    }) as UsageLimitHistory["points"][number];
+  const points = [
+    point("2026-10-12T08:00:00.000Z", "weekly", 40, "2026-10-18T04:00:00.000Z"),
+    point("2026-10-12T09:00:00.000Z", "session", 90),
+    point("2026-10-12T12:00:00.000Z", "weekly", 68, "2026-10-18T04:00:00.000Z"),
+  ];
+
+  it("takes the last long-window reading before the moment, not the session window", () => {
+    expect(limitLeftAt(points, instanceId, Date.parse("2026-10-12T10:00:00.000Z"))).toBe(
+      "Weekly 60% left",
+    );
+    expect(limitLeftAt(points, instanceId, Date.parse("2026-10-12T13:00:00.000Z"))).toBe(
+      "Weekly 32% left",
+    );
+  });
+
+  it("says nothing without a reading, for another account, or after the window reset", () => {
+    expect(limitLeftAt(points, instanceId, Date.parse("2026-10-12T07:00:00.000Z"))).toBeNull();
+    expect(limitLeftAt(points, "claudeAgent", Date.parse("2026-10-12T13:00:00.000Z"))).toBeNull();
+    expect(limitLeftAt(points, instanceId, Date.parse("2026-10-19T00:00:00.000Z"))).toBeNull();
   });
 });

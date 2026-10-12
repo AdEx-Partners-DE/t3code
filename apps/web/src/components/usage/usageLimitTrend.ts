@@ -213,3 +213,27 @@ export function buildUsageLimitTrend(input: {
       };
     });
 }
+
+/**
+ * What an account's long window (weekly or monthly, not the session window)
+ * had left at a moment in the past, in words: "Weekly 32% left". Readings are
+ * recorded only where they change, so the last one before the moment holds.
+ * Null without a reading, or when that window had reset before the moment and
+ * no reading followed.
+ */
+export function limitLeftAt(
+  points: UsageLimitHistory["points"],
+  instanceId: string,
+  atMs: number,
+): string | null {
+  let latest: UsageLimitHistory["points"][number] | null = null;
+  for (const point of points) {
+    if (point.instanceId !== instanceId || point.kind === "session") continue;
+    const pointMs = Date.parse(point.at);
+    if (pointMs > atMs) continue;
+    if (latest === null || pointMs >= Date.parse(latest.at)) latest = point;
+  }
+  if (latest === null) return null;
+  if (latest.resetsAt !== undefined && Date.parse(latest.resetsAt) <= atMs) return null;
+  return `${latest.label} ${Math.max(0, Math.round(100 - latest.usedPercent))}% left`;
+}
