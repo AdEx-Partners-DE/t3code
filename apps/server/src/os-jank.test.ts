@@ -98,12 +98,37 @@ effectIt.effect("hydrates PATH when the desktop handoff is absent", () =>
   ),
 );
 
-effectIt.effect("repairs Windows PATH even when the desktop marks it prepared", () =>
+effectIt.effect("keeps the prepared Windows PATH when the desktop marks it prepared", () =>
   Effect.gen(function* () {
-    const env: NodeJS.ProcessEnv = { PATH: "C:\\Windows" };
+    const env: NodeJS.ProcessEnv = { PATH: "C:\\Prepared\\Bin;C:\\Windows" };
     const commands: string[] = [];
 
     yield* fixPath({ shellEnvironmentPrepared: true }).pipe(
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Environment, env),
+      Effect.provideService(WindowsShellEnvironment, () => {
+        throw new Error("The prepared Windows environment must not launch another shell");
+      }),
+      Effect.provideService(CommandAvailability, (command) =>
+        Effect.sync(() => {
+          commands.push(command);
+          return true;
+        }),
+      ),
+      Effect.provide(NodeServices.layer),
+    );
+
+    assert.deepEqual(commands, []);
+    assert.equal(env.PATH, "C:\\Prepared\\Bin;C:\\Windows");
+  }),
+);
+
+effectIt.effect("repairs Windows PATH when the desktop handoff is absent", () =>
+  Effect.gen(function* () {
+    const env: NodeJS.ProcessEnv = { Path: "C:\\Windows" };
+    const commands: string[] = [];
+
+    yield* fixPath().pipe(
       Effect.provideService(HostProcess.Platform, "win32"),
       Effect.provideService(HostProcess.Environment, env),
       Effect.provideService(WindowsShellEnvironment, () => ({ PATH: "C:\\Tools" })),
@@ -118,5 +143,6 @@ effectIt.effect("repairs Windows PATH even when the desktop marks it prepared", 
 
     assert.deepEqual(commands, ["node"]);
     assert.equal(env.PATH, "C:\\Tools;C:\\Windows");
+    assert.equal(env.Path, undefined);
   }),
 );

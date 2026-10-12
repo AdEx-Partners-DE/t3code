@@ -648,6 +648,35 @@ effectIt.layer(NodeServices.layer)("resolveSpawnCommand", (it) => {
     }),
   );
 
+  it.effect("resolves with the same PATH spellings the spawned child inherits", () =>
+    Effect.gen(function* () {
+      let resolvedEnvironment: NodeJS.ProcessEnv | undefined;
+      yield* resolveSpawnCommand("codex", [], {
+        env: { Path: "C:\\custom" },
+        extendEnv: true,
+      }).pipe(
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(CommandResolutionCache, new Map()),
+        Effect.provideService(HostProcess.Environment, {
+          PATH: "C:\\host",
+          PATHEXT: ".EXE",
+        }),
+        Effect.provideService(SpawnExecutableResolution, (_command, _platform, env) => {
+          resolvedEnvironment = env;
+          return "C:\\host\\codex.exe";
+        }),
+      );
+
+      // The child process spawner merges with a plain spread, so resolution must
+      // not collapse PATH spellings the child will still see.
+      expect(resolvedEnvironment).toEqual({
+        PATH: "C:\\host",
+        PATHEXT: ".EXE",
+        Path: "C:\\custom",
+      });
+    }),
+  );
+
   it.effect("scans PATH once per command until the search environment changes", () =>
     Effect.gen(function* () {
       const scans: Array<string> = [];

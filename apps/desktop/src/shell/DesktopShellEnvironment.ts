@@ -382,6 +382,13 @@ const installWindowsEnvironment = Effect.fn("desktop.shellEnvironment.installWin
     ]);
 
     if (Option.isSome(mergedPath)) {
+      if (config.env !== process.env) {
+        for (const existingKey of Object.keys(config.env)) {
+          if (existingKey !== "PATH" && existingKey.toUpperCase() === "PATH") {
+            delete config.env[existingKey];
+          }
+        }
+      }
       config.env.PATH = mergedPath.value;
     }
     if (!config.env.FNM_DIR && profile.FNM_DIR) {

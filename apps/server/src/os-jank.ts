@@ -55,6 +55,7 @@ export const fixPath = Effect.fn("fixPath")(function* (options?: {
   const env = yield* HostProcess.Environment;
 
   if (platform === "win32") {
+    if (options?.shellEnvironmentPrepared === true) return;
     const repairedEnvironment = yield* resolveWindowsEnvironment(env).pipe(
       Effect.catchDefect((defect) =>
         Effect.sync(() => {
@@ -65,6 +66,13 @@ export const fixPath = Effect.fn("fixPath")(function* (options?: {
     );
     for (const [key, value] of Object.entries(repairedEnvironment)) {
       if (value !== undefined) {
+        if (key.toUpperCase() === "PATH") {
+          for (const existingKey of Object.keys(env)) {
+            if (existingKey !== key && existingKey.toUpperCase() === "PATH") {
+              delete env[existingKey];
+            }
+          }
+        }
         env[key] = value;
       }
     }
