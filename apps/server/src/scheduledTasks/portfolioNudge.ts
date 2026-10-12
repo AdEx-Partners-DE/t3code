@@ -43,7 +43,7 @@ export interface PortfolioNudgePlan<T> {
 export function planPortfolioNudge<T extends PortfolioThread>(input: {
   readonly schedule: Pick<
     ScheduledTaskIdleSchedule,
-    "maxRuns" | "runsUsed" | "minPauseMs" | "maxParallel" | "nudged"
+    "maxRuns" | "runsUsed" | "minPauseMs" | "maxParallel" | "nudged" | "excludeThreadIds"
   >;
   readonly threads: ReadonlyArray<T>;
   readonly nowMs: number;
@@ -62,9 +62,13 @@ export function planPortfolioNudge<T extends PortfolioThread>(input: {
   if (slots <= 0) return { targets: [], working, remembered };
   const finishedAt = (thread: T) =>
     thread.latestRunCompletedAt == null ? 0 : DateTime.toEpochMillis(thread.latestRunCompletedAt);
+  // Left out threads still count as working: the cap is about the machine,
+  // not about who the task may write to.
+  const excluded = new Set<string>(schedule.excludeThreadIds ?? []);
   const targets = open
     .filter(
       (thread) =>
+        !excluded.has(thread.id) &&
         standsStill(thread, input.nowMs) &&
         remembered[thread.id] !== thread.latestRunId &&
         input.nowMs - finishedAt(thread) >= schedule.minPauseMs,

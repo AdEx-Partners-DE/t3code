@@ -75,7 +75,14 @@ import {
 } from "./scheduledTasksSettings.logic";
 import { Label } from "../ui/label";
 import { isTaskHeldByPause, taskRunsOnItsOwn } from "@t3tools/contracts";
-import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator } from "../ui/menu";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { ToggleGroup, Toggle } from "../ui/toggle-group";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "../ui/empty";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
@@ -134,6 +141,7 @@ const EMPTY_DRAFT: DraftState = {
   idleAllOpenThreads: false,
   idleProjectOnly: false,
   idleSupervise: false,
+  idleExcludeThreadIds: [],
   idleMaxParallel: "2",
   timeOfDay: "09:00",
   weekdays: new Set([1, 2, 3, 4, 5]),
@@ -922,6 +930,35 @@ function ScheduledTaskEditorDialog({
     : task;
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  // Threads an all-threads task can leave out: the open threads it would
+  // otherwise cover, plus any it already leaves out.
+  const excludableThreads = useMemo(
+    () =>
+      draft.scheduleMode !== "idle" || !draft.idleAllOpenThreads
+        ? []
+        : allThreadShells
+            .filter(
+              (thread) =>
+                thread.environmentId === environmentId &&
+                (draft.idleExcludeThreadIds.includes(thread.id) ||
+                  (thread.archivedAt === null &&
+                    // Open as the server counts it: not settled, or taken up again.
+                    thread.lineage.relationshipToParent !== "subagent" &&
+                    thread.settledOverride !== "settled" &&
+                    (thread.settledAt === null || thread.settledOverride === "active") &&
+                    (!draft.idleProjectOnly || thread.projectId === selectedProjectId))),
+            )
+            .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    [
+      allThreadShells,
+      draft.idleAllOpenThreads,
+      draft.idleExcludeThreadIds,
+      draft.idleProjectOnly,
+      draft.scheduleMode,
+      environmentId,
+      selectedProjectId,
+    ],
+  );
   // Threads an idle task can post to or wait for: this environment's open
   // threads of the chosen project, most recently active first.
   const idleThreads = useMemo(
@@ -1535,6 +1572,46 @@ function ScheduledTaskEditorDialog({
                           }
                         />
                         <span className="text-xs text-muted-foreground">are at work</span>
+                        <Menu>
+                          <MenuTrigger
+                            render={
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                aria-label="Threads this task leaves out"
+                              />
+                            }
+                          >
+                            {draft.idleExcludeThreadIds.length === 0
+                              ? "Leaves out no thread"
+                              : `Leaves out ${draft.idleExcludeThreadIds.length} ${draft.idleExcludeThreadIds.length === 1 ? "thread" : "threads"}`}
+                          </MenuTrigger>
+                          <MenuPopup align="start">
+                            {excludableThreads.length === 0 ? (
+                              <MenuItem disabled>No open threads</MenuItem>
+                            ) : (
+                              excludableThreads.map((thread) => (
+                                <MenuCheckboxItem
+                                  key={thread.id}
+                                  checked={draft.idleExcludeThreadIds.includes(thread.id)}
+                                  closeOnClick={false}
+                                  onCheckedChange={(checked) =>
+                                    setDraft((current) => ({
+                                      ...current,
+                                      idleExcludeThreadIds: checked
+                                        ? [...current.idleExcludeThreadIds, thread.id]
+                                        : current.idleExcludeThreadIds.filter(
+                                            (id) => id !== thread.id,
+                                          ),
+                                    }))
+                                  }
+                                >
+                                  {thread.title}
+                                </MenuCheckboxItem>
+                              ))
+                            )}
+                          </MenuPopup>
+                        </Menu>
                         <div className="flex w-full items-center gap-2">
                           <Switch
                             checked={draft.idleSupervise}

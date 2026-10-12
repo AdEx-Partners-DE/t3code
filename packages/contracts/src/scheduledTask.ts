@@ -156,6 +156,9 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
   projectOnly: Schema.optional(Schema.Boolean).annotate({
     description: "With allOpenThreads: cover only the open threads of the task's project.",
   }),
+  excludeThreadIds: Schema.optional(Schema.Array(ThreadId)).annotate({
+    description: "With allOpenThreads: threads this task never sends to.",
+  }),
   supervise: Schema.optional(Schema.Boolean).annotate({
     description:
       "With allOpenThreads: a model reads each standing thread's last reply first. A thread that only asked for leave it already has gets an instruction to go on instead of the task's prompt; a thread that really needs the user is left alone. At most twice per thread.",

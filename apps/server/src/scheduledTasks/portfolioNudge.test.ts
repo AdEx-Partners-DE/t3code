@@ -44,6 +44,18 @@ describe("planPortfolioNudge", () => {
     expect(ids(plan)).toEqual(["new", "mid"]);
   });
 
+  it("never sends to a thread the task leaves out", () => {
+    const plan = planPortfolioNudge({
+      schedule: { ...schedule, excludeThreadIds: [ThreadId.make("new")] },
+      threads: [
+        thread("old", { latestRunCompletedAt: at("2026-10-10T09:00:00.000Z") }),
+        thread("new", { latestRunCompletedAt: at("2026-10-11T11:30:00.000Z") }),
+      ],
+      nowMs: NOW,
+    });
+    expect(ids(plan)).toEqual(["old"]);
+  });
+
   it("counts threads already at work against the cap", () => {
     const threads = [
       thread("busy", { activeRunId: RunId.make("run:busy:2") }),
