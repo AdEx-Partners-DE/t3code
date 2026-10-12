@@ -576,6 +576,8 @@ type MessagesTimelineRowContent =
       kind: "turn-fold";
       id: string;
       createdAt: string;
+      /** When the turn's last entry ended: the moment the state below it was reached. */
+      endedAt: string;
       runId: RunId;
       label: string;
       expanded: boolean;
@@ -740,6 +742,7 @@ interface TurnFold {
   runId: RunId;
   anchorEntryId: string;
   createdAt: string;
+  endedAt: string;
   hiddenEntryIds: ReadonlySet<string>;
   label: string;
 }
@@ -1192,6 +1195,9 @@ function deriveTurnFolds(input: {
       runId,
       anchorEntryId: group.anchorEntryId,
       createdAt: group.startBoundary ?? firstEntry.createdAt,
+      endedAt:
+        maxIsoTimestamp(group.terminalEntry?.message.updatedAt ?? null, lastEntryEnd) ??
+        lastEntryEnd,
       hiddenEntryIds,
       label,
     });
@@ -1601,6 +1607,7 @@ export function deriveMessagesTimelineRows(input: {
         kind: "turn-fold",
         id: `turn-fold:${turnFold.runId}`,
         createdAt: turnFold.createdAt,
+        endedAt: turnFold.endedAt,
         runId: turnFold.runId,
         label: turnFold.label,
         expanded: input.expandedRunIds?.has(turnFold.runId) ?? false,
