@@ -5,6 +5,7 @@ import * as DateTime from "effect/DateTime";
 import {
   buildChecklistTranscript,
   buildChecklistTranscriptWithSources,
+  checklistIsCurrent,
   turnsFinishedSince,
 } from "./threadChecklistTranscript.ts";
 
@@ -126,5 +127,17 @@ describe("turnsFinishedSince", () => {
   it("counts every finished turn when there is no checklist or its run is gone", () => {
     expect(turnsFinishedSince(runs, null)).toBe(3);
     expect(turnsFinishedSince(runs, "run:deleted")).toBe(3);
+  });
+});
+
+describe("checklistIsCurrent", () => {
+  it("is current only when it was written from the thread's latest run", () => {
+    expect(checklistIsCurrent({ basedOnRunId: "run:2" }, "run:2")).toBe(true);
+    expect(checklistIsCurrent({ basedOnRunId: "run:1" }, "run:2")).toBe(false);
+  });
+
+  it("is not current without a checklist or without a run to compare", () => {
+    expect(checklistIsCurrent(null, "run:2")).toBe(false);
+    expect(checklistIsCurrent({ basedOnRunId: null }, null)).toBe(false);
   });
 });

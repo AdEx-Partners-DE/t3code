@@ -25,6 +25,7 @@ import * as ThreadManagement from "./ThreadManagementService.ts";
 import { recordDecision } from "../decisionLog.ts";
 import {
   buildChecklistTranscriptWithSources,
+  checklistIsCurrent,
   turnsFinishedSince,
 } from "./threadChecklistTranscript.ts";
 
@@ -46,6 +47,17 @@ export const make = Effect.gen(function* () {
   const directory = path.join(config.stateDir, CHECKLIST_DIRECTORY);
   // Two at a time: a refresh is a model call, and a client may ask for several threads at once.
   const lock = yield* Semaphore.make(2);
+
+  // One rewrite per thread at a time, so a second request waits for the
+  // first one's result instead of making the same model call beside it.
+  const threadLocks = new Map<string, Semaphore.Semaphore>();
+  const lockOf = (threadId: ThreadId) => {
+    const known = threadLocks.get(threadId);
+    if (known !== undefined) return known;
+    const created = Semaphore.makeUnsafe(1);
+    threadLocks.set(threadId, created);
+    return created;
+  };
 
   // Thread ids hold characters a file name cannot; the id's own uuids keep names apart.
   const fileOf = (threadId: ThreadId) =>
@@ -78,6 +90,15 @@ export const make = Effect.gen(function* () {
     const records = yield* threads.getThreadRecords(threadId, ["messages"]);
     const shell = yield* threads.getThreadShell(threadId);
     const previous = yield* read(threadId);
+    // Two clients with the same thread open both ask for the automatic
+    // rewrite. The second finds the first one's result and takes it.
+    if (
+      trigger === "auto" &&
+      previous !== null &&
+      checklistIsCurrent(previous, shell?.latestRunId ?? null)
+    ) {
+      return previous;
+    }
     const { transcript, messageIdOfEntry } = buildChecklistTranscriptWithSources(
       records.messages,
       TRANSCRIPT_BUDGET,
@@ -155,7 +176,7 @@ export const make = Effect.gen(function* () {
     listOpen,
     /** Writes the checklist anew from the thread as it stands and stores it. */
     refresh: (threadId: ThreadId, trigger?: "auto" | "manual" | "batch") =>
-      lock.withPermits(1)(refresh(threadId, trigger)),
+      lockOf(threadId).withPermits(1)(lock.withPermits(1)(refresh(threadId, trigger))),
     turnsBehind,
   };
 });

@@ -164,3 +164,15 @@ export function buildChecklistTranscriptWithSources(
     ),
   };
 }
+
+/**
+ * Whether a stored checklist already covers the thread as it stands: it was
+ * written from the thread's latest run. Rewriting it then would spend a model
+ * call on the same input.
+ */
+export function checklistIsCurrent(
+  checklist: { readonly basedOnRunId: string | null } | null,
+  latestRunId: string | null,
+): boolean {
+  return checklist !== null && latestRunId !== null && checklist.basedOnRunId === latestRunId;
+}
