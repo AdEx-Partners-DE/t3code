@@ -1907,7 +1907,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     if (statusResult.exitCode !== 0) {
-      if (isNonRepositoryGitStderr(statusResult.stderr)) {
+      // A bare repository root, used through worktrees elsewhere, has no checkout to report.
+      if (
+        isNonRepositoryGitStderr(statusResult.stderr) ||
+        statusResult.stderr.toLowerCase().includes("must be run in a work tree")
+      ) {
         return NON_REPOSITORY_STATUS_DETAILS;
       }
       return yield* new GitCommandError({
