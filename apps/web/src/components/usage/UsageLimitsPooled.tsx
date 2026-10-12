@@ -289,10 +289,13 @@ function PoolSegment({
             </span>
           ) : null}
           <span className="shrink-0 font-semibold text-foreground tabular-nums">{remaining}%</span>
-          {/* Countdown and badge get their own plate: fill and hatching run under them otherwise. */}
-          <span className="ms-auto flex shrink-0 items-center gap-1.5 rounded-sm bg-background/85 px-1.5 py-0.5 text-2xs leading-none text-foreground tabular-nums">
-            <ResetBadges resetsIn={resetsIn} credits={credits} />
-          </span>
+          {/* Countdown and badge get their own plate: fill and hatching run under them otherwise.
+              An unstarted window has no reset, so the plate is skipped rather than drawn empty. */}
+          {resetsIn || credits ? (
+            <span className="ms-auto flex shrink-0 items-center gap-1.5 rounded-sm bg-background/85 px-1.5 py-0.5 text-2xs leading-none text-foreground tabular-nums">
+              <ResetBadges resetsIn={resetsIn} credits={credits} />
+            </span>
+          ) : null}
         </div>
       </PopoverTrigger>
       <LegendRow account={account} window={window} now={now} index={index} />
