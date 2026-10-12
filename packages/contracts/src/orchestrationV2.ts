@@ -3925,6 +3925,14 @@ export const OrchestrationV2RpcSchemas = {
       /** Set when one thread was asked for; null when it has no checklist yet. */
       checklist: Schema.optional(Schema.NullOr(ThreadChecklist)),
       /**
+       * Open threads whose agent has asked the user something and waits for
+       * the answer, with the time of the oldest such question. Such a run is
+       * silent because it waits, not because it hangs.
+       */
+      pendingQuestions: Schema.optional(
+        Schema.Array(Schema.Struct({ threadId: ThreadId, since: IsoDateTime })),
+      ),
+      /**
        * Set while an update waits to go in: until then no task starts by
        * itself, so a task that reads "on" is seen to be kept back.
        */

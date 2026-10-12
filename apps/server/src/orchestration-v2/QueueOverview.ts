@@ -44,6 +44,12 @@ export interface LastReply {
   readonly at: string;
 }
 
+export interface PendingQuestion {
+  readonly threadId: ThreadId;
+  /** When the oldest unanswered question was asked. */
+  readonly since: string;
+}
+
 export const REPLY_PREVIEW_LENGTH = 220;
 
 /** A reply as one short line: whitespace folded, cut at a word where one is near. */
@@ -69,6 +75,17 @@ export function waitingQueuesOf(
       oldestQueuedAt: row.oldest,
     }))
     .toSorted((left, right) => left.oldestQueuedAt.localeCompare(right.oldestQueuedAt));
+}
+
+/** Keeps the questions of open threads, the longest wait first. */
+export function pendingQuestionsOf(
+  rows: ReadonlyArray<{ readonly thread_id: string; readonly since: string }>,
+  openThreadIds: ReadonlySet<string>,
+): ReadonlyArray<PendingQuestion> {
+  return rows
+    .filter((row) => openThreadIds.has(row.thread_id))
+    .map((row) => ({ threadId: row.thread_id as ThreadId, since: row.since }))
+    .toSorted((left, right) => left.since.localeCompare(right.since));
 }
 
 export const make = Effect.gen(function* () {
@@ -127,6 +144,21 @@ export const make = Effect.gen(function* () {
     return runs.flat();
   });
 
+  // Tool calls and auth refreshes are answered by the app, not by a person.
+  const readPendingQuestions = Effect.gen(function* () {
+    const shell = yield* threads.getShellSnapshot();
+    const rows = yield* sql<{ readonly thread_id: string; readonly since: string }>`
+      SELECT thread_id, MIN(created_at) AS since
+      FROM orchestration_v2_projection_runtime_requests
+      WHERE status = 'pending' AND kind NOT IN ('dynamic_tool_call', 'auth_refresh')
+      GROUP BY thread_id
+    `;
+    return pendingQuestionsOf(
+      rows,
+      new Set(shell.threads.filter(isOpenThread).map((thread) => thread.id as string)),
+    );
+  });
+
   // One indexed lookup per open thread. The text is cut in the database
   // first, so a long reply never leaves it whole.
   const readLastReplies = Effect.gen(function* () {
@@ -155,6 +187,8 @@ export const make = Effect.gen(function* () {
   });
 
   return {
+    /** The open threads that wait for the user's answer, the longest wait first. */
+    readPendingQuestions,
     /** For each open thread that has one, the start of its last reply. */
     readLastReplies,
     /** The open threads with a waiting queue, the longest wait first. */

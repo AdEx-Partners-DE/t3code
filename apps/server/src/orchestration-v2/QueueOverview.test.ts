@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { REPLY_PREVIEW_LENGTH, replyPreview, waitingQueuesOf } from "./QueueOverview.ts";
+import {
+  pendingQuestionsOf,
+  REPLY_PREVIEW_LENGTH,
+  replyPreview,
+  waitingQueuesOf,
+} from "./QueueOverview.ts";
 
 describe("waitingQueuesOf", () => {
   it("keeps open threads only and puts the longest wait first", () => {
@@ -17,6 +22,20 @@ describe("waitingQueuesOf", () => {
         oldestQueuedAt: "2026-10-11T05:40:00.000Z",
       },
       { threadId: "thread:new", waiting: 1, held: 0, oldestQueuedAt: "2026-10-11T16:00:00.000Z" },
+    ]);
+  });
+});
+
+describe("pendingQuestionsOf", () => {
+  it("keeps open threads only and puts the longest wait first", () => {
+    const rows = [
+      { thread_id: "thread:new", since: "2026-10-12T11:40:00.000Z" },
+      { thread_id: "thread:settled", since: "2026-10-12T08:00:00.000Z" },
+      { thread_id: "thread:old", since: "2026-10-12T10:31:29.838Z" },
+    ];
+    expect(pendingQuestionsOf(rows, new Set(["thread:new", "thread:old"]))).toEqual([
+      { threadId: "thread:old", since: "2026-10-12T10:31:29.838Z" },
+      { threadId: "thread:new", since: "2026-10-12T11:40:00.000Z" },
     ]);
   });
 });

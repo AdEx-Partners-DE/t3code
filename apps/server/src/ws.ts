@@ -2007,6 +2007,7 @@ const layerWsRpc = (
               waitingQueues: yield* queueOverview.read,
               activeRuns: yield* queueOverview.readActiveRuns,
               lastReplies: yield* queueOverview.readLastReplies,
+              pendingQuestions: yield* queueOverview.readPendingQuestions,
               ...(updateHoldEndsAt === null
                 ? {}
                 : {

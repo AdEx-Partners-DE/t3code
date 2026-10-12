@@ -219,9 +219,24 @@ function CockpitWaitingQueues({
         {waitLabel(Date.parse(heldUntil) - nowMs)} at the latest
       </span>
     );
+  const questions = Option.getOrNull(AsyncResult.value(result))?.pendingQuestions ?? [];
+  const asking = new Set<string>(questions.map((question) => question.threadId));
+  // A run that waits for an answer is silent too, but it does not hang: it is named on its own.
   const quiet = (Option.getOrNull(AsyncResult.value(result))?.activeRuns ?? []).filter(
-    (run) => nowMs - Date.parse(run.lastEventAt) >= QUIET_RUN_MS,
+    (run) => !asking.has(run.threadId) && nowMs - Date.parse(run.lastEventAt) >= QUIET_RUN_MS,
   );
+  const questionLine =
+    questions.length === 0 ? null : (
+      <button
+        type="button"
+        data-testid="sidebar-cockpit-questions"
+        onClick={() => onFilter(asking)}
+        className="cursor-pointer self-start rounded-sm text-left font-medium tabular-nums text-warning-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      >
+        {questions.length} {questions.length === 1 ? "thread waits" : "threads wait"} for your
+        answer, the longest for {waitLabel(nowMs - Date.parse(questions[0]!.since))}
+      </button>
+    );
   const quietLine =
     quiet.length === 0 ? null : (
       <button
@@ -238,6 +253,7 @@ function CockpitWaitingQueues({
     return (
       <>
         {holdLine}
+        {questionLine}
         {quietLine}
         {filterOn ? (
           <button
@@ -256,6 +272,7 @@ function CockpitWaitingQueues({
   return (
     <>
       {holdLine}
+      {questionLine}
       {quietLine}
       <button
         type="button"
