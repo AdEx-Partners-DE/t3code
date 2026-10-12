@@ -2741,11 +2741,20 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         <span>{row.label}</span>
         <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
       </button>
-      {/* Always shown: when this turn ended tells at a glance how old the state below it is. */}
+      {/* Always shown: what the turn ran on and when it ended tell at a glance how old the
+          state below it is and what the agent knew then. Narrow rows keep only the time. */}
+      {detail === "" ? null : (
+        <span
+          data-testid="turn-state"
+          className="ms-auto hidden min-w-0 truncate text-muted-foreground text-xs tabular-nums sm:inline"
+        >
+          {detail}
+        </span>
+      )}
       <TimelineRowTimestamp
         createdAt={row.endedAt}
         timestampFormat={ctx.timestampFormat}
-        className="ms-auto"
+        className={detail === "" ? "ms-auto" : "ms-2"}
         alwaysVisible
         detail={detail === "" ? undefined : detail}
       />
