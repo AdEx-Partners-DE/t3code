@@ -60,6 +60,7 @@ import {
   supervisedSendsSinceUser,
 } from "./portfolioNudge.ts";
 import { recordDecision } from "../decisionLog.ts";
+import { currentUpdateHold } from "./updateHold.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 import {
   redactHeaders,
@@ -468,6 +469,29 @@ export const layer = Layer.effect(
             ),
             Effect.orElseSucceed(() => false),
           );
+    // While an update waits for a quiet moment no task starts by itself; due
+    // times stay as they are, so the tasks run right after. Webhooks and
+    // "run now" are not kept back.
+    const updateHolding = yield* Ref.make(false);
+    const isHeldForUpdate = Effect.gen(function* () {
+      const endsAt = yield* currentUpdateHold;
+      const holding = endsAt !== null;
+      if ((yield* Ref.getAndSet(updateHolding, holding)) !== holding) {
+        yield* recordDecision({
+          kind: "update-hold",
+          threadId: "-",
+          outcome: holding ? "holding-tasks" : "released",
+          ...(endsAt === null
+            ? {}
+            : { facts: { until: DateTime.formatIso(DateTime.makeUnsafe(endsAt)) } }),
+        });
+      }
+      return holding;
+    });
+    const startsByItself = (taskId: string) =>
+      Effect.gen(function* () {
+        return !(yield* isHeldByPause(taskId)) && !(yield* isHeldForUpdate);
+      });
     // Switching a held task on is the user resuming that one task. The pause
     // is over when the last task it still held has been switched on again,
     // or when the user resumes all at once.
@@ -1128,9 +1152,7 @@ export const layer = Layer.effect(
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
       );
       // A held task is left exactly as it is, due time and all, until it is resumed.
-      const free = yield* Effect.filter(tasks, (task) =>
-        isHeldByPause(task.id).pipe(Effect.map((held) => !held)),
-      );
+      const free = yield* Effect.filter(tasks, (task) => startsByItself(task.id));
       const due = free.flatMap((task) =>
         task.nextRunAt === null ? [] : [{ task, dueAt: DateTime.makeUnsafe(task.nextRunAt) }],
       );
@@ -1290,7 +1312,7 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const task = yield* decodeRow(row);
             if (task.schedule.type !== "idle" || task.threadId === null) return;
-            if (yield* isHeldByPause(task.id)) return;
+            if (!(yield* startsByItself(task.id))) return;
             // The thread whose silence starts the task: its own, or another
             // one when the task chains this thread's work behind that one's.
             const watchedThreadId = task.schedule.watchThreadId ?? ThreadId.make(task.threadId);
@@ -1381,7 +1403,7 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             const task = yield* decodeRow(row);
             if (task.schedule.type !== "idle" || task.schedule.allOpenThreads !== true) return;
-            if (yield* isHeldByPause(task.id)) return;
+            if (!(yield* startsByItself(task.id))) return;
             const schedule = task.schedule;
             const now = yield* localNow;
             const nowMs = DateTime.toEpochMillis(now);
