@@ -2,10 +2,14 @@ import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
 import {
+  parseStandingOverrides,
+  scopeCovers,
   standingOverrideFromApplied,
   standingSelectionFor,
   userChoseOtherModel,
+  withScopedOverride,
 } from "./StandingModelOverride.ts";
+import { threadScopeOf } from "./OpenThreadModelOverride.ts";
 
 type Input = Parameters<typeof standingSelectionFor>[0];
 const thread = (overrides: Partial<Input["thread"]> = {}) =>
@@ -77,5 +81,39 @@ describe("userChoseOtherModel", () => {
   it("sees none while the thread still has what the override set, or was never covered", () => {
     expect(userChoseOtherModel(sol, sol)).toBe(false);
     expect(userChoseOtherModel(undefined, opus)).toBe(false);
+  });
+});
+
+describe("standing overrides per part", () => {
+  type Override = Parameters<typeof withScopedOverride>[2];
+  const opus = { model: { instanceId: "claudeAgent", model: "claude-opus-5-5" } } as Override;
+  const sonnet = { model: { instanceId: "claudeAgent", model: "claude-sonnet-5-5" } } as Override;
+
+  it("reads a file from before the split as standing for both parts", () => {
+    expect(parseStandingOverrides(JSON.stringify(opus))).toEqual({ tasks: opus, adhoc: opus });
+  });
+
+  it("reads each part on its own", () => {
+    expect(parseStandingOverrides(JSON.stringify({ tasks: sonnet }))).toEqual({
+      tasks: sonnet,
+      adhoc: null,
+    });
+    expect(parseStandingOverrides("not json")).toBeNull();
+  });
+
+  it("sets tasks and ad-hoc threads apart, and all of them together", () => {
+    const both = withScopedOverride({ tasks: null, adhoc: null }, "all", opus);
+    expect(both).toEqual({ tasks: opus, adhoc: opus });
+    const split = withScopedOverride(both, "tasks", sonnet);
+    expect(split).toEqual({ tasks: sonnet, adhoc: opus });
+    expect(withScopedOverride(split, "adhoc", null)).toEqual({ tasks: sonnet, adhoc: null });
+  });
+
+  it("counts a thread a task posts to as a task thread", () => {
+    const tasks = new Set(["thread-a"]);
+    expect(threadScopeOf("thread-a", tasks)).toBe("tasks");
+    expect(threadScopeOf("thread-b", tasks)).toBe("adhoc");
+    expect(scopeCovers("all", "tasks")).toBe(true);
+    expect(scopeCovers("tasks", "adhoc")).toBe(false);
   });
 });

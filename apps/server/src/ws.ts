@@ -1963,7 +1963,10 @@ const layerWsRpc = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels]: (input) =>
           (input.restore === true
-            ? openThreadModelOverride.restore({ commandId: input.commandId })
+            ? openThreadModelOverride.restore({
+                commandId: input.commandId,
+                scope: input.scope ?? "all",
+              })
             : openThreadModelOverride.apply({
                 commandId: input.commandId,
                 override: {
@@ -1971,6 +1974,7 @@ const layerWsRpc = (
                   effort: input.effort,
                   keepOwnAccount: input.keepOwnAccount,
                 },
+                scope: input.scope ?? "all",
               })
           ).pipe(
             Effect.mapError(

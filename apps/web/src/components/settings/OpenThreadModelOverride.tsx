@@ -3,7 +3,12 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { CommandId, type EnvironmentId, type ProviderInstanceId } from "@t3tools/contracts";
+import {
+  CommandId,
+  type EnvironmentId,
+  type ModelOverrideScope,
+  type ProviderInstanceId,
+} from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useEffect, useMemo, useState } from "react";
 
@@ -22,6 +27,23 @@ import { useSettingsScope } from "./SettingsScopeContext";
 
 const KEEP = "";
 const MAX_LISTED_MODELS = 60;
+
+const SCOPES: ReadonlyArray<{ readonly id: ModelOverrideScope; readonly label: string }> = [
+  { id: "all", label: "All open threads" },
+  { id: "tasks", label: "Only scheduled task threads" },
+  { id: "adhoc", label: "Only threads without a task" },
+];
+/** How the confirmation and the toasts name the threads a scope covers. */
+const SCOPE_NOUN: Record<ModelOverrideScope, string> = {
+  all: "open thread",
+  tasks: "scheduled task thread",
+  adhoc: "open thread without a task",
+};
+const SCOPE_NOUN_PLURAL: Record<ModelOverrideScope, string> = {
+  all: "open threads",
+  tasks: "scheduled task threads",
+  adhoc: "open threads without a task",
+};
 
 interface ModelChoice {
   readonly key: string;
@@ -67,13 +89,14 @@ function OpenThreadModelOverrideControls({
   const [effort, setEffort] = useState(KEEP);
   const [keepOwnAccount, setKeepOwnAccount] = useState(false);
   const [filter, setFilter] = useState("");
+  const [scope, setScope] = useState<ModelOverrideScope>("all");
   const [pending, setPending] = useState(false);
-  // What the server holds in force. It also reaches threads that open later,
-  // so the page says so instead of looking as if nothing were set.
-  const [standing, setStanding] =
-    useState<Extract<Awaited<ReturnType<typeof apply>>, { _tag: "Success" }>["value"]["standing"]>(
-      null,
-    );
+  // What the server holds in force for task threads and for the others. It
+  // also reaches threads that open later, so the page says so instead of
+  // looking as if nothing were set.
+  const [standing, setStanding] = useState<
+    Extract<Awaited<ReturnType<typeof apply>>, { _tag: "Success" }>["value"]["standing"]
+  >({ tasks: null, adhoc: null });
   useEffect(() => {
     if (!allowed) return;
     let current = true;
@@ -157,10 +180,11 @@ function OpenThreadModelOverrideControls({
     const what = [chosen?.label, effortValue === KEEP ? null : `thinking ${effortValue}`]
       .filter((part) => part !== null && part !== undefined)
       .join(", ");
+    const noun = SCOPE_NOUN[scope];
     const confirmed = await ensureLocalApi().dialogs.confirm(
       action === "apply"
-        ? `Set ${what} on every open thread on ${environmentLabel}? Each thread uses it from its next message; a run under way is not touched.`
-        : `Put back the models the open threads on ${environmentLabel} had before? Threads you have changed since keep your choice.`,
+        ? `Set ${what} on every ${noun} on ${environmentLabel}? Each thread uses it from its next message; a run under way is not touched.`
+        : `Put back the models every ${noun} on ${environmentLabel} had before? Threads you have changed since keep your choice.`,
     );
     if (!confirmed) return;
     setPending(true);
@@ -177,17 +201,18 @@ function OpenThreadModelOverrideControls({
                 : { model: { instanceId: chosen.instanceId, model: chosen.model } }),
               ...(effortValue === KEEP ? {} : { effort: effortValue }),
               ...(keepOwnAccount && chosen !== null ? { keepOwnAccount: true } : {}),
+              scope,
             },
           }),
           (threads) =>
             threads === 0
-              ? "Every open thread already had this"
-              : `Set on ${threads} open ${threads === 1 ? "thread" : "threads"}`,
+              ? `Every ${noun} already had this`
+              : `Set on ${threads} ${threads === 1 ? noun : SCOPE_NOUN_PLURAL[scope]}`,
           "Could not set the model on the open threads",
         );
       } else {
         report(
-          await restore({ environmentId, input: { commandId, restore: true } }),
+          await restore({ environmentId, input: { commandId, restore: true, scope } }),
           (threads) =>
             threads === 0
               ? "Nothing to put back"
@@ -200,33 +225,63 @@ function OpenThreadModelOverrideControls({
     }
   };
 
-  const standingModel =
-    standing?.model === undefined
-      ? null
-      : (choices.find(
-          (choice) =>
-            choice.instanceId === standing.model?.instanceId &&
-            choice.model === standing.model?.model,
-        )?.label ?? `${standing.model.instanceId} · ${standing.model.model}`);
-  const standingText =
-    standing === null
-      ? null
+  const describe = (override: (typeof standing)["tasks"]) => {
+    if (override === null) return null;
+    const model =
+      override.model === undefined
+        ? null
+        : (choices.find(
+            (choice) =>
+              choice.instanceId === override.model?.instanceId &&
+              choice.model === override.model?.model,
+          )?.label ?? `${override.model.instanceId} · ${override.model.model}`);
+    return [
+      model,
+      override.effort === undefined ? null : `thinking ${override.effort}`,
+      override.keepOwnAccount === true ? "each thread stays on its own account" : null,
+    ]
+      .filter((part) => part !== null)
+      .join(", ");
+  };
+  const tasksText = describe(standing.tasks);
+  const adhocText = describe(standing.adhoc);
+  // One line when both parts follow the same override, one per part otherwise.
+  const standingLines =
+    tasksText !== null && tasksText === adhocText
+      ? [`In force for all open threads: ${tasksText}.`]
       : [
-          standingModel,
-          standing.effort === undefined ? null : `thinking ${standing.effort}`,
-          standing.keepOwnAccount === true ? "each thread stays on its own account" : null,
-        ]
-          .filter((part) => part !== null)
-          .join(", ");
+          tasksText === null ? null : `In force for scheduled task threads: ${tasksText}.`,
+          adhocText === null ? null : `In force for threads without a task: ${adhocText}.`,
+        ].filter((line) => line !== null);
 
   return (
     <div className="flex flex-wrap items-center gap-2 pt-3">
-      {standingText === null ? null : (
-        <p className="w-full text-xs text-muted-foreground" data-testid="standing-model-override">
-          In force: {standingText}. Threads that open later, and threads a scheduled task posts to,
-          are set to it as well, until you put it back.
-        </p>
+      {standingLines.length === 0 ? null : (
+        <div className="w-full text-xs text-muted-foreground" data-testid="standing-model-override">
+          {standingLines.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+          <p>
+            Threads that open later, or that a task wakes, are set to it as well, until you put it
+            back.
+          </p>
+        </div>
       )}
+      <Select
+        value={scope}
+        onValueChange={(value) => setScope((value as ModelOverrideScope | null) ?? "all")}
+      >
+        <SelectTrigger size="sm" aria-label="Which threads" className="w-56">
+          <SelectValue>{SCOPES.find((entry) => entry.id === scope)?.label}</SelectValue>
+        </SelectTrigger>
+        <SelectPopup>
+          {SCOPES.map((entry) => (
+            <SelectItem key={entry.id} value={entry.id}>
+              {entry.label}
+            </SelectItem>
+          ))}
+        </SelectPopup>
+      </Select>
       <Input
         nativeInput
         aria-label="Filter the model list"
@@ -279,7 +334,7 @@ function OpenThreadModelOverrideControls({
         disabled={pending || !allowed || (chosen === null && effortValue === KEEP)}
         onClick={() => void run("apply")}
       >
-        Set on all open threads
+        {scope === "all" ? "Set on all open threads" : `Set on ${SCOPE_NOUN_PLURAL[scope]}`}
       </Button>
       <Button
         size="xs"

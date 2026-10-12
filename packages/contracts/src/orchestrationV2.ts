@@ -74,6 +74,23 @@ import {
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
+
+/**
+ * Which open threads a model override covers: all of them, only the threads
+ * scheduled tasks post to, or only the others. Each part keeps its own
+ * standing override, so tasks and ad-hoc work can run on different models.
+ */
+export const ModelOverrideScope = Schema.Literals(["all", "tasks", "adhoc"]);
+export type ModelOverrideScope = typeof ModelOverrideScope.Type;
+
+const StandingModelOverride = Schema.Struct({
+  model: Schema.optional(
+    Schema.Struct({ instanceId: ProviderInstanceId, model: TrimmedNonEmptyString }),
+  ),
+  effort: Schema.optional(TrimmedNonEmptyString),
+  keepOwnAccount: Schema.optional(Schema.Boolean),
+});
+
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
 
 export const OrchestrationV2CreationSource = Schema.Literals([
@@ -3857,6 +3874,8 @@ export const OrchestrationV2RpcSchemas = {
        * model. Without it the threads move to the account the model names.
        */
       keepOwnAccount: Schema.optional(Schema.Boolean),
+      /** Which threads the call covers, for setting and for putting back. Absent means all. */
+      scope: Schema.optional(ModelOverrideScope),
       /**
        * Put back the selections the last overrides replaced instead of setting
        * one. The way back shares this method because the RPC group is as
@@ -3867,19 +3886,15 @@ export const OrchestrationV2RpcSchemas = {
     output: Schema.Struct({
       threads: NonNegativeInt,
       /**
-       * What is in force after the call, or null when nothing is. It also
-       * reaches threads that open later, until it is put back. A call with no
-       * model, no level and no `restore` changes nothing and only reads this.
+       * What is in force after the call for task threads and for the others,
+       * null where nothing is. It also reaches threads that open later, until
+       * it is put back. A call with no model, no level and no `restore`
+       * changes nothing and only reads this.
        */
-      standing: Schema.NullOr(
-        Schema.Struct({
-          model: Schema.optional(
-            Schema.Struct({ instanceId: ProviderInstanceId, model: TrimmedNonEmptyString }),
-          ),
-          effort: Schema.optional(TrimmedNonEmptyString),
-          keepOwnAccount: Schema.optional(Schema.Boolean),
-        }),
-      ),
+      standing: Schema.Struct({
+        tasks: Schema.NullOr(StandingModelOverride),
+        adhoc: Schema.NullOr(StandingModelOverride),
+      }),
       /** The selection of every thread the call covered, changed or already there, for clients to line their composers up. */
       changed: Schema.Array(Schema.Struct({ threadId: ThreadId, modelSelection: ModelSelection })),
     }),

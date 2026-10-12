@@ -9,7 +9,12 @@
  *
  * @module StandingModelOverride
  */
-import { CommandId, ModelSelection, TrimmedNonEmptyString } from "@t3tools/contracts";
+import {
+  CommandId,
+  ModelSelection,
+  TrimmedNonEmptyString,
+  type ModelOverrideScope,
+} from "@t3tools/contracts";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { overriddenModelSelection, type ModelOverride } from "@t3tools/shared/modelOverride";
@@ -38,8 +43,70 @@ const StoredOverride = Schema.Struct({
   effort: Schema.optional(TrimmedNonEmptyString),
   keepOwnAccount: Schema.optional(Schema.Boolean),
 });
-const decodeStored = Schema.decodeUnknownOption(Schema.fromJsonString(StoredOverride));
-const encodeStored = Schema.encodeSync(Schema.fromJsonString(StoredOverride));
+/** One override per part: threads that scheduled tasks post to, and the others. */
+const StoredStanding = Schema.Struct({
+  tasks: Schema.optional(StoredOverride),
+  adhoc: Schema.optional(StoredOverride),
+});
+const decodeStanding = Schema.decodeUnknownOption(StoredStanding);
+const decodeStored = Schema.decodeUnknownOption(StoredOverride);
+const encodeStanding = Schema.encodeSync(Schema.fromJsonString(StoredStanding));
+
+/** The part of the open threads a thread belongs to. */
+export type ThreadScope = Exclude<ModelOverrideScope, "all">;
+
+export interface StandingOverrides {
+  readonly tasks: ModelOverride | null;
+  readonly adhoc: ModelOverride | null;
+}
+
+export const NO_STANDING_OVERRIDES: StandingOverrides = { tasks: null, adhoc: null };
+
+/** Whether a call for `scope` covers a thread of the part `thread`. */
+export function scopeCovers(scope: ModelOverrideScope, thread: ThreadScope): boolean {
+  return scope === "all" || scope === thread;
+}
+
+/**
+ * Reads the kept file. Before the split one override stood for every thread,
+ * so a file in that form stands for both parts.
+ */
+export function parseStandingOverrides(contents: string): StandingOverrides | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(contents);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null) return null;
+  if ("tasks" in raw || "adhoc" in raw) {
+    const split = Option.getOrNull(decodeStanding(raw));
+    return split === null ? null : { tasks: split.tasks ?? null, adhoc: split.adhoc ?? null };
+  }
+  const single = Option.getOrNull(decodeStored(raw));
+  return single === null ? null : { tasks: single, adhoc: single };
+}
+
+/** `current` with the parts `scope` covers set to `override`, or cleared with null. */
+export function withScopedOverride(
+  current: StandingOverrides,
+  scope: ModelOverrideScope,
+  override: ModelOverride | null,
+): StandingOverrides {
+  return {
+    tasks: scopeCovers(scope, "tasks") ? override : current.tasks,
+    adhoc: scopeCovers(scope, "adhoc") ? override : current.adhoc,
+  };
+}
+
+const storedForm = (override: ModelOverride | null) =>
+  override === null
+    ? undefined
+    : {
+        ...(override.model === undefined ? {} : { model: override.model }),
+        ...(override.effort === undefined ? {} : { effort: override.effort }),
+        ...(override.keepOwnAccount === true ? { keepOwnAccount: true } : {}),
+      };
 
 const filePath = Effect.gen(function* () {
   const path = yield* Path.Path;
@@ -47,25 +114,48 @@ const filePath = Effect.gen(function* () {
   return path.join(config.stateDir, STANDING_OVERRIDE_FILE_NAME);
 });
 
-/** Remembers the override so it also reaches threads that were not open when it was set. */
-export const rememberStandingOverride = (override: ModelOverride) =>
+const readKept = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  return yield* fileSystem.readFileString(yield* filePath).pipe(
+    Effect.map(parseStandingOverrides),
+    Effect.orElseSucceed(() => null),
+  );
+});
+
+const writeKept = (standing: StandingOverrides) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
+    if (standing.tasks === null && standing.adhoc === null) {
+      yield* fileSystem.remove(yield* filePath);
+      return;
+    }
+    const tasks = storedForm(standing.tasks);
+    const adhoc = storedForm(standing.adhoc);
     yield* fileSystem.writeFileString(
       yield* filePath,
-      encodeStored({
-        ...(override.model === undefined ? {} : { model: override.model }),
-        ...(override.effort === undefined ? {} : { effort: override.effort }),
-        ...(override.keepOwnAccount === true ? { keepOwnAccount: true } : {}),
-      } as typeof StoredOverride.Type),
+      encodeStanding({
+        ...(tasks === undefined ? {} : { tasks }),
+        ...(adhoc === undefined ? {} : { adhoc }),
+      } as typeof StoredStanding.Type),
     );
+  });
+
+/**
+ * Remembers the override for the parts `scope` covers, so it also reaches
+ * threads that were not open when it was set. The other part keeps its own.
+ */
+export const rememberStandingOverride = (override: ModelOverride, scope: ModelOverrideScope) =>
+  Effect.gen(function* () {
+    const current = (yield* readKept) ?? NO_STANDING_OVERRIDES;
+    yield* writeKept(withScopedOverride(current, scope, override));
   }).pipe(Effect.ignore);
 
-/** "Put back" ends the rule. */
-export const forgetStandingOverride = Effect.gen(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
-  yield* fileSystem.remove(yield* filePath);
-}).pipe(Effect.ignore);
+/** "Put back" ends the rule for the parts `scope` covers. */
+export const forgetStandingOverride = (scope: ModelOverrideScope) =>
+  Effect.gen(function* () {
+    const current = (yield* readKept) ?? NO_STANDING_OVERRIDES;
+    yield* writeKept(withScopedOverride(current, scope, null));
+  }).pipe(Effect.ignore);
 
 /**
  * The override that a set of applied selections stands for: the model when
@@ -94,7 +184,12 @@ export function standingOverrideFromApplied(
 
 const AppliedSelections = Schema.Record(
   Schema.String,
-  Schema.Struct({ previous: ModelSelection, applied: ModelSelection }),
+  Schema.Struct({
+    previous: ModelSelection,
+    applied: ModelSelection,
+    /** The part the thread was counted in when the override reached it. */
+    scope: Schema.optional(Schema.Literals(["tasks", "adhoc"])),
+  }),
 );
 const decodeApplied = Schema.decodeUnknownOption(Schema.fromJsonString(AppliedSelections));
 const encodeApplied = Schema.encodeSync(Schema.fromJsonString(AppliedSelections));
@@ -111,13 +206,10 @@ export function userChoseOtherModel(
   return applied !== undefined && !modelSelectionsEqual(current, applied);
 }
 
-/** The override in force, or null. */
+/** The overrides in force for task threads and for the others. */
 export const readStandingOverride = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
-  const stored = yield* fileSystem.readFileString(yield* filePath).pipe(
-    Effect.map((contents) => Option.getOrNull(decodeStored(contents)) as ModelOverride | null),
-    Effect.orElseSucceed(() => null),
-  );
+  const stored = yield* readKept;
   if (stored !== null) return stored;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
@@ -132,9 +224,10 @@ export const readStandingOverride = Effect.gen(function* () {
     : standingOverrideFromApplied(Object.values(applied.value).map((entry) => entry.applied));
   // Kept once read: threads aligned later may stay on their own account, and
   // the applied selections then no longer share one account to read it from.
-  if (derived !== null) yield* rememberStandingOverride(derived);
-  return derived;
-}).pipe(Effect.orElseSucceed(() => null));
+  if (derived === null) return NO_STANDING_OVERRIDES;
+  yield* rememberStandingOverride(derived, "all");
+  return { tasks: derived, adhoc: derived };
+}).pipe(Effect.orElseSucceed(() => NO_STANDING_OVERRIDES));
 
 /**
  * The selection a thread should move to under the standing override, or null
@@ -156,18 +249,22 @@ export function standingSelectionFor(input: {
 }
 
 /**
- * Brings one thread in line with the standing override before it gets work
- * that does not come from the user. Never fails: a thread that cannot be
- * aligned simply runs on what it has.
+ * Brings one thread in line with the standing override of its part before it
+ * gets work that does not come from the user. `messageScope` is the part the
+ * incoming message speaks for: "tasks" for a scheduled task's message. A thread
+ * the override already reached stays in the part it was counted in then, so a
+ * task thread that gets another automatic message does not swap models. Never
+ * fails: a thread that cannot be aligned simply runs on what it has.
  */
 export const alignThreadWithStandingOverride = (
   threads: Pick<ThreadManagement.ThreadManagementServiceShape, "getThreadShell" | "dispatch">,
   threadId: Parameters<ThreadManagement.ThreadManagementServiceShape["getThreadShell"]>[0],
   reason: string,
+  messageScope: ThreadScope,
 ) =>
   Effect.gen(function* () {
-    const override = yield* readStandingOverride;
-    if (override === null) return;
+    const standing = yield* readStandingOverride;
+    if (standing.tasks === null && standing.adhoc === null) return;
     const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
     if (Option.isNone(registry)) return;
     const thread = yield* threads.getThreadShell(threadId);
@@ -182,6 +279,9 @@ export const alignThreadWithStandingOverride = (
       Effect.map((contents) => Option.getOrElse(decodeApplied(contents), () => noneSaved)),
       Effect.orElseSucceed(() => noneSaved),
     );
+    const scope = saved[threadId]?.scope ?? messageScope;
+    const override = standing[scope];
+    if (override === null) return;
     if (userChoseOtherModel(saved[threadId]?.applied, thread.modelSelection)) {
       const current = `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`;
       // A task on a timer comes by every few minutes; the same choice is recorded once.
@@ -192,7 +292,7 @@ export const alignThreadWithStandingOverride = (
           kind: "model-override-applied",
           threadId,
           outcome: "kept-own-choice",
-          facts: { reason, current },
+          facts: { reason, current, scope },
         });
       }
       return;
@@ -223,6 +323,7 @@ export const alignThreadWithStandingOverride = (
           [threadId]: {
             previous: saved[threadId]?.previous ?? thread.modelSelection,
             applied: next,
+            scope,
           },
         }),
       )
@@ -235,6 +336,7 @@ export const alignThreadWithStandingOverride = (
         reason,
         from: `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`,
         to: `${next.instanceId}/${next.model}`,
+        scope,
       },
     });
   }).pipe(Effect.ignore);

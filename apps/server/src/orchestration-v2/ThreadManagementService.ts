@@ -812,6 +812,7 @@ const make = Effect.gen(function* () {
           { getThreadShell: orchestrator.getThreadShell, dispatch: orchestrator.dispatch },
           command.threadId,
           command.scheduledTaskId === undefined ? command.creationSource : "scheduled task",
+          command.scheduledTaskId === undefined ? "adhoc" : "tasks",
         ).pipe(
           Effect.provideService(FileSystem.FileSystem, standingOverrideServices.fileSystem.value),
           Effect.provideService(Path.Path, standingOverrideServices.path.value),
