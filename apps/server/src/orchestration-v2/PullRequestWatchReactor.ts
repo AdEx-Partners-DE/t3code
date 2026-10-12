@@ -31,6 +31,7 @@ import {
   PullRequestProviderError,
 } from "@t3tools/source-control-core/server/PullRequestProvider";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import { currentUpdateHold } from "../scheduledTasks/updateHold.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -238,6 +239,8 @@ export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const bootedAt = yield* Clock.currentTimeMillis;
   const lives = new Map<string, WatchLife>();
+  // The services the hold reads are taken here: a pass runs on its own fiber later.
+  const updateHold = currentUpdateHold.pipe(Effect.provide(yield* Effect.context<never>()));
 
   const lifeOf = (target: WatchTarget): WatchLife => {
     const existing = lives.get(lifeKey(target));
@@ -570,6 +573,10 @@ export const make = Effect.gen(function* () {
   });
 
   const sweep = Effect.gen(function* () {
+    // While an update waits to go in, a wake would start a turn and keep the
+    // restart from finding its moment. A skipped pass loses nothing: the
+    // watch's state is untouched, so the next pass sees the same news.
+    if ((yield* updateHold) !== null) return;
     const threads = yield* projections.getThreadsWithPullRequests();
     const targets = threads.flatMap((thread) =>
       visibleThreadPullRequests(thread.pullRequests ?? []).flatMap((link) =>
