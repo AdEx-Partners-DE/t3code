@@ -587,6 +587,7 @@ function HandoffEndpoint(props: {
   const entries = applyProviderInstanceSettings(
     deriveProviderInstanceEntries(props.providers),
     useEnvironmentSettings(props.environmentId),
+    null,
   );
   const entry = entries.find((candidate) => candidate.instanceId === props.instanceId);
   // Same account badge as the sidebar: a handoff between two accounts of one

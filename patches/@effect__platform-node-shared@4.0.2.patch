@@ -1,7 +1,7 @@
 diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
 --- a/dist/NodeChildProcessSpawner.js
 +++ b/dist/NodeChildProcessSpawner.js
-@@ -44,9 +44,16 @@
+@@ -44,9 +44,17 @@
      return false;
    }
  };
@@ -9,7 +9,8 @@ diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
 -  windowsHide: true
 -}, onExit);
 +const taskkill = (childProcess, onExit = () => {}) => {
-+  // An exited leader's PID cannot safely identify its former Windows tree.
++  // Once Node observes the leader's exit, taskkill /T cannot reclaim orphaned
++  // descendants through its PID, which may be reused. Skip stale-PID cleanup.
 +  if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
 +    onExit(null);
 +    return;
@@ -35,13 +36,14 @@ diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
   *
   * POSIX cleanup targets a numeric process-group ID. If the group disappears
   * and its ID is reused before cleanup, an unrelated group may be signalled.
-@@ -98,13 +100,19 @@
+@@ -99,13 +101,20 @@
  const taskkill = (
    childProcess: NodeChildProcess.ChildProcess,
    onExit: (error: NodeChildProcess.ExecException | null) => void = () => {}
 -) =>
 +) => {
-+  // An exited leader's PID cannot safely identify its former Windows tree.
++  // Once Node observes the leader's exit, taskkill /T cannot reclaim orphaned
++  // descendants through its PID, which may be reused. Skip stale-PID cleanup.
 +  if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
 +    onExit(null)
 +    return
@@ -53,6 +55,6 @@ diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
      onExit
    )
 +}
- 
+
  const make = Effect.gen(function*() {
    const fs = yield* FileSystem.FileSystem
