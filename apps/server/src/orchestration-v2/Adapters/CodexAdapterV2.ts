@@ -21,6 +21,7 @@ import {
 import {
   codexRateLimitsToUpdate,
   mergeCodexRateLimits,
+  codexPublishedUsageLimitResetAt,
   codexUsageLimitResetAt,
   type CodexRateLimitSnapshot,
 } from "../../provider/codexUsageLimits.ts";
@@ -31,6 +32,7 @@ import {
   OrchestrationV2ProviderGoal,
   ProviderDriverKind,
   type ProviderSetupError,
+  type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { AgentScope } from "@t3tools/shared/AgentScope";
@@ -1662,7 +1664,7 @@ export type CodexAdapterV2DriverEnv =
 
 export const createCodexAdapterV2 = (
   { instanceId, environment, enabled, config }: ProviderAdapterDriverCreateInput<CodexSettings>,
-  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime"> = {},
+  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "getUsageLimits" | "resolveRuntime"> = {},
 ) =>
   Effect.gen(function* () {
     const clientFactory = yield* CodexAppServerClientFactory;
@@ -1754,6 +1756,8 @@ export interface CodexAdapterV2Options {
   readonly environment: NodeJS.ProcessEnv;
   readonly clientFactory: CodexAppServerClientFactoryShape;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
+  /** The instance's published limits, which back a usage-limit stop's reset. */
+  readonly getUsageLimits?: Effect.Effect<ServerProviderUsageLimits | undefined>;
   /**
    * Resolves launch settings when each session opens, replacing `settings` and
    * `environment`. Managed ChatGPT sign-in uses it to launch the T3-installed
@@ -1913,6 +1917,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           now,
         });
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
+        const usageLimitResetAt = Effect.fnUntraced(function* () {
+          const atMs = DateTime.toEpochMillis(yield* DateTime.now);
+          const resetAt = codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot), atMs);
+          if (resetAt !== null || adapterOptions.getUsageLimits === undefined) return resetAt;
+          // A turn refused at its first request may never get a rate-limit notification.
+          return codexPublishedUsageLimitResetAt(yield* adapterOptions.getUsageLimits, atMs);
+        });
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
         );
@@ -4412,7 +4423,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* Ref.update(rateLimitSnapshot, (previous) =>
               mergeCodexRateLimits(previous, payload.rateLimits),
             );
-            const resetAt = codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot));
+            const resetAt = yield* usageLimitResetAt();
             for (const item of (yield* Ref.get(limitedTurnItems)).values()) {
               // Fill late reset data once; later account windows do not change this stopped turn.
               if (resetAt === null || item.failure.resetAt != null) continue;
@@ -5703,7 +5714,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   failure.class === "usage_limit"
                     ? {
                         ...failure,
-                        resetAt: codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot)),
+                        resetAt: yield* usageLimitResetAt(),
                       }
                     : failure,
                 ...(input.providerRetry === undefined
@@ -5738,9 +5749,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ...event,
                   failure: {
                     ...event.failure,
-                    resetAt:
-                      event.failure.resetAt ??
-                      codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot)),
+                    resetAt: event.failure.resetAt ?? (yield* usageLimitResetAt()),
                   },
                 }
               : event;
