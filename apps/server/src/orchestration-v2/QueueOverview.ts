@@ -145,13 +145,22 @@ export const make = Effect.gen(function* () {
   });
 
   // Tool calls and auth refreshes are answered by the app, not by a person.
+  // A question the thread has moved on from, with a turn started after it,
+  // no longer holds the thread up and is not counted.
   const readPendingQuestions = Effect.gen(function* () {
     const shell = yield* threads.getShellSnapshot();
     const rows = yield* sql<{ readonly thread_id: string; readonly since: string }>`
-      SELECT thread_id, MIN(created_at) AS since
-      FROM orchestration_v2_projection_runtime_requests
-      WHERE status = 'pending' AND kind NOT IN ('dynamic_tool_call', 'auth_refresh')
-      GROUP BY thread_id
+      SELECT question.thread_id AS thread_id, MIN(question.created_at) AS since
+      FROM orchestration_v2_projection_runtime_requests AS question
+      WHERE question.status = 'pending'
+        AND question.kind NOT IN ('dynamic_tool_call', 'auth_refresh')
+        AND NOT EXISTS (
+          SELECT 1
+          FROM orchestration_v2_projection_runs AS run
+          WHERE run.thread_id = question.thread_id
+            AND json_extract(run.payload_json, '$.startedAt') > question.created_at
+        )
+      GROUP BY question.thread_id
     `;
     return pendingQuestionsOf(
       rows,
