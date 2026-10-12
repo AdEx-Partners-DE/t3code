@@ -1442,6 +1442,20 @@ export const layer = Layer.effect(
                   });
                   continue;
                 }
+                // A trial run: say what would be sent, and send nothing.
+                if (schedule.superviseDryRun === true) {
+                  yield* recordDecision({
+                    kind: "supervisor-verdict",
+                    threadId: thread.id,
+                    outcome: "would-send-on",
+                    facts: {
+                      taskId: task.id,
+                      reason: verdict.reason,
+                      instruction: verdict.instruction,
+                    },
+                  });
+                  continue;
+                }
                 yield* recordDecision({
                   kind: "supervisor-verdict",
                   threadId: thread.id,

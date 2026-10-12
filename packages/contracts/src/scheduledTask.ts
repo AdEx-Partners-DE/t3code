@@ -160,6 +160,10 @@ export const ScheduledTaskIdleSchedule = Schema.Struct({
     description:
       "With allOpenThreads: a model reads each standing thread's last reply first. A thread that only asked for leave it already has gets an instruction to go on instead of the task's prompt; a thread that really needs the user is left alone. At most twice per thread.",
   }),
+  superviseDryRun: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "With supervise: only record each verdict and the instruction that would be sent, and send nothing. For trying the supervisor on real threads.",
+  }),
   /** With supervise: per thread, how often this task has sent it on. Kept by the server. */
   supervised: Schema.optional(Schema.Record(Schema.String, Schema.Int)),
   /** With allOpenThreads: per thread, the run this task last reacted to. Kept by the server. */
