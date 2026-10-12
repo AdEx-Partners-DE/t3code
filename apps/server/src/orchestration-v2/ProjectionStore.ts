@@ -5527,6 +5527,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 SELECT 1 FROM orchestration_v2_projection_runtime_requests request
                 WHERE request.thread_id = t.thread_id AND request.status = 'pending'
               )
+              -- A message held in the queue (by a pause or after a Stop) blocks settling, as the
+              -- orchestrator's own check does; without this the sweep asks again every minute.
+              AND NOT EXISTS (
+                SELECT 1 FROM orchestration_v2_projection_runs queued
+                LEFT JOIN orchestration_v2_projection_messages message
+                  ON message.message_id = json_extract(queued.payload_json, '$.userMessageId')
+                WHERE queued.thread_id = t.thread_id AND queued.status = 'queued'
+                  AND json_extract(message.payload_json, '$.notification') IS NULL
+                  AND json_extract(message.payload_json, '$.delegatedCompletion') IS NULL
+              )
             ORDER BY t.updated_at ASC, t.thread_id ASC
           `;
             if (rows.length === 0) return [];
@@ -6078,7 +6088,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           const projections = (yield* Ref.get(replayState)).projections;
           return [...projections.values()]
             .filter(
-              ({ thread, runs, runtimeRequests }) =>
+              ({ thread, runs, runtimeRequests, messages }) =>
                 (threadId === undefined || thread.id === threadId) &&
                 thread.deletedAt === null &&
                 thread.archivedAt === null &&
@@ -6086,7 +6096,16 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 thread.pinnedAt == null &&
                 thread.autoSettleDisabledAt == null &&
                 !runs.some(isActivityRunForShell) &&
-                !runtimeRequests.some((request) => request.status === "pending"),
+                !runtimeRequests.some((request) => request.status === "pending") &&
+                // A held message blocks settling, as in the SQL store.
+                !runs.some((run) => {
+                  if (run.status !== "queued") return false;
+                  const message = messages.find((candidate) => candidate.id === run.userMessageId);
+                  return (
+                    message?.notification === undefined &&
+                    message?.delegatedCompletion === undefined
+                  );
+                }),
             )
             .map((projection) => {
               const shell = threadShellFromProjection(projection);

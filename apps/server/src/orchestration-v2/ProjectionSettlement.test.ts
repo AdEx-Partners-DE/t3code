@@ -257,13 +257,16 @@ it.effect.each([
       );
       assert.deepEqual(
         new Set(eligible.map((thread) => thread.id)),
-        new Set([idle, completed, queued, woke, background, persistent, rolledBack]),
+        new Set([idle, completed, woke, background, persistent, rolledBack]),
       );
+      // The shell does not carry the queue; a held message keeps its thread out of the
+      // candidates because settling it would be refused.
       assert.deepEqual(
         new Set(eligible.map((thread) => thread.id)),
         new Set(
           shell.threads
             .filter((thread) => isAutoSettlementCandidate(thread, DateTime.toEpochMillis(now)))
+            .filter((thread) => thread.id !== queued)
             .map((thread) => thread.id),
         ),
       );
