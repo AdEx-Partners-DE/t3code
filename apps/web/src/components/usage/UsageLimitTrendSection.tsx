@@ -50,12 +50,7 @@ export function UsageLimitTrendSection({
     weekdayFormat.format(new Date(sinceMs + index * DAY_MS + DAY_MS / 2)),
   );
   const unusedTotal = accounts.reduce(
-    (total, account) =>
-      total +
-      account.lines.reduce(
-        (sum, line) => sum + (line.kind === "session" ? 0 : line.unusedAtResets),
-        0,
-      ),
+    (total, account) => total + account.lines.reduce((sum, line) => sum + line.unusedAtResets, 0),
     0,
   );
   return (

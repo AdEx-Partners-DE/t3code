@@ -48,6 +48,43 @@ describe("buildUsageLimitTrend", () => {
     ]);
   });
 
+  it("leaves the five-hour session window and its resets out", () => {
+    const session = {
+      ...point("codex", "2026-10-10T06:00:00.000Z", 80),
+      windowId: "session",
+      kind: "session" as const,
+      label: "Session",
+    };
+    const reset = (windowId: string, kind: "session" | "weekly") => ({
+      at: "2026-10-10T12:00:00.000Z",
+      instanceId: ProviderInstanceId.make("codex"),
+      windowId,
+      kind,
+      label: kind === "session" ? "Session" : "Weekly",
+      usedPercentBefore: 20,
+      unusedPercentBefore: 80,
+      usedPercentAfter: 0,
+      lastSeenBeforeAt: "2026-10-10T11:00:00.000Z",
+      ahead: false,
+    });
+    const history: UsageLimitHistory = {
+      points: [session, point("codex", "2026-10-10T06:00:00.000Z", 20)],
+      resets: [reset("session", "session"), reset("weekly", "weekly")],
+    };
+    const [account] = buildUsageLimitTrend({ history, providers, sinceMs: SINCE, nowMs: NOW });
+    expect(account?.lines.map((line) => line.label)).toEqual(["Weekly"]);
+    expect(account?.resets.map((entry) => entry.label)).toEqual(["Weekly"]);
+    // An account that only has a session window has nothing to show.
+    expect(
+      buildUsageLimitTrend({
+        history: { points: [session], resets: [reset("session", "session")] },
+        providers,
+        sinceMs: SINCE,
+        nowMs: NOW,
+      }),
+    ).toEqual([]);
+  });
+
   it("keeps the history of an account the server no longer lists, after the known ones", () => {
     const history: UsageLimitHistory = {
       points: [

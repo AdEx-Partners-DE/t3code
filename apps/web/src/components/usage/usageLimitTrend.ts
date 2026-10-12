@@ -153,7 +153,11 @@ export function buildUsageLimitTrend(input: {
   readonly nowMs: number;
 }): ReadonlyArray<UsageLimitTrendAccount> {
   const byInstance = new Map<string, Map<string, UsageLimitHistoryPoint[]>>();
+  // Only the long windows: weekly and monthly allowance is what goes unused
+  // or runs out. The five-hour session window refills many times a day and
+  // would bury them.
   for (const point of input.history.points) {
+    if (point.kind === "session") continue;
     const windows = byInstance.get(point.instanceId) ?? new Map<string, UsageLimitHistoryPoint[]>();
     byInstance.set(point.instanceId, windows);
     const points = windows.get(point.windowId) ?? [];
@@ -204,7 +208,7 @@ export function buildUsageLimitTrend(input: {
           };
         }),
         resets: input.history.resets
-          .filter((reset) => reset.instanceId === instanceId)
+          .filter((reset) => reset.instanceId === instanceId && windows.has(reset.windowId))
           .sort((left, right) => Date.parse(right.at) - Date.parse(left.at)),
       };
     });
