@@ -1,4 +1,5 @@
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
+import { ProviderUnresponsiveError } from "@t3tools/provider-core/server/failure";
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
 import {
@@ -6692,7 +6693,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 Effect.timeoutOption(CODEX_LIVENESS_PROBE_TIMEOUT),
               );
             if (Option.isNone(answered)) {
-              return `Codex stopped responding: it did not answer a liveness check within ${CODEX_LIVENESS_PROBE_TIMEOUT}.`;
+              return new ProviderUnresponsiveError({
+                provider: "Codex",
+                timeout: CODEX_LIVENESS_PROBE_TIMEOUT,
+              });
             }
           }
         });

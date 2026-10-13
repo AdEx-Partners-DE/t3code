@@ -26,6 +26,16 @@ export class ContextHandoffBudgetError extends Schema.TaggedError<ContextHandoff
   }
 }
 
+/** Raised by an adapter whose provider stopped answering T3's own liveness check. */
+export class ProviderUnresponsiveError extends Schema.TaggedError<ProviderUnresponsiveError>()(
+  "ProviderUnresponsiveError",
+  { provider: Schema.String, timeout: Schema.String },
+) {
+  override get message() {
+    return `${this.provider} stopped responding: it did not answer a liveness check within ${this.timeout}. Retry the turn to start a fresh session.`;
+  }
+}
+
 export const MAX_PROVIDER_FAILURE_MESSAGE_LENGTH = 4_096;
 export const MAX_PROVIDER_FAILURE_CODE_LENGTH = 128;
 
@@ -47,6 +57,7 @@ function causeMessage(cause: unknown): string | undefined {
         case "ContextHandoffBudgetError":
           return new ContextHandoffBudgetError().message;
         case "ClaudeBackgroundWorkBlocksQueryReplacementError":
+        case "ProviderUnresponsiveError":
           return stringField(cause, "message");
         case "ContextHandoffDeliveryUncertainError":
           return "T3 could not confirm whether conversation history reached the provider. Retry the turn to recover the session.";

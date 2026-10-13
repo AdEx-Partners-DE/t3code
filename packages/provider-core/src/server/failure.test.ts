@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import {
   NodeId,
   ProviderDriverKind,
+  ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
   RunId,
@@ -17,6 +18,7 @@ import {
   MAX_PROVIDER_FAILURE_CODE_LENGTH,
   MAX_PROVIDER_FAILURE_MESSAGE_LENGTH,
   ContextHandoffBudgetError,
+  ProviderUnresponsiveError,
 } from "./failure.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -99,6 +101,22 @@ it("preserves actionable handoff errors wrapped by turn startup", () => {
     makeProviderFailure({ cause: Cause.fail(cause) }).message,
     new ContextHandoffBudgetError().message,
   );
+});
+
+it("names a provider that stopped answering the liveness check", () => {
+  const unresponsive = new ProviderUnresponsiveError({ provider: "Codex", timeout: "1 minute" });
+  const failure = makeProviderFailure({
+    cause: Cause.fail(
+      new ProviderAdapter.ProviderAdapterEventStreamError({
+        driver: ProviderDriverKind.make("codex"),
+        providerSessionId: ProviderSessionId.make("provider-session:unresponsive"),
+        cause: unresponsive,
+      }),
+    ),
+  });
+  assert.equal(failure.message, unresponsive.message);
+  assert.include(failure.message, "Codex stopped responding");
+  assert.notInclude(failure.message, "event stream closed unexpectedly");
 });
 
 it("does not expose defect text nested inside a known error category", () => {
