@@ -341,6 +341,8 @@ it.effect("reveals a file in File Explorer through PowerShell on Windows", () =>
       "$ProgressPreference = 'SilentlyContinue'; Start-Process 'explorer.exe' -ArgumentList ('/select,\"' + 'C:\\workspace with spaces\\media\\author''s clip.mp4' + '\"')",
     );
     assert.equal(spawned.options.shell, false);
+    // Detached, PowerShell exits without ever starting Explorer.
+    assert.equal(spawned.options.detached, false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 

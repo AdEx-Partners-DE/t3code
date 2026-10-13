@@ -62,6 +62,8 @@ interface EditorLaunch {
   readonly target: string;
   readonly command: string;
   readonly args: ReadonlyArray<string>;
+  /** Defaults to detached; see the native Windows reveal for the exception. */
+  readonly detached?: boolean;
 }
 
 interface ProcessLaunch {
@@ -636,11 +638,17 @@ const resolveFileManagerRevealLaunch = Effect.fn("resolveFileManagerRevealLaunch
   }
 
   if (platform === "win32") {
-    return fileExplorerRevealLaunch(
-      target,
-      normalizeWindowsFileManagerPath(target),
-      resolvePowerShellPath(env),
-    );
+    // A detached PowerShell (no console) exits 0 without running its command,
+    // so Explorer never opens. It must share the server's console; it is
+    // short-lived and Explorer outlives it either way.
+    return {
+      ...fileExplorerRevealLaunch(
+        target,
+        normalizeWindowsFileManagerPath(target),
+        resolvePowerShellPath(env),
+      ),
+      detached: false,
+    };
   }
 
   if (
@@ -744,7 +752,7 @@ const launchEditorProcess = Effect.fn("externalLauncher.launchEditorProcess")(fu
       command: spawnCommand.command,
       args: spawnCommand.args,
       options: {
-        detached: true,
+        detached: launch.detached ?? true,
         shell: spawnCommand.shell,
         stdin: "ignore",
         stdout: "ignore",
