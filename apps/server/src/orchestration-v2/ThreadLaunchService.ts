@@ -22,6 +22,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -317,6 +318,9 @@ const make = Effect.gen(function* () {
     let createdWorktreePath: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
+    // The background branch rename records the worktree again when it finishes, so a
+    // cancelled setup stops it before forgetting the worktree.
+    let branchRename: Fiber.Fiber<unknown, unknown> | undefined;
     if (input.workspaceStrategy.type === "worktree") {
       yield* setupTracker.begin({
         threadId,
@@ -505,7 +509,7 @@ const make = Effect.gen(function* () {
       ) {
         const oldBranch = branch;
         const worktreeCwd = worktreePath;
-        yield* generateBranchNameFor(worktreeCwd, initialMessage).pipe(
+        branchRename = yield* generateBranchNameFor(worktreeCwd, initialMessage).pipe(
           Effect.flatMap(({ branch: newBranch, exactName }) =>
             git.renameBranch({
               cwd: worktreeCwd,
@@ -640,6 +644,7 @@ const make = Effect.gen(function* () {
           // A cancelled setup leaves nothing behind. A failed one keeps a worktree
           // the thread recorded, so a retry reuses it, and removes one it never
           // recorded, which a retry would otherwise duplicate.
+          if (branchRename !== undefined && cancelled) yield* Fiber.interrupt(branchRename);
           if (tracked && createdWorktreePath && (cancelled || !workspaceRecorded)) {
             if (setupTerminalId)
               yield* terminals
