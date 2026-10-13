@@ -43,6 +43,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -132,8 +133,10 @@ const delegatedTaskStatusTranscriptFile = new URL(
 const readDelegatedTaskStatusTranscript = Effect.fn("readDelegatedTaskStatusTranscript")(
   function* () {
     const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    // `fromFileUrl` rather than `.pathname`, which keeps a leading slash before a Windows drive.
     const text = yield* fs.readFileString(
-      decodeURIComponent(delegatedTaskStatusTranscriptFile.pathname),
+      yield* path.fromFileUrl(delegatedTaskStatusTranscriptFile),
     );
     return yield* decodeProviderReplayNdjson(text);
   },
