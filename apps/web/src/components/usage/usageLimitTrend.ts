@@ -15,6 +15,8 @@ import {
 } from "@t3tools/contracts";
 import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 
+import { subscriptionId, usageRises } from "./usageSeries";
+
 /**
  * Where a window ends up if the account keeps its pace since the last reset:
  * empty before the reset, or at the reset with allowance to spare.
@@ -93,9 +95,8 @@ const round = (value: number) => Math.round(value * 100) / 100;
 const DAY_MS = 24 * 60 * 60_000;
 
 /**
- * Rises between consecutive readings, counted on the day of the later
- * reading. A drop is a reset and counts as nothing. `sinceMs` is the start of
- * the first day.
+ * One window's use (see `usageRises`), counted on the day of the reading that
+ * showed it. `sinceMs` is the start of the first day.
  */
 export function usedPerDay(
   points: ReadonlyArray<UsageLimitHistoryPoint>,
@@ -104,10 +105,8 @@ export function usedPerDay(
 ): number[] {
   const days = Math.max(1, Math.ceil((nowMs - sinceMs) / DAY_MS));
   const perDay = Array.from({ length: days }, () => 0);
-  for (let index = 1; index < points.length; index += 1) {
-    const rise = points[index]!.usedPercent - points[index - 1]!.usedPercent;
-    const atMs = Date.parse(points[index]!.at);
-    if (!(rise > 0) || atMs < sinceMs || atMs > nowMs) continue;
+  for (const { atMs, rise } of usageRises(points)) {
+    if (atMs < sinceMs || atMs > nowMs) continue;
     const day = Math.min(days - 1, Math.floor((atMs - sinceMs) / DAY_MS));
     perDay[day] = round(perDay[day]! + rise);
   }
@@ -123,21 +122,6 @@ export interface UsageLimitTrendAccount {
   readonly lines: ReadonlyArray<UsageLimitTrendLine>;
   /** Weekly windows only, newest first. */
   readonly resets: ReadonlyArray<UsageLimitReset>;
-}
-
-/**
- * One subscription per provider and signed-in account. Readings recorded
- * before the account was kept stay with their instance.
- */
-function subscriptionId(entry: {
-  readonly instanceId: string;
-  readonly driver?: string | undefined;
-  readonly account?: string | undefined;
-  readonly workspaceId?: string | undefined;
-}): string {
-  return entry.account === undefined
-    ? `instance:${entry.instanceId}`
-    : `account:${entry.driver ?? ""}:${entry.account}:${entry.workspaceId ?? ""}`;
 }
 
 function steppedPath(

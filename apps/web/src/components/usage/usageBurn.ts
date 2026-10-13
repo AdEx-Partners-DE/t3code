@@ -6,6 +6,8 @@
  */
 import type { UsageLimitHistoryPoint } from "@t3tools/contracts";
 
+import { subscriptionId, usageRises } from "./usageSeries";
+
 const HOUR_MS = 60 * 60_000;
 
 export interface UsageBurn {
@@ -18,8 +20,8 @@ export interface UsageBurn {
 }
 
 /**
- * A reading's rise over the one before it counts in the hour it was taken. A
- * drop is a reset and counts as nothing. Weekly windows are used where an
+ * A window's use (see `usageRises`) counts in the hour of the reading that
+ * showed it. A reset counts as nothing. Weekly windows are used where an
  * account reports one, because a session window refills several times a day
  * and would count the same work again; accounts without one fall back to all
  * their windows.
@@ -32,23 +34,22 @@ export function buildUsageBurn(input: {
   const perHour = Array.from({ length: input.hours }, () => 0);
   let lastHour = 0;
   const startMs = input.nowMs - input.hours * HOUR_MS;
-  const weeklyInstances = new Set(
-    input.points.filter((point) => point.kind === "weekly").map((point) => point.instanceId),
+  // By subscription, so two instances signed in to one account count its use once.
+  const weeklySubscriptions = new Set(
+    input.points.filter((point) => point.kind === "weekly").map(subscriptionId),
   );
   const series = new Map<string, UsageLimitHistoryPoint[]>();
   for (const point of input.points) {
-    if (weeklyInstances.has(point.instanceId) && point.kind !== "weekly") continue;
-    const key = `${point.instanceId}:${point.windowId}`;
+    if (weeklySubscriptions.has(subscriptionId(point)) && point.kind !== "weekly") continue;
+    const key = `${subscriptionId(point)}:${point.windowId}`;
     const points = series.get(key) ?? [];
     series.set(key, points);
     points.push(point);
   }
   for (const points of series.values()) {
     points.sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
-    for (let index = 1; index < points.length; index += 1) {
-      const rise = points[index]!.usedPercent - points[index - 1]!.usedPercent;
-      const atMs = Date.parse(points[index]!.at);
-      if (!(rise > 0) || atMs < startMs || atMs > input.nowMs) continue;
+    for (const { atMs, rise } of usageRises(points)) {
+      if (atMs < startMs || atMs > input.nowMs) continue;
       const bucket = Math.min(input.hours - 1, Math.floor((atMs - startMs) / HOUR_MS));
       perHour[bucket] = perHour[bucket]! + rise;
       if (input.nowMs - atMs <= HOUR_MS) lastHour += rise;
