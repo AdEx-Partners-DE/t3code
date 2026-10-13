@@ -1311,20 +1311,22 @@ function ScheduledTaskEditorDialog({
               </p>
             ) : (
               <Field label="Model">
-                <ProviderModelPicker
-                  environmentId={environmentId}
-                  disabled={saving || !connected}
-                  activeInstanceId={activeInstanceId}
-                  model={activeModel}
-                  lockedProvider={null}
-                  instanceEntries={instanceEntries}
-                  modelOptionsByInstance={modelOptionsByInstance}
-                  isComposerOwned={false}
-                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                  onInstanceModelChange={(instanceId, model) =>
-                    setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
-                  }
-                />
+                <div>
+                  <ProviderModelPicker
+                    environmentId={environmentId}
+                    disabled={saving || !connected}
+                    activeInstanceId={activeInstanceId}
+                    model={activeModel}
+                    lockedProvider={null}
+                    instanceEntries={instanceEntries}
+                    modelOptionsByInstance={modelOptionsByInstance}
+                    isComposerOwned={false}
+                    triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                    onInstanceModelChange={(instanceId, model) =>
+                      setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
+                    }
+                  />
+                </div>
               </Field>
             )}
 
