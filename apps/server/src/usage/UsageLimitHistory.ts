@@ -4,7 +4,9 @@
  *
  * It listens to the provider registry, so it records whatever the usage
  * probes already read and adds no probing of its own. The history is an
- * append-only file in the state directory, one JSON object per line.
+ * append-only file of readings in the state directory, one JSON object per
+ * line. Resets are worked out from the readings at startup, so a better rule
+ * for telling a reset from noise also corrects the past.
  *
  * @module UsageLimitHistory
  */
@@ -29,7 +31,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import {
   recordUsageLimitReadings,
-  usageLimitWindowKey,
+  replayUsageLimitPoints,
   type UsageLimitReadingState,
 } from "./usageLimitReadings.ts";
 
@@ -38,11 +40,12 @@ export const USAGE_LIMIT_HISTORY_FILE_NAME = "usage-limit-history.jsonl";
 /** Long enough to compare a few monthly windows; older lines are dropped at startup. */
 const RETENTION_MS = 120 * 24 * 60 * 60_000;
 
+// Files from before resets were worked out also hold reset lines. They are
+// read past and dropped at the next startup rewrite.
 const HistoryLine = Schema.Union([
   Schema.Struct({ point: UsageLimitHistoryPoint }),
   Schema.Struct({ reset: UsageLimitReset }),
 ]);
-type HistoryLine = typeof HistoryLine.Type;
 const decodeLine = Schema.decodeUnknownOption(Schema.fromJsonString(HistoryLine));
 const encodeLine = Schema.encodeSync(Schema.fromJsonString(HistoryLine));
 
@@ -54,28 +57,22 @@ export class UsageLimitHistory extends Context.Service<
   }
 >()("t3/usage/UsageLimitHistory") {}
 
-/** What a history file holds, with unreadable and expired lines left out. */
-export function parseUsageLimitHistory(
-  contents: string,
-  nowMs: number,
-): { readonly points: UsageLimitHistoryPoint[]; readonly resets: UsageLimitReset[] } {
+/** The readings a history file holds, with unreadable and expired lines left out. */
+export function parseUsageLimitHistory(contents: string, nowMs: number): UsageLimitHistoryPoint[] {
   const points: UsageLimitHistoryPoint[] = [];
-  const resets: UsageLimitReset[] = [];
   for (const raw of contents.split("\n")) {
     if (raw.trim() === "") continue;
     const line = decodeLine(raw);
-    if (line._tag === "None") continue;
-    const entry = line.value;
-    const at = "point" in entry ? entry.point.at : entry.reset.at;
-    if (nowMs - Date.parse(at) > RETENTION_MS) continue;
-    if ("point" in entry) points.push(entry.point);
-    else resets.push(entry.reset);
+    if (line._tag === "None" || !("point" in line.value)) continue;
+    const point = line.value.point;
+    if (nowMs - Date.parse(point.at) > RETENTION_MS) continue;
+    points.push(point);
   }
-  return { points, resets };
+  return points;
 }
 
-function serialize(lines: ReadonlyArray<HistoryLine>): string {
-  return lines.map((line) => `${encodeLine(line)}\n`).join("");
+function serialize(points: ReadonlyArray<UsageLimitHistoryPoint>): string {
+  return points.map((point) => `${encodeLine({ point })}\n`).join("");
 }
 
 export const make = Effect.gen(function* () {
@@ -86,18 +83,13 @@ export const make = Effect.gen(function* () {
   const filePath = path.join(config.stateDir, USAGE_LIMIT_HISTORY_FILE_NAME);
 
   const existing = yield* fileSystem.readFileString(filePath).pipe(Effect.orElseSucceed(() => ""));
-  const loaded = parseUsageLimitHistory(existing, yield* Clock.currentTimeMillis);
-  const points = loaded.points;
-  const resets = loaded.resets;
-  let state: UsageLimitReadingState = new Map(
-    points.map((point) => [usageLimitWindowKey(point), point]),
-  );
+  const points = parseUsageLimitHistory(existing, yield* Clock.currentTimeMillis);
+  const replayed = replayUsageLimitPoints(points);
+  const resets: UsageLimitReset[] = [...replayed.resets];
+  let state: UsageLimitReadingState = replayed.state;
   // Rewrite once at startup when lines expired or could not be read, so the
   // file never grows past the retention window.
-  const kept = serialize([
-    ...points.map((point) => ({ point })),
-    ...resets.map((reset) => ({ reset })),
-  ]);
+  const kept = serialize(points);
   if (existing !== "" && kept.length < existing.length) {
     yield* fileSystem.writeFileString(filePath, kept).pipe(Effect.ignore);
   }
@@ -113,14 +105,7 @@ export const make = Effect.gen(function* () {
         resets.push(...delta.resets);
         // History is a convenience; a full disk must not take usage limits down with it.
         yield* fileSystem
-          .writeFileString(
-            filePath,
-            serialize([
-              ...delta.points.map((point) => ({ point })),
-              ...delta.resets.map((reset) => ({ reset })),
-            ]),
-            { flag: "a" },
-          )
+          .writeFileString(filePath, serialize(delta.points), { flag: "a" })
           .pipe(
             Effect.catch((cause) =>
               Effect.logWarning("Could not append to the usage limit history", cause),

@@ -7,6 +7,7 @@ const account = (
   instanceId: string,
   forecast: UsageLimitForecast | undefined,
 ): UsageLimitTrendAccount => ({
+  id: instanceId,
   instanceId,
   name: instanceId,
   resets: [],

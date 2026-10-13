@@ -1,14 +1,17 @@
 /**
  * Shapes the recorded usage-limit history for the Limits view: one burn-down
- * line per account window, and the resets that happened in the period.
+ * line per subscription window, and the weekly resets that happened in the
+ * period.
  *
  * @module usageLimitTrend
  */
-import type {
-  ServerProvider,
-  UsageLimitHistory,
-  UsageLimitHistoryPoint,
-  UsageLimitReset,
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderDriverKind,
+  type ServerProvider,
+  type UsageLimitHistory,
+  type UsageLimitHistoryPoint,
+  type UsageLimitReset,
 } from "@t3tools/contracts";
 import { resolveProviderInstanceDisplayName } from "@t3tools/client-runtime/state/provider-instance-display";
 
@@ -112,11 +115,28 @@ export function usedPerDay(
 }
 
 export interface UsageLimitTrendAccount {
+  /** The subscription: provider and signed-in account, or the instance for older readings. */
+  readonly id: string;
+  /** The instance signed in to the subscription now, or else the one that recorded it. */
   readonly instanceId: string;
   readonly name: string;
   readonly lines: ReadonlyArray<UsageLimitTrendLine>;
-  /** Newest first. */
+  /** Weekly windows only, newest first. */
   readonly resets: ReadonlyArray<UsageLimitReset>;
+}
+
+/**
+ * One subscription per provider and signed-in account. Readings recorded
+ * before the account was kept stay with their instance.
+ */
+function subscriptionId(entry: {
+  readonly instanceId: string;
+  readonly driver?: string | undefined;
+  readonly account?: string | undefined;
+}): string {
+  return entry.account === undefined
+    ? `instance:${entry.instanceId}`
+    : `account:${entry.driver ?? ""}:${entry.account}`;
 }
 
 function steppedPath(
@@ -141,43 +161,78 @@ function steppedPath(
   return coordinates.join(" ");
 }
 
+type TrendProvider = Pick<ServerProvider, "instanceId" | "driver" | "displayName"> &
+  Partial<Pick<ServerProvider, "auth">>;
+
 /**
- * Accounts with at least one recorded reading, in the order the providers are
- * listed. An account the server no longer knows keeps its instance id as name,
- * so its history does not vanish with the account.
+ * Subscriptions with at least one recorded reading, in the order the providers
+ * are listed. A subscription is named by provider and email, since one
+ * instance can switch accounts and two instances can share one. A
+ * subscription no provider signs in to anymore keeps its history, after the
+ * known ones; older readings without an account keep their instance's name.
  */
 export function buildUsageLimitTrend(input: {
   readonly history: UsageLimitHistory;
-  readonly providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "driver" | "displayName">>;
+  readonly providers: ReadonlyArray<TrendProvider>;
   readonly sinceMs: number;
   readonly nowMs: number;
 }): ReadonlyArray<UsageLimitTrendAccount> {
-  const byInstance = new Map<string, Map<string, UsageLimitHistoryPoint[]>>();
+  const bySubscription = new Map<
+    string,
+    {
+      readonly sample: UsageLimitHistoryPoint;
+      readonly windows: Map<string, UsageLimitHistoryPoint[]>;
+    }
+  >();
   // Only the long windows: weekly and monthly allowance is what goes unused
   // or runs out. The five-hour session window refills many times a day and
   // would bury them.
   for (const point of input.history.points) {
     if (point.kind === "session") continue;
-    const windows = byInstance.get(point.instanceId) ?? new Map<string, UsageLimitHistoryPoint[]>();
-    byInstance.set(point.instanceId, windows);
-    const points = windows.get(point.windowId) ?? [];
-    windows.set(point.windowId, points);
+    const id = subscriptionId(point);
+    const subscription = bySubscription.get(id) ?? { sample: point, windows: new Map() };
+    bySubscription.set(id, subscription);
+    const points = subscription.windows.get(point.windowId) ?? [];
+    subscription.windows.set(point.windowId, points);
     points.push(point);
   }
-  const order = new Map(
-    input.providers.map((provider, index) => [provider.instanceId as string, index]),
-  );
-  return [...byInstance.entries()]
+  const providerOf = (sample: UsageLimitHistoryPoint): TrendProvider | undefined =>
+    sample.account === undefined
+      ? input.providers.find((provider) => provider.instanceId === sample.instanceId)
+      : (input.providers.find(
+          (provider) =>
+            provider.auth?.email === sample.account &&
+            (sample.driver === undefined || provider.driver === sample.driver),
+        ) ?? input.providers.find((provider) => provider.instanceId === sample.instanceId));
+  const nameOf = (sample: UsageLimitHistoryPoint, provider: TrendProvider | undefined) => {
+    // A credential fingerprint is not a name; such a subscription goes by its instance.
+    if (sample.account?.includes("@")) {
+      const driver = (sample.driver ?? provider?.driver) as ProviderDriverKind | undefined;
+      const providerName = driver ? (PROVIDER_DISPLAY_NAMES[driver] ?? driver) : undefined;
+      return providerName ? `${providerName} · ${sample.account}` : sample.account;
+    }
+    return provider ? resolveProviderInstanceDisplayName(provider) : sample.instanceId;
+  };
+  const order = (provider: TrendProvider | undefined) =>
+    provider === undefined ? Number.MAX_SAFE_INTEGER : input.providers.indexOf(provider);
+  return [...bySubscription.entries()]
+    .map(([id, subscription]) => ({
+      id,
+      ...subscription,
+      provider: providerOf(subscription.sample),
+    }))
     .sort(
-      ([left], [right]) =>
-        (order.get(left) ?? Number.MAX_SAFE_INTEGER) -
-          (order.get(right) ?? Number.MAX_SAFE_INTEGER) || left.localeCompare(right),
+      (left, right) =>
+        order(left.provider) - order(right.provider) || left.id.localeCompare(right.id),
     )
-    .map(([instanceId, windows]) => {
-      const provider = input.providers.find((entry) => entry.instanceId === instanceId);
+    .map(({ id, sample, windows, provider }) => {
+      const resets = input.history.resets.filter(
+        (reset) => subscriptionId(reset) === id && windows.has(reset.windowId),
+      );
       return {
-        instanceId,
-        name: provider ? resolveProviderInstanceDisplayName(provider) : instanceId,
+        id,
+        instanceId: provider?.instanceId ?? sample.instanceId,
+        name: nameOf(sample, provider),
         lines: [...windows.entries()].map(([windowId, points]) => {
           const sorted = [...points].sort(
             (left, right) => Date.parse(left.at) - Date.parse(right.at),
@@ -185,11 +240,8 @@ export function buildUsageLimitTrend(input: {
           const last = sorted.at(-1)!;
           const forecast = forecastUsageWindow(sorted, input.nowMs);
           const span = Math.max(1, input.nowMs - input.sinceMs);
-          const windowResets = input.history.resets.filter(
-            (reset) =>
-              reset.instanceId === instanceId &&
-              reset.windowId === windowId &&
-              Date.parse(reset.at) >= input.sinceMs,
+          const windowResets = resets.filter(
+            (reset) => reset.windowId === windowId && Date.parse(reset.at) >= input.sinceMs,
           );
           return {
             resetMarks: windowResets.map((reset) =>
@@ -207,8 +259,9 @@ export function buildUsageLimitTrend(input: {
             path: steppedPath(sorted, input.sinceMs, input.nowMs),
           };
         }),
-        resets: input.history.resets
-          .filter((reset) => reset.instanceId === instanceId && windows.has(reset.windowId))
+        // Weekly only: that is the allowance a reset can throw away.
+        resets: resets
+          .filter((reset) => reset.kind === "weekly")
           .sort((left, right) => Date.parse(right.at) - Date.parse(left.at)),
       };
     });

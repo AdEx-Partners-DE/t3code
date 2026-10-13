@@ -20,9 +20,17 @@ const resetTimeFormat = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+const clockFormat = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+
+/** The last reading before a reset, by its time alone when it was the same day. */
+function formatLastSeen(lastSeenMs: number, resetMs: number): string {
+  const sameDay = new Date(lastSeenMs).toDateString() === new Date(resetMs).toDateString();
+  return (sameDay ? clockFormat : resetTimeFormat).format(new Date(lastSeenMs));
+}
+
 /**
- * How each account's allowance was used over the last week, and what every
- * reset left unused. Shows nothing until the environment has recorded a
+ * How each subscription's allowance was used over the last week, and what
+ * every weekly reset left unused. Shows nothing until the environment has recorded a
  * reading, so an environment without the history costs no space.
  */
 export function UsageLimitTrendSection({
@@ -70,7 +78,7 @@ export function UsageLimitTrendSection({
       <div className="grid gap-3">
         {accounts.map((account) => (
           <div
-            key={account.instanceId}
+            key={account.id}
             className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"
           >
             <h3 className="truncate text-sm font-medium text-foreground">{account.name}</h3>
@@ -149,7 +157,10 @@ export function UsageLimitTrendSection({
               </div>
             ))}
             {account.resets.length > 0 ? (
-              <ul className="flex flex-col gap-1 border-t border-border/60 pt-2 text-xs text-muted-foreground">
+              <ul
+                className="flex flex-col gap-1 border-t border-border/60 pt-2 text-xs text-muted-foreground"
+                data-testid="usage-limit-resets"
+              >
                 {account.resets.map((reset) => (
                   <li key={`${reset.windowId}:${reset.at}`} className="flex flex-wrap gap-x-2">
                     <span className="tabular-nums">
@@ -159,14 +170,15 @@ export function UsageLimitTrendSection({
                     <span className="text-foreground">
                       {Math.round(reset.unusedPercentBefore)}% unused
                     </span>
-                    {reset.ahead ? (
-                      <span>
-                        early
-                        {reset.expectedAt
-                          ? `, was due ${resetTimeFormat.format(new Date(reset.expectedAt))}`
-                          : ""}
-                      </span>
-                    ) : null}
+                    <span className="tabular-nums">
+                      {Math.round(reset.usedPercentBefore)}% used at{" "}
+                      {formatLastSeen(Date.parse(reset.lastSeenBeforeAt), Date.parse(reset.at))}
+                    </span>
+                    <span>
+                      {reset.ahead
+                        ? `early${reset.expectedAt ? `, was due ${resetTimeFormat.format(new Date(reset.expectedAt))}` : ""}`
+                        : "on schedule"}
+                    </span>
                   </li>
                 ))}
               </ul>

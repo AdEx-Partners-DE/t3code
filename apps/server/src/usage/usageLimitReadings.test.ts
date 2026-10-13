@@ -3,16 +3,19 @@ import { ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 
 import { recordUsageLimitReadings, type UsageLimitReadingState } from "./usageLimitReadings.ts";
 
-type Reading = Pick<ServerProvider, "instanceId" | "usageLimits">;
+type Reading = Pick<ServerProvider, "instanceId" | "usageLimits"> &
+  Partial<Pick<ServerProvider, "auth">>;
 
 function reading(
   at: string,
   weeklyUsed: number,
   weeklyResetsAt: string | undefined,
   instanceId = "codex",
+  email?: string,
 ): Reading {
   return {
     instanceId: ProviderInstanceId.make(instanceId),
+    ...(email === undefined ? {} : { auth: { status: "authenticated" as const, email } }),
     usageLimits: {
       checkedAt: at,
       windows: [
@@ -43,6 +46,8 @@ function replay(readings: ReadonlyArray<ReadonlyArray<Reading>>) {
 
 const RESET = "2026-10-14T02:00:00.000Z";
 const NEXT_RESET = "2026-10-21T02:00:00.000Z";
+/** A week from the early reset at 2026-10-11T08:05, when Codex starts the new window. */
+const EARLY_NEXT_RESET = "2026-10-18T08:04:00.000Z";
 
 describe("recordUsageLimitReadings", () => {
   it("records a point only when a window's reading changes", () => {
@@ -69,7 +74,7 @@ describe("recordUsageLimitReadings", () => {
   it("logs an early reset with what was left unused", () => {
     const { resets } = replay([
       [reading("2026-10-11T08:00:00.000Z", 62, RESET)],
-      [reading("2026-10-11T08:05:00.000Z", 0, NEXT_RESET)],
+      [reading("2026-10-11T08:05:00.000Z", 0, EARLY_NEXT_RESET)],
     ]);
     expect(resets).toEqual([
       {
@@ -130,11 +135,64 @@ describe("recordUsageLimitReadings", () => {
       ],
       [
         reading("2026-10-11T08:05:00.000Z", 81, RESET, "codex"),
-        reading("2026-10-11T08:05:00.000Z", 0, NEXT_RESET, "codex_personal"),
+        reading("2026-10-11T08:05:00.000Z", 0, EARLY_NEXT_RESET, "codex_personal"),
       ],
     ]);
     expect(resets.map((reset) => [reset.instanceId, reset.unusedPercentBefore])).toEqual([
       ["codex_personal", 95],
     ]);
+  });
+
+  it("counts an early reset that keeps the schedule once the window empties", () => {
+    const { resets } = replay([
+      [reading("2026-10-11T08:00:00.000Z", 40, RESET)],
+      [reading("2026-10-11T08:05:00.000Z", 0, RESET)],
+    ]);
+    expect(resets.map((reset) => [reset.ahead, reset.unusedPercentBefore])).toEqual([[true, 60]]);
+  });
+
+  it("does not take two probes that round a point apart for resets", () => {
+    const { resets } = replay([
+      [reading("2026-10-12T14:38:00.000Z", 91, "2026-10-12T15:00:00.401Z")],
+      [reading("2026-10-12T14:39:00.000Z", 90, "2026-10-12T15:00:00.000Z")],
+      [reading("2026-10-12T14:40:00.000Z", 91, "2026-10-12T15:00:00.401Z")],
+      [reading("2026-10-12T14:41:00.000Z", 90, "2026-10-12T15:00:00.000Z")],
+    ]);
+    expect(resets).toEqual([]);
+  });
+
+  it("keeps one series per account when an instance switches accounts", () => {
+    const work = "2026-10-16T12:00:00.000Z";
+    const { resets } = replay([
+      [reading("2026-10-12T19:00:00.000Z", 22, work, "claude", "work@example.com")],
+      [reading("2026-10-12T19:30:00.000Z", 6, NEXT_RESET, "claude", "home@example.com")],
+      [reading("2026-10-12T20:00:00.000Z", 23, work, "claude", "work@example.com")],
+    ]);
+    expect(resets).toEqual([]);
+  });
+
+  it("does not take a switch between unnamed accounts for a reset", () => {
+    const { resets } = replay([
+      [reading("2026-10-12T19:00:00.000Z", 22, "2026-10-16T12:00:00.000Z")],
+      [reading("2026-10-12T19:30:00.000Z", 2, "2026-10-19T15:00:00.000Z")],
+    ]);
+    expect(resets).toEqual([]);
+  });
+
+  it("names the subscription a reset belongs to", () => {
+    const { resets } = replay([
+      [reading("2026-10-11T08:00:00.000Z", 62, RESET, "claude", "home@example.com")],
+      [reading("2026-10-11T08:05:00.000Z", 0, EARLY_NEXT_RESET, "claude", "home@example.com")],
+    ]);
+    expect(resets.map((reset) => reset.account)).toEqual(["home@example.com"]);
+  });
+
+  it("skips a reading of a window that had already ended", () => {
+    const { points, resets } = replay([
+      [reading("2026-10-14T02:03:00.000Z", 1, NEXT_RESET)],
+      [reading("2026-10-14T02:20:00.000Z", 97, RESET)],
+    ]);
+    expect(points.map((point) => point.usedPercent)).toEqual([1]);
+    expect(resets).toEqual([]);
   });
 });

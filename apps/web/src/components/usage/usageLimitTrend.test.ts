@@ -127,6 +127,65 @@ describe("buildUsageLimitTrend", () => {
   });
 });
 
+describe("buildUsageLimitTrend subscriptions", () => {
+  const claude = (instanceId: string, email: string) => ({
+    instanceId: ProviderInstanceId.make(instanceId),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    displayName: instanceId,
+    auth: { status: "authenticated" as const, email },
+  });
+  const reading = (instanceId: string, account: string, at: string, usedPercent: number) => ({
+    ...point(instanceId, at, usedPercent),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    account,
+  });
+
+  it("splits an instance that switched accounts and joins instances on one account", () => {
+    const history: UsageLimitHistory = {
+      points: [
+        reading("claudeAgent", "home@example.com", "2026-10-10T06:00:00.000Z", 20),
+        reading("claudeAgent", "work@example.com", "2026-10-10T08:00:00.000Z", 70),
+        reading("claude_work", "work@example.com", "2026-10-10T09:00:00.000Z", 71),
+      ],
+      resets: [],
+    };
+    const accounts = buildUsageLimitTrend({
+      history,
+      providers: [
+        claude("claudeAgent", "home@example.com"),
+        claude("claude_work", "work@example.com"),
+      ],
+      sinceMs: SINCE,
+      nowMs: NOW,
+    });
+    expect(accounts.map((account) => [account.name, account.lines[0]?.remainingPercent])).toEqual([
+      ["Claude · home@example.com", 80],
+      ["Claude · work@example.com", 29],
+    ]);
+  });
+
+  it("lists only weekly resets", () => {
+    const reset = (kind: "weekly" | "monthly") => ({
+      at: "2026-10-10T12:00:00.000Z",
+      instanceId: ProviderInstanceId.make("codex"),
+      windowId: "weekly",
+      kind,
+      label: kind === "weekly" ? "Weekly" : "Monthly",
+      usedPercentBefore: 20,
+      unusedPercentBefore: 80,
+      usedPercentAfter: 0,
+      lastSeenBeforeAt: "2026-10-10T11:00:00.000Z",
+      ahead: false,
+    });
+    const history: UsageLimitHistory = {
+      points: [point("codex", "2026-10-10T06:00:00.000Z", 20)],
+      resets: [reset("monthly"), reset("weekly")],
+    };
+    const [account] = buildUsageLimitTrend({ history, providers, sinceMs: SINCE, nowMs: NOW });
+    expect(account?.resets.map((entry) => entry.kind)).toEqual(["weekly"]);
+  });
+});
+
 describe("forecastUsageWindow", () => {
   const RESET = "2026-10-12T00:00:00.000Z";
   const reading = (at: string, usedPercent: number, resetsAt: string | null = RESET) => ({

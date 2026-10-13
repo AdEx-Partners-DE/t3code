@@ -1,6 +1,6 @@
 /**
  * Turns successive usage-limit reads into a history: one point whenever a
- * window's reading changes, and one reset whenever a window's usage drops.
+ * window's reading changes, and one reset whenever a window starts over.
  *
  * A provider only reports where an account stands now. Without the earlier
  * readings nobody can say how the allowance burned down, or how much of it was
@@ -25,8 +25,25 @@ export interface UsageLimitReadingDelta {
  */
 const SCHEDULED_RESET_TOLERANCE_MS = 10 * 60_000;
 
-/** Readings jitter by fractions of a percent between probes; that is not a reset. */
-const RESET_DROP_PERCENT = 1;
+/**
+ * How long a window of each kind runs, so a new reset time tells when the
+ * window began. Monthly windows follow the calendar and have no fixed length.
+ */
+const WINDOW_PERIOD_MS: Partial<Record<UsageLimitHistoryPoint["kind"], number>> = {
+  session: 5 * 60 * 60_000,
+  weekly: 7 * 24 * 60 * 60_000,
+};
+
+/**
+ * Two probes of one account can disagree by a point or two (the usage API and
+ * a turn's rate-limit header round differently), so a small drop on its own
+ * says nothing. A window that empties while its reset time stays put was
+ * reset early without a new schedule.
+ */
+const EMPTIED_PERCENT = 2;
+const EMPTIED_MIN_DROP_PERCENT = 3;
+/** Without reset times to compare, only a drop this large is a reset. */
+const UNTIMED_RESET_DROP_PERCENT = 10;
 
 /**
  * Some providers derive the reset time from the moment of the probe, so it
@@ -37,11 +54,106 @@ function sameResetTime(left: string | undefined, right: string | undefined): boo
   return Math.abs(Date.parse(left) - Date.parse(right)) < SCHEDULED_RESET_TOLERANCE_MS;
 }
 
+/**
+ * One series per subscription and window. An instance that switches accounts
+ * keeps one series per account, so the switch is not mistaken for a reset.
+ */
 export function usageLimitWindowKey(point: {
   readonly instanceId: string;
+  readonly driver?: string | undefined;
+  readonly account?: string | undefined;
   readonly windowId: string;
 }): string {
-  return `${point.instanceId}\u0000${point.windowId}`;
+  return point.account === undefined
+    ? `${point.instanceId}\u0000${point.windowId}`
+    : `${point.driver ?? ""}\u0000${point.account}\u0000${point.windowId}`;
+}
+
+/** Whether `point` belongs to a window that began after `previous` was read. */
+function startedOver(previous: UsageLimitHistoryPoint, point: UsageLimitHistoryPoint): boolean {
+  const drop = previous.usedPercent - point.usedPercent;
+  if (!(drop > 0)) return false;
+  if (previous.resetsAt === undefined || point.resetsAt === undefined) {
+    return drop >= UNTIMED_RESET_DROP_PERCENT;
+  }
+  const period = WINDOW_PERIOD_MS[point.kind];
+  const nextResetMs = Date.parse(point.resetsAt);
+  if (period !== undefined) {
+    const startMs = nextResetMs - period;
+    if (
+      startMs >= Date.parse(previous.at) - SCHEDULED_RESET_TOLERANCE_MS &&
+      startMs <= Date.parse(point.at) + SCHEDULED_RESET_TOLERANCE_MS
+    ) {
+      return true;
+    }
+  } else if (nextResetMs - Date.parse(previous.resetsAt) >= SCHEDULED_RESET_TOLERANCE_MS) {
+    return true;
+  }
+  // A reset time that moved without matching a new window is another account's.
+  return (
+    sameResetTime(previous.resetsAt, point.resetsAt) &&
+    point.usedPercent <= EMPTIED_PERCENT &&
+    drop >= EMPTIED_MIN_DROP_PERCENT
+  );
+}
+
+/**
+ * Adds one reading to `state` when it changes the window's series, and
+ * returns the reset it reveals. Used for live readings and to rebuild the
+ * resets from recorded points, so a corrected rule also corrects the past.
+ */
+export function observeUsageLimitPoint(
+  state: Map<string, UsageLimitHistoryPoint>,
+  point: UsageLimitHistoryPoint,
+): { readonly recorded: boolean; readonly reset?: UsageLimitReset } {
+  // A reading of a window that had already ended is a stale cache.
+  if (
+    point.resetsAt !== undefined &&
+    Date.parse(point.resetsAt) < Date.parse(point.at) - SCHEDULED_RESET_TOLERANCE_MS
+  ) {
+    return { recorded: false };
+  }
+  const key = usageLimitWindowKey(point);
+  const previous = state.get(key);
+  if (previous && Date.parse(point.at) <= Date.parse(previous.at)) return { recorded: false };
+  if (
+    previous &&
+    previous.usedPercent === point.usedPercent &&
+    sameResetTime(previous.resetsAt, point.resetsAt)
+  ) {
+    return { recorded: false };
+  }
+  state.set(key, point);
+  if (!previous || !startedOver(previous, point)) return { recorded: true };
+  const expectedAtMs = previous.resetsAt === undefined ? Number.NaN : Date.parse(previous.resetsAt);
+  return {
+    recorded: true,
+    reset: {
+      at: point.at,
+      instanceId: point.instanceId,
+      ...(point.driver === undefined ? {} : { driver: point.driver }),
+      ...(point.account === undefined ? {} : { account: point.account }),
+      windowId: point.windowId,
+      kind: point.kind,
+      label: point.label,
+      usedPercentBefore: previous.usedPercent,
+      unusedPercentBefore: Math.max(0, 100 - previous.usedPercent),
+      usedPercentAfter: point.usedPercent,
+      lastSeenBeforeAt: previous.at,
+      ...(previous.resetsAt === undefined ? {} : { expectedAt: previous.resetsAt }),
+      // Unknown schedule counts as on schedule: there is nothing to be early against.
+      ahead:
+        Number.isFinite(expectedAtMs) &&
+        Date.parse(point.at) < expectedAtMs - SCHEDULED_RESET_TOLERANCE_MS,
+    },
+  };
+}
+
+/** The subscription an instance reads for now, by its signed-in account. */
+function accountOf(
+  provider: Partial<Pick<ServerProvider, "auth">> & Pick<ServerProvider, "usageLimits">,
+): string | undefined {
+  return provider.auth?.email ?? provider.usageLimits?.credentialFingerprint;
 }
 
 /**
@@ -51,7 +163,10 @@ export function usageLimitWindowKey(point: {
  */
 export function recordUsageLimitReadings(
   state: UsageLimitReadingState,
-  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "usageLimits">>,
+  providers: ReadonlyArray<
+    Pick<ServerProvider, "instanceId" | "usageLimits"> &
+      Partial<Pick<ServerProvider, "driver" | "auth">>
+  >,
 ): UsageLimitReadingDelta {
   const next = new Map(state);
   const points: UsageLimitHistoryPoint[] = [];
@@ -59,49 +174,38 @@ export function recordUsageLimitReadings(
   for (const provider of providers) {
     const usage = provider.usageLimits;
     if (!usage || usage.unavailable) continue;
+    const account = accountOf(provider);
     for (const window of usage.windows) {
       const point: UsageLimitHistoryPoint = {
         at: usage.checkedAt,
         instanceId: provider.instanceId,
+        ...(provider.driver === undefined ? {} : { driver: provider.driver }),
+        ...(account === undefined ? {} : { account }),
         windowId: window.id,
         kind: window.kind,
         label: window.label,
         usedPercent: window.usedPercent,
         ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
       };
-      const key = usageLimitWindowKey(point);
-      const previous = next.get(key);
-      if (previous && Date.parse(point.at) <= Date.parse(previous.at)) continue;
-      if (
-        previous &&
-        previous.usedPercent === point.usedPercent &&
-        sameResetTime(previous.resetsAt, point.resetsAt)
-      ) {
-        continue;
-      }
-      if (previous && previous.usedPercent - point.usedPercent >= RESET_DROP_PERCENT) {
-        const expectedAtMs =
-          previous.resetsAt === undefined ? Number.NaN : Date.parse(previous.resetsAt);
-        resets.push({
-          at: point.at,
-          instanceId: point.instanceId,
-          windowId: point.windowId,
-          kind: point.kind,
-          label: point.label,
-          usedPercentBefore: previous.usedPercent,
-          unusedPercentBefore: Math.max(0, 100 - previous.usedPercent),
-          usedPercentAfter: point.usedPercent,
-          lastSeenBeforeAt: previous.at,
-          ...(previous.resetsAt === undefined ? {} : { expectedAt: previous.resetsAt }),
-          // Unknown schedule counts as on schedule: there is nothing to be early against.
-          ahead:
-            Number.isFinite(expectedAtMs) &&
-            Date.parse(point.at) < expectedAtMs - SCHEDULED_RESET_TOLERANCE_MS,
-        });
-      }
+      const observed = observeUsageLimitPoint(next, point);
+      if (!observed.recorded) continue;
       points.push(point);
-      next.set(key, point);
+      if (observed.reset) resets.push(observed.reset);
     }
   }
   return { points, resets, state: next };
+}
+
+/** The resets recorded points reveal, oldest first, and the state they leave. */
+export function replayUsageLimitPoints(points: ReadonlyArray<UsageLimitHistoryPoint>): {
+  readonly resets: ReadonlyArray<UsageLimitReset>;
+  readonly state: UsageLimitReadingState;
+} {
+  const state = new Map<string, UsageLimitHistoryPoint>();
+  const resets: UsageLimitReset[] = [];
+  for (const point of points) {
+    const observed = observeUsageLimitPoint(state, point);
+    if (observed.reset) resets.push(observed.reset);
+  }
+  return { resets, state };
 }

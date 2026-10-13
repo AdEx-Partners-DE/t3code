@@ -198,6 +198,14 @@ const UsagePercent = Schema.Number.check(Schema.isBetween({ minimum: 0, maximum:
 export const UsageLimitHistoryPoint = Schema.Struct({
   at: IsoDateTime,
   instanceId: ProviderInstanceId,
+  driver: Schema.optional(ProviderDriverKind),
+  /**
+   * The subscription the reading belongs to: the signed-in email, or the
+   * credential fingerprint without one. One instance can switch between
+   * accounts, so the instance alone does not name a subscription. Absent on
+   * readings recorded before accounts were kept.
+   */
+  account: Schema.optional(TrimmedNonEmptyString),
   windowId: TrimmedNonEmptyString,
   kind: ServerProviderUsageWindow.fields.kind,
   label: TrimmedNonEmptyString,
@@ -207,14 +215,17 @@ export const UsageLimitHistoryPoint = Schema.Struct({
 export type UsageLimitHistoryPoint = typeof UsageLimitHistoryPoint.Type;
 
 /**
- * A window whose usage dropped between two readings. `ahead` marks a reset
+ * A window that started over between two readings. `ahead` marks a reset
  * that came before the time the provider had announced, as happens when a
  * provider resets every account at once; `unusedPercentBefore` is the
  * allowance that was still there and went unused.
  */
 export const UsageLimitReset = Schema.Struct({
+  /** The first reading after the reset, which is when it was registered. */
   at: IsoDateTime,
   instanceId: ProviderInstanceId,
+  driver: Schema.optional(ProviderDriverKind),
+  account: Schema.optional(TrimmedNonEmptyString),
   windowId: TrimmedNonEmptyString,
   kind: ServerProviderUsageWindow.fields.kind,
   label: TrimmedNonEmptyString,
