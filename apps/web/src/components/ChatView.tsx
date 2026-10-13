@@ -222,6 +222,7 @@ import {
   buildPendingUserInputAnswers,
   carryDisplacedCustomAnswerIntoPrompt,
   derivePendingUserInputProgress,
+  projectPendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
@@ -4895,6 +4896,15 @@ export default function ChatView(props: ChatViewProps) {
     )
       return;
     if (nextOpen && hasTerminalWriteAccess() && terminalUiState.terminalIds.length === 0) {
+      // Server-created setup terminals exist before this client's drawer mounts.
+      // Reuse them before allocating a shell from the still-empty UI state.
+      const existingTerminalId =
+        runningTerminalIds.find((id) => !panelTerminalIds.has(id)) ??
+        activeServerOrderedTerminalIds.find((id) => !panelTerminalIds.has(id));
+      if (existingTerminalId !== undefined) {
+        storeEnsureTerminal(activeThreadRef, existingTerminalId, { open: true, active: true });
+        return;
+      }
       if (!activeThreadId || !activeProject) {
         return;
       }
@@ -4921,6 +4931,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     setTerminalOpen(nextOpen);
   }, [
+    activeServerOrderedTerminalIds,
     activeProject,
     activeThreadId,
     activeThreadRef,
@@ -4929,6 +4940,8 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     gitCwd,
     openTerminal,
+    panelTerminalIds,
+    runningTerminalIds,
     hasTerminalWriteAccess,
     setTerminalOpen,
     storeEnsureTerminal,
@@ -10358,6 +10371,7 @@ export default function ChatView(props: ChatViewProps) {
         string,
         import("@t3tools/contracts").UserInputAttachments[string]
       >();
+      const providerAnswers = { ...answers };
       for (const question of pendingInput.questions) {
         const target = questionAttachmentDraftId(
           environmentId,
@@ -10367,6 +10381,10 @@ export default function ChatView(props: ChatViewProps) {
         );
         if ((useQuestionAttachmentPreparation.getState().counts[target] ?? 0) > 0) return;
         const draft = useComposerDraftStore.getState().getComposerDraft(target);
+        providerAnswers[question.id] = projectPendingUserInputAnswer(
+          answers[question.id],
+          draft?.threadContexts ?? [],
+        );
         const attachments = draft ? [...draft.images, ...draft.files] : [];
         if (attachments.length === 0) continue;
         const uploaded = getUploadedAttachments({ environmentId, images: attachments });
@@ -10392,7 +10410,7 @@ export default function ChatView(props: ChatViewProps) {
         input: {
           threadId: activeThreadId,
           requestId,
-          answers,
+          answers: providerAnswers,
           ...(attachmentsByQuestionId.size > 0
             ? { attachmentsByQuestionId: Object.fromEntries(attachmentsByQuestionId) }
             : {}),
@@ -10465,6 +10483,20 @@ export default function ChatView(props: ChatViewProps) {
       const nextPrompt = carryDisplacedCustomAnswerIntoPrompt(currentPrompt, displacedAnswer);
       if (nextPrompt !== currentPrompt) {
         setComposerDraftPrompt(composerDraftTarget, nextPrompt);
+        if (activeThreadId) {
+          const store = useComposerDraftStore.getState();
+          const questionTarget = questionAttachmentDraftId(
+            environmentId,
+            activeThreadId,
+            activePendingUserInput.requestId,
+            questionId,
+          );
+          store.addThreadContexts(
+            composerDraftTarget,
+            store.getComposerDraft(questionTarget)?.threadContexts ?? [],
+            { appendReference: false },
+          );
+        }
       }
       setPendingUserInputAnswersByRequestId((existing) => {
         const question =
@@ -10495,8 +10527,10 @@ export default function ChatView(props: ChatViewProps) {
       activePendingProgress?.activeQuestion,
       activePendingUserInput,
       activePendingRequestKey,
+      activeThreadId,
       composerDraftTarget,
       composerRef,
+      environmentId,
       pendingUserInputAnswersByRequestId,
       setComposerDraftPrompt,
     ],
@@ -11053,6 +11087,45 @@ export default function ChatView(props: ChatViewProps) {
   }, [cancelWorktreeSetup, draftId, setupTarget.environmentId, worktreeSetup]);
   const onSendRef = useRef(onSend);
   onSendRef.current = onSend;
+  const onResumeRef = useRef(onResume);
+  onResumeRef.current = onResume;
+  const onCompactContextRef = useRef(onCompactContext);
+  onCompactContextRef.current = onCompactContext;
+  const onComposerSend = useCallback(
+    (...args: Parameters<typeof onSend>) => onSendRef.current(...args),
+    [],
+  );
+  const onComposerResume = useCallback(() => onResumeRef.current(), []);
+  const onComposerCompactContext = useCallback(() => onCompactContextRef.current(), []);
+  const queuedRunsControl = useMemo(
+    () =>
+      isServerThread && activeThread ? (
+        <QueuedRunsControl
+          ref={queuedRunsControlRef}
+          steerShortcutLabel={shortcutLabelForCommand(keybindings, "thread.steerQueuedMessage", {
+            context: { terminalFocus: false },
+          })}
+          editShortcutLabel={shortcutLabelForCommand(keybindings, "thread.editQueuedMessage", {
+            context: { composerFocus: true },
+          })}
+          environmentId={activeThread.environmentId}
+          threadId={activeThread.id}
+          optimisticMessages={optimisticUserMessages}
+          editingRunId={editingQueuedRun?.runId ?? null}
+          onEditQueuedRun={beginEditingQueuedRun}
+          onCancelEdit={cancelEditingQueuedRun}
+        />
+      ) : null,
+    [
+      activeThread,
+      beginEditingQueuedRun,
+      cancelEditingQueuedRun,
+      editingQueuedRun?.runId,
+      isServerThread,
+      keybindings,
+      optimisticUserMessages,
+    ],
+  );
   // Resend once the cancelled dispatch has settled and the composer is free.
   // Every state that makes `onSend` bail and wait is part of the readiness
   // check, so the flag survives a reconnect, a reverting checkpoint, or a
@@ -11117,12 +11190,21 @@ export default function ChatView(props: ChatViewProps) {
   const onOpenTurnDiff = useCallback(
     (runId: RunId, filePath?: string) => {
       if (!isServerThread || !activeThreadRef) return;
+      const diffOpen =
+        selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) ===
+        "diff";
       explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
       useDiffPanelStore.getState().selectTurn(activeThreadRef, runId, filePath);
       useRightPanelStore.getState().open(activeThreadRef, "diff");
       onDiffPanelOpen?.();
     },
-    [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen],
+    [activeThreadRef, isServerThread, onDiffPanelOpen],
+  );
+  const onTimelineRollbackCheckpoint = useCallback(
+    (input: { readonly checkpointId: string; readonly scopeId: string }) => {
+      if (!paintOnlyDisplayedTimeline) void onRollbackCheckpoint(input);
+    },
+    [onRollbackCheckpoint, paintOnlyDisplayedTimeline],
   );
   // The revert handler is read from a ref at call-time so the callback
   // reference is fully stable and never busts TimelineRowCtx identity.
@@ -11646,9 +11728,7 @@ export default function ChatView(props: ChatViewProps) {
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={paintOnlyDisplayedTimeline ? null : parentThreadLink}
                 onForkFromRun={paintOnlyDisplayedTimeline ? async () => {} : onForkFromRun}
-                onRollbackCheckpoint={(input) => {
-                  if (!paintOnlyDisplayedTimeline) void onRollbackCheckpoint(input);
-                }}
+                onRollbackCheckpoint={onTimelineRollbackCheckpoint}
                 supportsConversationRollback={
                   !paintOnlyDisplayedTimeline && supportsConversationRollback
                 }
@@ -11854,29 +11934,7 @@ export default function ChatView(props: ChatViewProps) {
                                             : projectCloneSendBlockReason
                               }
                               isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
-                              queuedRunsControl={
-                                isServerThread && activeThread ? (
-                                  <QueuedRunsControl
-                                    ref={queuedRunsControlRef}
-                                    steerShortcutLabel={shortcutLabelForCommand(
-                                      keybindings,
-                                      "thread.steerQueuedMessage",
-                                      { context: { terminalFocus: false } },
-                                    )}
-                                    editShortcutLabel={shortcutLabelForCommand(
-                                      keybindings,
-                                      "thread.editQueuedMessage",
-                                      { context: { composerFocus: true } },
-                                    )}
-                                    environmentId={activeThread.environmentId}
-                                    threadId={activeThread.id}
-                                    optimisticMessages={optimisticUserMessages}
-                                    editingRunId={editingQueuedRun?.runId ?? null}
-                                    onEditQueuedRun={beginEditingQueuedRun}
-                                    onCancelEdit={cancelEditingQueuedRun}
-                                  />
-                                ) : null
-                              }
+                              queuedRunsControl={queuedRunsControl}
                               bannerItems={composerBannerItems}
                               resumeCompactionTokens={resumeCompactionTokens}
                               keepFullHistory={keepFullHistory}
@@ -11951,9 +12009,9 @@ export default function ChatView(props: ChatViewProps) {
                               onPageScrollKeyDown={onComposerPageScrollKeyDown}
                               onPageScrollKeyUp={onComposerPageScrollKeyUp}
                               onPageScrollRelease={onComposerPageScrollRelease}
-                              onCompactContext={onCompactContext}
-                              onSend={onSend}
-                              onResume={onResume}
+                              onCompactContext={onComposerCompactContext}
+                              onSend={onComposerSend}
+                              onResume={onComposerResume}
                               onInterrupt={onInterrupt}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}
