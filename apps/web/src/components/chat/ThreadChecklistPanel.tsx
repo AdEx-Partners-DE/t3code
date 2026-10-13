@@ -41,13 +41,10 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
+import { checklistAutoRefreshNeeded } from "./ThreadChecklistPanel.logic";
 import { revealInTimeline } from "./timelineReveal";
 
 const AUTO_REFRESH_KEY = "t3code:thread-checklist:auto";
-/** A stale checklist is rewritten on its own at most this often; each rewrite is a model call. */
-const AUTO_REFRESH_MIN_AGE_MS = 15 * 60_000;
-/** Turns a thread must have finished since its checklist before Auto rewrites it. */
-const AUTO_REFRESH_MIN_TURNS = 3;
 const DONE_SHOWN = 5;
 
 export const CHECKLIST_STATUS_ORDER = ["attention", "open", "backlog", "done"] as const;
@@ -253,20 +250,38 @@ export function ThreadChecklistPanel(props: {
   // from the turns that have ended. One attempt per run, so a failing model is
   // not asked again and again.
   const attemptedForRun = useRef<string | null>(null);
+  const [openedAt] = useState(() => Date.now());
+  const fetchedAt = stored.dataUpdatedAt;
   useEffect(() => {
     if (!auto || !allowed || !loaded || !hasRun || busy) return;
     if (latestRunId === null || attemptedForRun.current === latestRunId) return;
     // Not after every turn: a rewrite is a model call. A thread gets its
     // first checklist once it has a few turns, and a new one after a few more.
-    const needed =
-      turnsBehind >= AUTO_REFRESH_MIN_TURNS &&
-      (checklist === null ||
-        (stale && Date.now() - Date.parse(checklist.generatedAt) >= AUTO_REFRESH_MIN_AGE_MS));
+    const needed = checklistAutoRefreshNeeded({
+      turnsBehind,
+      checklistGeneratedAt: checklist?.generatedAt ?? null,
+      stale,
+      fetchedAt,
+      openedAt,
+      now: Date.now(),
+    });
     if (!needed) return;
     attemptedForRun.current = latestRunId;
     void run(true);
     // `run` closes over the same values this effect lists.
-  }, [allowed, auto, busy, checklist, hasRun, loaded, latestRunId, stale, turnsBehind]);
+  }, [
+    allowed,
+    auto,
+    busy,
+    checklist,
+    fetchedAt,
+    hasRun,
+    loaded,
+    latestRunId,
+    openedAt,
+    stale,
+    turnsBehind,
+  ]);
 
   const showInThread = (item: ThreadChecklistItem) => {
     if (item.messageId !== undefined && revealInTimeline(item.messageId)) return;
