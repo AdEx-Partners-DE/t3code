@@ -1418,10 +1418,12 @@ export function codexThreadRuntimeParams(input: {
   };
 }
 
-// Decodes only this table, so an unrelated config field cannot fail the turn.
+// Decodes only this table and the profile selection that makes Codex ignore
+// it, so an unrelated config field cannot fail the turn.
 const decodeCodexWorkspaceWriteConfig = Schema.decodeUnknownEffect(
   Schema.Struct({
     config: Schema.Struct({
+      default_permissions: Schema.optionalKey(Schema.Unknown),
       sandbox_workspace_write: Schema.optionalKey(
         Schema.NullOr(CodexSchema.V2ConfigReadResponse__SandboxWorkspaceWrite),
       ),
@@ -1440,6 +1442,42 @@ const decodeCodexPermissionProfileRequirements = Schema.decodeUnknownEffect(
     ),
   }),
 );
+
+/**
+ * Whether the user or an admin opted Codex into permission profiles. Codex then
+ * runs threads started without a sandbox mode, as T3 starts them, under the
+ * selected profile and ignores `[sandbox_workspace_write]`, so copying the
+ * table into `turn/start` would grant what the profile excludes. In
+ * `core/src/config/mod.rs` at `rust-v0.162.1`, that happens when:
+ *
+ * - managed requirements set `allowedPermissionProfiles`. Requirements that set
+ *   `defaultPermissions` without it fail Codex's config load, and `config/read`
+ *   with it, so those turns keep the bare policy.
+ * - any config layer sets `default_permissions`, including launch arguments.
+ *   A higher layer's `sandbox_mode` selects the table again, but this check
+ *   doesn't reproduce Codex's layer order, so those turns keep the bare policy.
+ *
+ * Built-in profiles that Codex picks on its own, such as `:read-only` for a
+ * project with no trust setting, don't count: T3's mode asks for
+ * workspace-write, and the table holds the user's workspace-write settings.
+ * A resumed or forked thread can also restore the last profile Codex recorded
+ * for it, which `config/read` and `configRequirements/read` don't show, so the
+ * table is copied. That profile came from another Codex client's turn, or is
+ * the one Codex selected when T3 last resumed the thread without starting a
+ * turn, such as a built-in default or a `default_permissions` profile the user
+ * has since removed. T3's next turn clears it.
+ *
+ * It runs the `allowedPermissionProfiles` read only when `defaultPermissions`
+ * is unset, because otherwise the answer can't change the result.
+ */
+function codexPermissionProfilesConfigured<E, R>(input: {
+  readonly defaultPermissions: unknown;
+  readonly allowedPermissionProfiles: Effect.Effect<unknown, E, R>;
+}): Effect.Effect<boolean, E, R> {
+  return input.defaultPermissions != null
+    ? Effect.succeed(true)
+    : input.allowedPermissionProfiles.pipe(Effect.map((profiles) => profiles != null));
+}
 
 const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
   Schema.Struct({ thread: Schema.Struct({ id: Schema.String, updatedAt: Schema.Number }) }),
@@ -6390,18 +6428,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const workspaceWriteConfig = usesCodexWorkspaceWriteDefault(turnInput.runtimePolicy)
               ? yield* client.raw.request("config/read", { cwd: turnInput.runtimePolicy.cwd }).pipe(
                   Effect.flatMap(decodeCodexWorkspaceWriteConfig),
-                  Effect.map((response) => response.config.sandbox_workspace_write),
-                  // Under managed permission profiles Codex ignores this table,
-                  // so copying it would grant what the admin's profile excludes.
-                  Effect.flatMap((config) =>
-                    config == null
-                      ? Effect.succeed(config)
-                      : client.raw.request("configRequirements/read", undefined).pipe(
-                          Effect.flatMap(decodeCodexPermissionProfileRequirements),
-                          Effect.map((response) =>
-                            response.requirements?.allowedPermissionProfiles == null
-                              ? config
-                              : undefined,
+                  Effect.flatMap(({ config }) =>
+                    config.sandbox_workspace_write == null
+                      ? Effect.succeed(null)
+                      : codexPermissionProfilesConfigured({
+                          defaultPermissions: config.default_permissions,
+                          allowedPermissionProfiles: client.raw
+                            .request("configRequirements/read", undefined)
+                            .pipe(
+                              Effect.flatMap(decodeCodexPermissionProfileRequirements),
+                              Effect.map(
+                                ({ requirements }) => requirements?.allowedPermissionProfiles,
+                              ),
+                            ),
+                        }).pipe(
+                          Effect.map((configured) =>
+                            configured ? undefined : config.sandbox_workspace_write,
                           ),
                         ),
                   ),
