@@ -195,4 +195,25 @@ describe("recordUsageLimitReadings", () => {
     expect(points.map((point) => point.usedPercent)).toEqual([1]);
     expect(resets).toEqual([]);
   });
+
+  it("keys a subscription by lower-cased email and workspace, joining a read without one", () => {
+    const read = (at: string, used: number, email: string, workspaceId?: string): Reading => ({
+      ...reading(at, used, RESET, "codex"),
+      auth: {
+        status: "authenticated",
+        email,
+        ...(workspaceId === undefined ? {} : { workspaceId }),
+      },
+    });
+    const { points } = replay([
+      [read("2026-10-11T08:00:00.000Z", 40, "Me@Example.com", "team")],
+      [read("2026-10-11T08:05:00.000Z", 41, "me@example.com")],
+      [read("2026-10-11T08:10:00.000Z", 5, "me@example.com", "personal")],
+    ]);
+    expect(points.map((point) => [point.account, point.workspaceId])).toEqual([
+      ["me@example.com", "team"],
+      ["me@example.com", "team"],
+      ["me@example.com", "personal"],
+    ]);
+  });
 });

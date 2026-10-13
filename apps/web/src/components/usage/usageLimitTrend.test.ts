@@ -164,6 +164,26 @@ describe("buildUsageLimitTrend subscriptions", () => {
     ]);
   });
 
+  it("does not hand an account's history to the instance that switched away from it", () => {
+    const history: UsageLimitHistory = {
+      points: [
+        reading("claudeAgent", "old@example.com", "2026-10-10T06:00:00.000Z", 40),
+        reading("claudeAgent", "new@example.com", "2026-10-10T08:00:00.000Z", 10),
+      ],
+      resets: [],
+    };
+    const accounts = buildUsageLimitTrend({
+      history,
+      providers: [claude("claudeAgent", "New@Example.com")],
+      sinceMs: SINCE,
+      nowMs: NOW,
+    });
+    expect(accounts.map((account) => [account.name, account.instanceId])).toEqual([
+      ["Claude · new@example.com", "claudeAgent"],
+      ["Claude · old@example.com", "claudeAgent"],
+    ]);
+  });
+
   it("lists only weekly resets", () => {
     const reset = (kind: "weekly" | "monthly") => ({
       at: "2026-10-10T12:00:00.000Z",

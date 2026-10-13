@@ -62,11 +62,12 @@ export function usageLimitWindowKey(point: {
   readonly instanceId: string;
   readonly driver?: string | undefined;
   readonly account?: string | undefined;
+  readonly workspaceId?: string | undefined;
   readonly windowId: string;
 }): string {
   return point.account === undefined
     ? `${point.instanceId}\u0000${point.windowId}`
-    : `${point.driver ?? ""}\u0000${point.account}\u0000${point.windowId}`;
+    : [point.driver ?? "", point.account, point.workspaceId ?? "", point.windowId].join("\u0000");
 }
 
 /** Whether `point` belongs to a window that began after `previous` was read. */
@@ -133,6 +134,7 @@ export function observeUsageLimitPoint(
       instanceId: point.instanceId,
       ...(point.driver === undefined ? {} : { driver: point.driver }),
       ...(point.account === undefined ? {} : { account: point.account }),
+      ...(point.workspaceId === undefined ? {} : { workspaceId: point.workspaceId }),
       windowId: point.windowId,
       kind: point.kind,
       label: point.label,
@@ -149,11 +151,43 @@ export function observeUsageLimitPoint(
   };
 }
 
-/** The subscription an instance reads for now, by its signed-in account. */
-function accountOf(
+/**
+ * The subscription an instance reads for now: its signed-in email, compared
+ * the way the pooled limits views compare it, or its credential without one.
+ */
+function subscriptionOf(
   provider: Partial<Pick<ServerProvider, "auth">> & Pick<ServerProvider, "usageLimits">,
-): string | undefined {
-  return provider.auth?.email ?? provider.usageLimits?.credentialFingerprint;
+): { readonly account?: string; readonly workspaceId?: string } {
+  const account =
+    provider.auth?.email?.trim().toLowerCase() || provider.usageLimits?.credentialFingerprint;
+  if (account === undefined) return {};
+  const workspaceId = provider.auth?.workspaceId;
+  return workspaceId === undefined ? { account } : { account, workspaceId };
+}
+
+/**
+ * A read that could not tell its workspace joins the only workspace recorded
+ * for its email, as the pooled limits views do, so one failed lookup does not
+ * split a subscription's series.
+ */
+function withKnownWorkspace(
+  state: UsageLimitReadingState,
+  driver: string | undefined,
+  subscription: { readonly account?: string; readonly workspaceId?: string },
+): { readonly account?: string; readonly workspaceId?: string } {
+  if (subscription.account === undefined || subscription.workspaceId !== undefined) {
+    return subscription;
+  }
+  const known = new Set<string>();
+  for (const point of state.values()) {
+    if (point.driver === driver && point.account === subscription.account && point.workspaceId) {
+      known.add(point.workspaceId);
+    }
+  }
+  const [only] = known;
+  return known.size === 1 && only !== undefined
+    ? { account: subscription.account, workspaceId: only }
+    : subscription;
 }
 
 /**
@@ -174,13 +208,13 @@ export function recordUsageLimitReadings(
   for (const provider of providers) {
     const usage = provider.usageLimits;
     if (!usage || usage.unavailable) continue;
-    const account = accountOf(provider);
+    const subscription = withKnownWorkspace(next, provider.driver, subscriptionOf(provider));
     for (const window of usage.windows) {
       const point: UsageLimitHistoryPoint = {
         at: usage.checkedAt,
         instanceId: provider.instanceId,
         ...(provider.driver === undefined ? {} : { driver: provider.driver }),
-        ...(account === undefined ? {} : { account }),
+        ...subscription,
         windowId: window.id,
         kind: window.kind,
         label: window.label,

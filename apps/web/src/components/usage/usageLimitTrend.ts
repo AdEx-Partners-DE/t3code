@@ -133,10 +133,11 @@ function subscriptionId(entry: {
   readonly instanceId: string;
   readonly driver?: string | undefined;
   readonly account?: string | undefined;
+  readonly workspaceId?: string | undefined;
 }): string {
   return entry.account === undefined
     ? `instance:${entry.instanceId}`
-    : `account:${entry.driver ?? ""}:${entry.account}`;
+    : `account:${entry.driver ?? ""}:${entry.account}:${entry.workspaceId ?? ""}`;
 }
 
 function steppedPath(
@@ -162,7 +163,7 @@ function steppedPath(
 }
 
 type TrendProvider = Pick<ServerProvider, "instanceId" | "driver" | "displayName"> &
-  Partial<Pick<ServerProvider, "auth">>;
+  Partial<Pick<ServerProvider, "auth" | "usageLimits">>;
 
 /**
  * Subscriptions with at least one recorded reading, in the order the providers
@@ -196,22 +197,39 @@ export function buildUsageLimitTrend(input: {
     subscription.windows.set(point.windowId, points);
     points.push(point);
   }
+  // The instance signed in to a subscription now. One that recorded it but has
+  // since switched to another account is not it.
   const providerOf = (sample: UsageLimitHistoryPoint): TrendProvider | undefined =>
     sample.account === undefined
       ? input.providers.find((provider) => provider.instanceId === sample.instanceId)
-      : (input.providers.find(
+      : input.providers.find(
           (provider) =>
-            provider.auth?.email === sample.account &&
-            (sample.driver === undefined || provider.driver === sample.driver),
-        ) ?? input.providers.find((provider) => provider.instanceId === sample.instanceId));
+            (sample.driver === undefined || provider.driver === sample.driver) &&
+            // As the server names it: the email, or the credential without one.
+            (provider.auth?.email?.trim().toLowerCase() ||
+              provider.usageLimits?.credentialFingerprint) === sample.account &&
+            provider.auth?.workspaceId === sample.workspaceId,
+        );
+  const emailNames = new Map<string, number>();
+  for (const [, { sample }] of bySubscription) {
+    if (sample.account === undefined) continue;
+    const key = `${sample.driver ?? ""}:${sample.account}`;
+    emailNames.set(key, (emailNames.get(key) ?? 0) + 1);
+  }
   const nameOf = (sample: UsageLimitHistoryPoint, provider: TrendProvider | undefined) => {
     // A credential fingerprint is not a name; such a subscription goes by its instance.
     if (sample.account?.includes("@")) {
       const driver = (sample.driver ?? provider?.driver) as ProviderDriverKind | undefined;
       const providerName = driver ? (PROVIDER_DISPLAY_NAMES[driver] ?? driver) : undefined;
-      return providerName ? `${providerName} · ${sample.account}` : sample.account;
+      const name = providerName ? `${providerName} · ${sample.account}` : sample.account;
+      // One email in several workspaces: tell them apart.
+      return sample.workspaceId !== undefined &&
+        (emailNames.get(`${sample.driver ?? ""}:${sample.account}`) ?? 0) > 1
+        ? `${name} (${sample.workspaceId.slice(0, 8)})`
+        : name;
     }
-    return provider ? resolveProviderInstanceDisplayName(provider) : sample.instanceId;
+    const recorder = input.providers.find((entry) => entry.instanceId === sample.instanceId);
+    return recorder ? resolveProviderInstanceDisplayName(recorder) : sample.instanceId;
   };
   const order = (provider: TrendProvider | undefined) =>
     provider === undefined ? Number.MAX_SAFE_INTEGER : input.providers.indexOf(provider);

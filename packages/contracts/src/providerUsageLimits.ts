@@ -206,6 +206,8 @@ export const UsageLimitHistoryPoint = Schema.Struct({
    * readings recorded before accounts were kept.
    */
   account: Schema.optional(TrimmedNonEmptyString),
+  /** One email can belong to several workspaces, each with its own quota. */
+  workspaceId: Schema.optional(TrimmedNonEmptyString),
   windowId: TrimmedNonEmptyString,
   kind: ServerProviderUsageWindow.fields.kind,
   label: TrimmedNonEmptyString,
@@ -226,6 +228,7 @@ export const UsageLimitReset = Schema.Struct({
   instanceId: ProviderInstanceId,
   driver: Schema.optional(ProviderDriverKind),
   account: Schema.optional(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(TrimmedNonEmptyString),
   windowId: TrimmedNonEmptyString,
   kind: ServerProviderUsageWindow.fields.kind,
   label: TrimmedNonEmptyString,
