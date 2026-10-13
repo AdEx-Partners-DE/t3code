@@ -16,6 +16,39 @@ type TranscriptMessage = Pick<
   "id" | "role" | "text" | "runId" | "createdAt" | "scheduledTaskId" | "notification"
 >;
 
+function isFinishedRun(run: { readonly status: string }): boolean {
+  return (
+    run.status === "completed" ||
+    run.status === "failed" ||
+    run.status === "interrupted" ||
+    run.status === "cancelled"
+  );
+}
+
+/**
+ * The newest turn that has ended. A checklist written while a turn still runs
+ * stands on this one: the running turn's reply is not written yet, and it
+ * counts as finished since the checklist once it ends.
+ */
+export function latestFinishedRunId<
+  R extends { readonly id: string; readonly ordinal: number; readonly status: string },
+>(runs: ReadonlyArray<R>): R["id"] | null {
+  let latest: R | null = null;
+  for (const run of runs) {
+    if (isFinishedRun(run) && (latest === null || run.ordinal > latest.ordinal)) latest = run;
+  }
+  return latest?.id ?? null;
+}
+
+/** The messages a checklist reads: those of turns still running are left out. */
+export function messagesOfFinishedTurns<M extends { readonly runId: string | null }>(
+  messages: ReadonlyArray<M>,
+  runs: ReadonlyArray<{ readonly id: string; readonly status: string }>,
+): ReadonlyArray<M> {
+  const unfinished = new Set(runs.filter((run) => !isFinishedRun(run)).map((run) => run.id));
+  return messages.filter((message) => message.runId === null || !unfinished.has(message.runId));
+}
+
 /**
  * How many turns have finished after the run a checklist was written from.
  * Without that run (no checklist yet, or the run is gone) every finished turn
@@ -25,13 +58,7 @@ export function turnsFinishedSince(
   runs: ReadonlyArray<{ readonly id: string; readonly ordinal: number; readonly status: string }>,
   basedOnRunId: string | null,
 ): number {
-  const finished = runs.filter(
-    (run) =>
-      run.status === "completed" ||
-      run.status === "failed" ||
-      run.status === "interrupted" ||
-      run.status === "cancelled",
-  );
+  const finished = runs.filter(isFinishedRun);
   const basis = basedOnRunId === null ? undefined : runs.find((run) => run.id === basedOnRunId);
   return basis === undefined
     ? finished.length

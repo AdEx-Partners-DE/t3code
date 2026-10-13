@@ -1,7 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -215,7 +214,6 @@ export function ThreadChecklistPanel(props: {
   const loaded = stored.data !== undefined && stored.data !== null;
   const latestRunId = shell?.latestRun?.runId ?? null;
   const hasRun = latestRunId !== null;
-  const working = threadRuntimeIsActive(shell?.runtime);
   const stale = checklist !== null && hasRun && checklist.basedOnRunId !== latestRunId;
 
   const run = async (quiet: boolean) => {
@@ -247,14 +245,16 @@ export function ThreadChecklistPanel(props: {
   const turnsBehind = stored.data?.turnsBehind ?? 0;
   const refreshStored = stored.refresh;
   useEffect(() => {
-    if (auto && latestRunId !== null && !working) refreshStored();
-  }, [auto, latestRunId, refreshStored, working]);
+    if (auto && latestRunId !== null) refreshStored();
+  }, [auto, latestRunId, refreshStored]);
 
-  // Rewrite on its own once the thread has moved on and stands still. One
-  // attempt per run, so a failing model is not asked again and again.
+  // Rewrite on its own once the thread has moved on. Threads on a timer are
+  // rarely idle, so this does not wait for the running turn: the server writes
+  // from the turns that have ended. One attempt per run, so a failing model is
+  // not asked again and again.
   const attemptedForRun = useRef<string | null>(null);
   useEffect(() => {
-    if (!auto || !allowed || !loaded || !hasRun || working || busy) return;
+    if (!auto || !allowed || !loaded || !hasRun || busy) return;
     if (latestRunId === null || attemptedForRun.current === latestRunId) return;
     // Not after every turn: a rewrite is a model call. A thread gets its
     // first checklist once it has a few turns, and a new one after a few more.
@@ -266,7 +266,7 @@ export function ThreadChecklistPanel(props: {
     attemptedForRun.current = latestRunId;
     void run(true);
     // `run` closes over the same values this effect lists.
-  }, [allowed, auto, busy, checklist, hasRun, loaded, latestRunId, stale, turnsBehind, working]);
+  }, [allowed, auto, busy, checklist, hasRun, loaded, latestRunId, stale, turnsBehind]);
 
   const showInThread = (item: ThreadChecklistItem) => {
     if (item.messageId !== undefined && revealInTimeline(item.messageId)) return;

@@ -6,6 +6,8 @@ import {
   buildChecklistTranscript,
   buildChecklistTranscriptWithSources,
   checklistIsCurrent,
+  latestFinishedRunId,
+  messagesOfFinishedTurns,
   turnsFinishedSince,
 } from "./threadChecklistTranscript.ts";
 
@@ -127,6 +129,41 @@ describe("turnsFinishedSince", () => {
   it("counts every finished turn when there is no checklist or its run is gone", () => {
     expect(turnsFinishedSince(runs, null)).toBe(3);
     expect(turnsFinishedSince(runs, "run:deleted")).toBe(3);
+  });
+});
+
+describe("a checklist written while a turn runs", () => {
+  const runs = [
+    { id: "run:1", ordinal: 1, status: "completed" },
+    { id: "run:2", ordinal: 2, status: "interrupted" },
+    { id: "run:3", ordinal: 3, status: "running" },
+    { id: "run:4", ordinal: 4, status: "queued" },
+  ];
+
+  it("stands on the newest turn that has ended, which the running one then counts after", () => {
+    expect(latestFinishedRunId(runs)).toBe("run:2");
+    expect(latestFinishedRunId([{ id: "run:9", ordinal: 1, status: "running" }])).toBeNull();
+    const ended = runs.map((run) => (run.id === "run:3" ? { ...run, status: "completed" } : run));
+    expect(turnsFinishedSince(ended, latestFinishedRunId(runs))).toBe(1);
+  });
+
+  it("leaves out the messages of turns that have not ended", () => {
+    const kept = messagesOfFinishedTurns(
+      [
+        message("user", "first ask", "run:1"),
+        message("assistant", "first reply", "run:1"),
+        message("user", "running ask", "run:3"),
+        message("assistant", "half a repl", "run:3"),
+        message("user", "queued ask", "run:4"),
+        message("user", "outside any turn", null),
+      ],
+      runs,
+    );
+    expect(kept.map((entry) => entry.text)).toEqual([
+      "first ask",
+      "first reply",
+      "outside any turn",
+    ]);
   });
 });
 

@@ -26,6 +26,8 @@ import { recordDecision } from "../decisionLog.ts";
 import {
   buildChecklistTranscriptWithSources,
   checklistIsCurrent,
+  latestFinishedRunId,
+  messagesOfFinishedTurns,
   turnsFinishedSince,
 } from "./threadChecklistTranscript.ts";
 
@@ -87,20 +89,18 @@ export const make = Effect.gen(function* () {
   ) {
     const startedAt = yield* DateTime.now;
     const modelSelection = (yield* settings.getSettings).textGenerationModelSelection;
-    const records = yield* threads.getThreadRecords(threadId, ["messages"]);
-    const shell = yield* threads.getThreadShell(threadId);
+    const records = yield* threads.getThreadRecords(threadId, ["messages", "runs"]);
+    // Threads that run on a timer are rarely idle, so the checklist is also
+    // written while a turn runs: from the turns that have ended.
+    const basedOnRunId = latestFinishedRunId(records.runs);
     const previous = yield* read(threadId);
     // Two clients with the same thread open both ask for the automatic
     // rewrite. The second finds the first one's result and takes it.
-    if (
-      trigger === "auto" &&
-      previous !== null &&
-      checklistIsCurrent(previous, shell?.latestRunId ?? null)
-    ) {
+    if (trigger === "auto" && previous !== null && checklistIsCurrent(previous, basedOnRunId)) {
       return previous;
     }
     const { transcript, messageIdOfEntry } = buildChecklistTranscriptWithSources(
-      records.messages,
+      messagesOfFinishedTurns(records.messages, records.runs),
       TRANSCRIPT_BUDGET,
     );
     const generated =
@@ -117,7 +117,7 @@ export const make = Effect.gen(function* () {
     const checklist: Checklist = {
       threadId,
       generatedAt: DateTime.formatIso(yield* DateTime.now),
-      basedOnRunId: shell?.latestRunId ?? null,
+      basedOnRunId,
       items: generated.items.map((item) => {
         const messageId = item.entry === undefined ? undefined : messageIdOfEntry.get(item.entry);
         return {
