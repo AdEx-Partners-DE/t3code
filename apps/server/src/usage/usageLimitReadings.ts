@@ -10,6 +10,17 @@
  */
 import type { ServerProvider, UsageLimitHistoryPoint, UsageLimitReset } from "@t3tools/contracts";
 
+import { isClaudeModelScopedWindowId } from "../provider/claudeUsageLimits.ts";
+
+/**
+ * Only account-wide allowances are kept. A model's own weekly window (Claude's
+ * Fable bucket) sits on top of the account's and says nothing about what the
+ * subscription left unused.
+ */
+export function isRecordedUsageWindow(window: { readonly id: string }): boolean {
+  return !isClaudeModelScopedWindowId(window.id);
+}
+
 /** The last reading kept per account window, so only changes are recorded. */
 export type UsageLimitReadingState = ReadonlyMap<string, UsageLimitHistoryPoint>;
 
@@ -210,6 +221,7 @@ export function recordUsageLimitReadings(
     if (!usage || usage.unavailable) continue;
     const subscription = withKnownWorkspace(next, provider.driver, subscriptionOf(provider));
     for (const window of usage.windows) {
+      if (!isRecordedUsageWindow(window)) continue;
       const point: UsageLimitHistoryPoint = {
         at: usage.checkedAt,
         instanceId: provider.instanceId,

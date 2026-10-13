@@ -52,4 +52,12 @@ describe("parseUsageLimitHistory", () => {
     const contents = point("2026-01-01T00:00:00.000Z", 10, "2026-01-05T00:00:00.000Z");
     expect(parseUsageLimitHistory(contents, Date.parse("2026-10-13T00:00:00.000Z"))).toEqual([]);
   });
+
+  it("drops readings of a model's own weekly window", () => {
+    const fable = point("2026-10-12T15:04:00.000Z", 0, "2026-10-19T15:00:00.000Z").replace(
+      '"windowId":"seven_day"',
+      '"windowId":"seven_day_fable"',
+    );
+    expect(parseUsageLimitHistory(fable, Date.parse("2026-10-13T00:00:00.000Z"))).toEqual([]);
+  });
 });

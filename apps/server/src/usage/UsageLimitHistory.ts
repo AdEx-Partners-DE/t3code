@@ -31,6 +31,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import {
   recordUsageLimitReadings,
+  isRecordedUsageWindow,
   replayUsageLimitPoints,
   type UsageLimitReadingState,
 } from "./usageLimitReadings.ts";
@@ -57,7 +58,10 @@ export class UsageLimitHistory extends Context.Service<
   }
 >()("t3/usage/UsageLimitHistory") {}
 
-/** The readings a history file holds, with unreadable and expired lines left out. */
+/**
+ * The readings a history file holds, with unreadable and expired lines and
+ * windows no longer recorded left out.
+ */
 export function parseUsageLimitHistory(contents: string, nowMs: number): UsageLimitHistoryPoint[] {
   const points: UsageLimitHistoryPoint[] = [];
   for (const raw of contents.split("\n")) {
@@ -66,6 +70,7 @@ export function parseUsageLimitHistory(contents: string, nowMs: number): UsageLi
     if (line._tag === "None" || !("point" in line.value)) continue;
     const point = line.value.point;
     if (nowMs - Date.parse(point.at) > RETENTION_MS) continue;
+    if (!isRecordedUsageWindow({ id: point.windowId })) continue;
     points.push(point);
   }
   return points;

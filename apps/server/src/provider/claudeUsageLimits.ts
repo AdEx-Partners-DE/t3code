@@ -60,8 +60,15 @@ export const makeClaudeScopedLimitNames = Ref.make<ClaudeScopedLimitNames>({
   overageIncluded: undefined,
 });
 
+const SCOPED_WINDOW_ID_PREFIX = "seven_day_";
+
 function scopedWindowId(displayName: string): string {
-  return `seven_day_${displayName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+  return `${SCOPED_WINDOW_ID_PREFIX}${displayName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+}
+
+/** A weekly window of one model (Fable today) rather than the account-wide allowance. */
+export function isClaudeModelScopedWindowId(id: string): boolean {
+  return id.startsWith(SCOPED_WINDOW_ID_PREFIX);
 }
 
 function scopedWindow(

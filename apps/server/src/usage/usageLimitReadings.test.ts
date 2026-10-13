@@ -216,4 +216,24 @@ describe("recordUsageLimitReadings", () => {
       ["me@example.com", "personal"],
     ]);
   });
+
+  it("leaves a model's own weekly window out", () => {
+    const fable: Reading = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      usageLimits: {
+        checkedAt: "2026-10-11T08:00:00.000Z",
+        windows: [
+          { id: "seven_day", kind: "weekly", label: "Weekly", usedPercent: 40, resetsAt: RESET },
+          {
+            id: "seven_day_fable",
+            kind: "weekly",
+            label: "Weekly · Fable",
+            usedPercent: 2,
+            resetsAt: RESET,
+          },
+        ],
+      },
+    };
+    expect(replay([[fable]]).points.map((point) => point.windowId)).toEqual(["seven_day"]);
+  });
 });
