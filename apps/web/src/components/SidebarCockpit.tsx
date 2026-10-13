@@ -1,20 +1,31 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, ThreadChecklistItem } from "@t3tools/contracts";
+import { CommandId, type EnvironmentId, type ThreadChecklistItem } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useLocalStorage } from "../hooks/useLocalStorage";
-import { serverEnvironment } from "../state/server";
+import { randomUUID } from "../lib/utils";
+import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../state/server";
+import { useAtomCommand } from "../state/use-atom-command";
 import type { OpenThreadFilter, OpenThreadSummary } from "./Sidebar.logic";
+import { accountBalanceHint } from "./usage/accountBalanceHint";
 import { buildUsageBurn } from "./usage/usageBurn";
+import { buildUsageLimitTrend } from "./usage/usageLimitTrend";
 
 const COCKPIT_EXPANDED_KEY = "t3code:sidebar:cockpit-expanded";
 const BURN_HOURS = 24;
 const HOUR_MS = 60 * 60_000;
+const DAY_MS = 24 * HOUR_MS;
+const BALANCE_DAYS = 7;
+const balanceTimeFormat = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
 
 /**
  * The state of all open threads at a glance, above the thread list: how many
@@ -130,6 +141,9 @@ export function SidebarCockpit({
           )}
           {environmentId === null ? null : (
             <CockpitChecklists environmentId={environmentId} onOpen={onOpenChecklists} />
+          )}
+          {environmentId === null ? null : (
+            <CockpitAccountBalance environmentId={environmentId} nowMs={nowMs} />
           )}
           {environmentId === null ? null : (
             <CockpitBurn environmentId={environmentId} nowMs={nowMs} />
@@ -409,6 +423,80 @@ function CockpitBurn({
         </span>{" "}
         pts/h
       </span>
+    </button>
+  );
+}
+
+/**
+ * Shown only when the account a standing model override sends work to runs out of its week
+ * before the reset while another account of the same provider would leave allowance unused. The
+ * switch at the limit acts only at 100%; a click opens the setting where the override is changed.
+ */
+function CockpitAccountBalance({
+  environmentId,
+  nowMs,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly nowMs: number;
+}) {
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  // Whole days, so the query key holds still between renders; the same span the Limits view uses.
+  const sinceMs = Math.floor(nowMs / DAY_MS) * DAY_MS - (BALANCE_DAYS - 1) * DAY_MS;
+  const input = useMemo(() => ({ since: new Date(sinceMs).toISOString() }), [sinceMs]);
+  const result = useAtomValue(serverEnvironment.usageLimitHistory({ environmentId, input }));
+  const history = Option.getOrNull(AsyncResult.value(result));
+  // A call without a model reads the standing override and changes nothing.
+  const allowed = useAtomValue(
+    serverEnvironment.overrideOpenThreadModels.permissionAtom(environmentId),
+  );
+  const readOverride = useAtomCommand(serverEnvironment.overrideOpenThreadModels);
+  const [overrideInstanceIds, setOverrideInstanceIds] = useState<ReadonlyArray<string>>([]);
+  useEffect(() => {
+    if (!allowed) return;
+    let current = true;
+    void readOverride({ environmentId, input: { commandId: CommandId.make(randomUUID()) } }).then(
+      (read) => {
+        if (!current || read._tag !== "Success") return;
+        const { tasks, adhoc } = read.value.standing;
+        setOverrideInstanceIds(
+          [tasks, adhoc].flatMap((part) =>
+            part?.model === undefined || part.keepOwnAccount === true
+              ? []
+              : [part.model.instanceId],
+          ),
+        );
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [allowed, readOverride, environmentId]);
+  const hint = useMemo(() => {
+    if (history === null || overrideInstanceIds.length === 0) return null;
+    const accounts = buildUsageLimitTrend({ history, providers, sinceMs, nowMs });
+    return accountBalanceHint({
+      accounts,
+      overrideInstanceIds,
+      driverOf: (instanceId) =>
+        providers.find((provider) => provider.instanceId === instanceId)?.driver,
+    });
+  }, [history, overrideInstanceIds, providers, sinceMs, nowMs]);
+  const navigate = useNavigate();
+  if (hint === null) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void navigate({ to: "/settings/general" })}
+      className="cursor-pointer rounded-sm text-left hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      data-testid="sidebar-cockpit-account-balance"
+    >
+      <span className="font-medium text-sidebar-foreground">{hint.from.name}</span> runs out{" "}
+      {balanceTimeFormat.format(new Date(hint.from.emptyAt))}, before its reset{" "}
+      {balanceTimeFormat.format(new Date(hint.from.resetsAt))}.{" "}
+      <span className="font-medium text-sidebar-foreground">{hint.to.name}</span> would leave{" "}
+      {hint.to.unusedPercent}% unused.{" "}
+      <span className="underline underline-offset-2">Move work</span>
     </button>
   );
 }
