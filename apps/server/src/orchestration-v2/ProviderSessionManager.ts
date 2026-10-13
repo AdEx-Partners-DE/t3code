@@ -2031,7 +2031,7 @@ export const layerWithOptions = (
               // same redacted reason as the failed run; the full cause goes to the log.
               yield* Effect.logWarning("orchestration-v2.provider-session-runtime-failed", {
                 providerSessionId: entry.runtime.providerSessionId,
-                cause: Cause.pretty(cause),
+                cause,
               });
               yield* releaseEntry({
                 providerSessionId: entry.runtime.providerSessionId,
