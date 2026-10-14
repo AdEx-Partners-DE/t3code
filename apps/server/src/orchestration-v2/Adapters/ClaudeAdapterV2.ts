@@ -105,8 +105,10 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import * as ProcessRunner from "../../processRunner.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import { planClaudeSkillDispatch } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
@@ -484,6 +486,8 @@ export class ClaudeAgentSdkQueryRunner extends Context.Service<
 export interface ClaudeAgentSdkSessionForkInput {
   readonly sessionId: string;
   readonly options: ForkSessionOptions;
+  /** The instance's environment; its `CLAUDE_CONFIG_DIR` holds the session. */
+  readonly environment: NodeJS.ProcessEnv;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
 }
@@ -711,10 +715,27 @@ export function makeClaudeAgentSdkProtocolLogger(input: {
   };
 }
 
+// The argument and output shapes of `claudeHistoryWorker.ts`'s `forkSession`.
+const encodeHistoryForkOptions = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      dir: Schema.optionalKey(Schema.String),
+      upToMessageId: Schema.optionalKey(Schema.String),
+    }),
+  ),
+);
+const decodeHistoryForkResult = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ sessionId: Schema.String })),
+);
+
 export const layerQueryRunner: Layer.Layer<
   ClaudeAgentSdkQueryRunner,
   never,
-  Crypto.Crypto | FileSystem.FileSystem | Path.Path | ProviderEventLoggers.ProviderEventLoggers
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
+  | FileSystem.FileSystem
+  | Path.Path
+  | ProviderEventLoggers.ProviderEventLoggers
 > = Layer.effect(
   ClaudeAgentSdkQueryRunner,
   Effect.gen(function* () {
@@ -724,6 +745,57 @@ export const layerQueryRunner: Layer.Layer<
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
     const platform = yield* HostProcess.Platform;
+    const processRunner = yield* ProcessRunner.make();
+    const serverEnvironment = yield* HostProcess.Environment;
+    const executablePath = yield* HostProcess.ExecutablePath;
+    const isExecutable = yield* HostProcess.IsExecutable;
+
+    // The SDK's history helpers read the session from `process.env`'s config
+    // dir. A session under another instance's `CLAUDE_CONFIG_DIR` (a second
+    // account) is forked by `claudeHistoryWorker.ts` in a child process with
+    // that instance's environment, never by changing the server's.
+    const forkInHistoryWorker = Effect.fn("ClaudeAgentSdkQueryRunner.forkInHistoryWorker")(
+      function* (input: ClaudeAgentSdkSessionForkInput) {
+        const workerArgs = [
+          input.sessionId,
+          encodeHistoryForkOptions({
+            ...(input.options.dir === undefined ? {} : { dir: input.options.dir }),
+            ...(input.options.upToMessageId === undefined
+              ? {}
+              : { upToMessageId: input.options.upToMessageId }),
+          }),
+        ];
+        const args = isExecutable
+          ? ["__claude-history", "forkSession", ...workerArgs]
+          : [
+              yield* path.fromFileUrl(
+                new URL(
+                  import.meta.url.endsWith(".ts")
+                    ? "../../claude-history-worker.ts"
+                    : "./claude-history-worker.mjs",
+                  import.meta.url,
+                ),
+              ),
+              "forkSession",
+              ...workerArgs,
+            ];
+        const result = yield* processRunner.run({
+          command: executablePath,
+          args,
+          // The CLI resolves a relative config dir against the project.
+          ...(input.options.dir === undefined ? {} : { cwd: input.options.dir }),
+          env: { ...input.environment, ELECTRON_RUN_AS_NODE: "1" },
+          timeout: "30 seconds",
+        });
+        if (result.code !== 0) {
+          return yield* new ClaudeAgentSdkQueryRunnerError({
+            method: "forkSession",
+            cause: result.stderr.trim() || `The Claude history worker exited with ${result.code}.`,
+          });
+        }
+        return yield* decodeHistoryForkResult(result.stdout);
+      },
+    );
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: crypto
@@ -1001,10 +1073,15 @@ export const layerQueryRunner: Layer.Layer<
             options: input.options,
           },
         });
-        const result = yield* Effect.tryPromise({
-          try: () => forkClaudeSession(input.sessionId, input.options),
-          catch: (cause) => queryRunnerError(cause, "forkSession"),
-        });
+        const result =
+          input.environment.CLAUDE_CONFIG_DIR === serverEnvironment.CLAUDE_CONFIG_DIR
+            ? yield* Effect.tryPromise({
+                try: () => forkClaudeSession(input.sessionId, input.options),
+                catch: (cause) => queryRunnerError(cause, "forkSession"),
+              })
+            : yield* forkInHistoryWorker(input).pipe(
+                Effect.mapError((cause) => queryRunnerError(cause, "forkSession")),
+              );
         yield* logProtocolEvent({
           direction: "incoming",
           stage: "decoded",
@@ -9647,6 +9724,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const forked = yield* queryRunner.forkSession({
                 sessionId: sourceNativeThreadId,
                 options: forkOptions,
+                environment: adapterOptions.environment,
                 threadId: forkInput.targetThreadId,
                 providerSessionId: input.providerSessionId,
               });

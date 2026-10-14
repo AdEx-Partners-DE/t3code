@@ -95,6 +95,61 @@ const realQueryRunner = layerQueryRunner.pipe(
   Layer.provide(NodeServices.layer),
 );
 
+// A second account is a Claude instance with its own `CLAUDE_CONFIG_DIR`. Its
+// sessions are not under the server's config dir, where the SDK would look.
+it.effect("forks a session stored under another instance's config dir", () =>
+  Effect.gen(function* () {
+    const root = NodeFS.realpathSync(
+      NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-fork-")),
+    );
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => NodeFS.rmSync(root, { recursive: true, force: true })),
+    );
+    const configDir = NodePath.join(root, "account");
+    const cwd = NodePath.join(root, "project");
+    const projectDir = NodePath.join(configDir, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+    NodeFS.mkdirSync(cwd);
+    NodeFS.mkdirSync(projectDir, { recursive: true });
+    const sessionId = "11111111-2222-4333-8444-555555555555";
+    const line = { sessionId, cwd, version: "2.1.0", isSidechain: false, userType: "external" };
+    NodeFS.writeFileSync(
+      NodePath.join(projectDir, `${sessionId}.jsonl`),
+      [
+        {
+          ...line,
+          type: "user",
+          uuid: "aaaaaaaa-0000-4000-8000-000000000001",
+          parentUuid: null,
+          timestamp: "2026-10-14T19:00:00.000Z",
+          message: { role: "user", content: "Say OK" },
+        },
+        {
+          ...line,
+          type: "assistant",
+          uuid: "aaaaaaaa-0000-4000-8000-000000000002",
+          parentUuid: "aaaaaaaa-0000-4000-8000-000000000001",
+          timestamp: "2026-10-14T19:00:01.000Z",
+          message: { role: "assistant", content: [{ type: "text", text: "OK" }] },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+
+    const runner = yield* ClaudeAgentSdkQueryRunner;
+    const forked = yield* runner.forkSession({
+      sessionId,
+      options: { dir: cwd },
+      environment: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
+      threadId: ThreadId.make("thread-fork-account"),
+      providerSessionId: ProviderSessionId.make("session-fork-account"),
+    });
+
+    assert.notEqual(forked.sessionId, sessionId);
+    assert.isTrue(NodeFS.existsSync(NodePath.join(projectDir, `${forked.sessionId}.jsonl`)));
+  }).pipe(Effect.provide(realQueryRunner)),
+);
+
 /** Writes an executable stand-in for the Claude CLI into a fresh directory. */
 function fakeClaudeCli(script: string): string {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-claude-cli-"));
