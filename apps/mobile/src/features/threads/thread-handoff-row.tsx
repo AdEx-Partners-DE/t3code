@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { resolveHandoffEndpoints } from "@t3tools/client-runtime/handoff";
+import { resolveHandoffEndpoints, type HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import {
   normalizeProviderAccentColor,
   resolveProviderInstanceDisplayName,
@@ -51,9 +51,30 @@ export function ThreadHandoffRow(props: {
     [props.environmentId, props.projectedItem],
   );
   const endpoints = useAtomValue(endpointsAtom);
-  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
   if (item.type !== "handoff" || endpoints === null) return null;
   const color = item.status === "failed" ? "#e11d48" : props.iconColor;
+  return (
+    <ThreadHandoffDivider
+      environmentId={props.environmentId}
+      endpoints={endpoints}
+      iconColor={color}
+      surfaceColor={props.surfaceColor}
+      label="Context handoff"
+      failed={item.status === "failed"}
+    />
+  );
+}
+
+export function ThreadHandoffDivider(props: {
+  environmentId: EnvironmentId;
+  endpoints: HandoffEndpoints;
+  iconColor: ColorValue;
+  surfaceColor: string;
+  label: string;
+  failed?: boolean;
+}) {
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const { endpoints } = props;
   const endpointProps = {
     providers: config?.providers ?? [],
     providerInstances: config?.settings.providerInstances,
@@ -61,10 +82,10 @@ export function ThreadHandoffRow(props: {
   };
   return (
     <ThreadContextDivider
-      label="Context handoff"
+      label={props.label}
       icon="arrow.left.arrow.right"
-      iconColor={color}
-      failed={item.status === "failed"}
+      iconColor={props.iconColor}
+      failed={props.failed}
     >
       <View className="flex-row flex-wrap items-center justify-center gap-1.5">
         {endpoints.from.map((endpoint, index) => (
@@ -78,7 +99,7 @@ export function ThreadHandoffRow(props: {
           </Fragment>
         ))}
         {endpoints.from.length > 0 ? (
-          <SymbolView name="arrow.right" size={12} tintColor={color} />
+          <SymbolView name="arrow.right" size={12} tintColor={props.iconColor} />
         ) : null}
         <HandoffEndpoint {...endpoints.to} {...endpointProps} />
       </View>

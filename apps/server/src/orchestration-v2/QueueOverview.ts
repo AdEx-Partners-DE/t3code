@@ -92,8 +92,9 @@ export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const sql = yield* SqlClient.SqlClient;
 
-  const read = Effect.gen(function* () {
-    const shell = yield* threads.getShellSnapshot();
+  const readWaitingQueues = Effect.fn("QueueOverview.readWaitingQueues")(function* (
+    openThreadIds: ReadonlySet<string>,
+  ) {
     const rows = yield* sql<QueuedRow>`
       SELECT
         thread_id,
@@ -104,10 +105,7 @@ export const make = Effect.gen(function* () {
       WHERE status = 'queued'
       GROUP BY thread_id
     `;
-    return waitingQueuesOf(
-      rows,
-      new Set(shell.threads.filter(isOpenThread).map((thread) => thread.id as string)),
-    );
+    return waitingQueuesOf(rows, openThreadIds);
   });
 
   // A run that is under way but whose thread has gone silent looks exactly
@@ -147,8 +145,9 @@ export const make = Effect.gen(function* () {
   // Tool calls and auth refreshes are answered by the app, not by a person.
   // A question the thread has moved on from, with a turn started after it,
   // no longer holds the thread up and is not counted.
-  const readPendingQuestions = Effect.gen(function* () {
-    const shell = yield* threads.getShellSnapshot();
+  const readPendingQuestions = Effect.fn("QueueOverview.readPendingQuestions")(function* (
+    openThreadIds: ReadonlySet<string>,
+  ) {
     const rows = yield* sql<{ readonly thread_id: string; readonly since: string }>`
       SELECT question.thread_id AS thread_id, MIN(question.created_at) AS since
       FROM orchestration_v2_projection_runtime_requests AS question
@@ -162,23 +161,21 @@ export const make = Effect.gen(function* () {
         )
       GROUP BY question.thread_id
     `;
-    return pendingQuestionsOf(
-      rows,
-      new Set(shell.threads.filter(isOpenThread).map((thread) => thread.id as string)),
-    );
+    return pendingQuestionsOf(rows, openThreadIds);
   });
 
   // One indexed lookup per open thread. The text is cut in the database
   // first, so a long reply never leaves it whole.
-  const readLastReplies = Effect.gen(function* () {
-    const shell = yield* threads.getShellSnapshot();
+  const readLastReplies = Effect.fn("QueueOverview.readLastReplies")(function* (
+    openThreadIds: ReadonlyArray<ThreadId>,
+  ) {
     const replies = yield* Effect.forEach(
-      shell.threads.filter(isOpenThread),
-      (thread) =>
+      openThreadIds,
+      (threadId) =>
         sql<{ readonly text: string | null; readonly created_at: string }>`
           SELECT substr(json_extract(payload_json, '$.text'), 1, 2000) AS text, created_at
           FROM orchestration_v2_projection_messages
-          WHERE thread_id = ${thread.id} AND role = 'assistant' AND streaming = 0
+          WHERE thread_id = ${threadId} AND role = 'assistant' AND streaming = 0
             AND trim(json_extract(payload_json, '$.text')) <> ''
           ORDER BY created_at DESC
           LIMIT 1
@@ -187,7 +184,7 @@ export const make = Effect.gen(function* () {
             const row = rows[0];
             return row === undefined || row.text === null
               ? []
-              : [{ threadId: thread.id, text: replyPreview(row.text), at: row.created_at }];
+              : [{ threadId, text: replyPreview(row.text), at: row.created_at }];
           }),
         ),
       { concurrency: 1 },
@@ -195,14 +192,28 @@ export const make = Effect.gen(function* () {
     return replies.flat();
   });
 
+  // The thread list is the costly read here (a scan of every thread row), so
+  // it is read once and every part of the overview filters by it.
+  const read = Effect.gen(function* () {
+    const shell = yield* threads.getShellSnapshot();
+    const openThreadIds = shell.threads.filter(isOpenThread).map((thread) => thread.id);
+    const openThreadIdSet = new Set<string>(openThreadIds);
+    return {
+      openThreadIds,
+      waitingQueues: yield* readWaitingQueues(openThreadIdSet),
+      activeRuns: yield* readActiveRuns,
+      lastReplies: yield* readLastReplies(openThreadIds),
+      pendingQuestions: yield* readPendingQuestions(openThreadIdSet),
+    };
+  });
+
   return {
-    /** The open threads that wait for the user's answer, the longest wait first. */
-    readPendingQuestions,
-    /** For each open thread that has one, the start of its last reply. */
-    readLastReplies,
-    /** The open threads with a waiting queue, the longest wait first. */
+    /**
+     * Across the open threads: the waiting queues and the questions waiting
+     * for the user, the longest wait first; the start of each thread's last
+     * reply; and every thread with a run under way with when it last showed
+     * a sign of life.
+     */
     read,
-    /** Every thread with a run under way and when it last showed a sign of life. */
-    readActiveRuns,
   };
 });

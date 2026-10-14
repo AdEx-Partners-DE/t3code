@@ -49,6 +49,7 @@ import {
 } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
+import { makeVisibleTickAtom } from "./visibleTick.ts";
 import {
   applyServerConfigProjection,
   type ServerConfigProjection,
@@ -85,6 +86,13 @@ const IDLE_SERVER_UPDATE_STATE: ServerUpdateState = { status: "idle" };
 const EMPTY_SERVER_UPDATE_STATE_ATOM = Atom.make<ServerUpdateState>(IDLE_SERVER_UPDATE_STATE).pipe(
   Atom.withLabel("environment-data:server:update-state:empty"),
 );
+
+// A page in the background does not ask for the cockpit overview.
+const visibleTickAtom = makeVisibleTickAtom(
+  30_000,
+  typeof document === "undefined" ? null : document,
+);
+
 /** Shared with the outdated-host update, which reports through the same state. */
 export const serverUpdateStateAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make<ServerUpdateState>(IDLE_SERVER_UPDATE_STATE).pipe(
@@ -1129,7 +1137,9 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 30_000,
       // Queues, silent runs and last replies change without the client asking.
       // Without this the sidebar shows what was true when it was first opened.
-      refreshIntervalMs: 30_000,
+      // Each answer reads every open thread on the server, so a page in the
+      // background does not ask.
+      refreshTrigger: () => visibleTickAtom,
     }),
     threadChecklist: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:thread-checklist",
