@@ -167,6 +167,10 @@
       "types": "./src/state/cockpitAlerts.ts",
       "default": "./src/state/cockpitAlerts.ts"
     },
+    "./state/thread-automations": {
+      "types": "./src/state/threadAutomations.ts",
+      "default": "./src/state/threadAutomations.ts"
+    },
     "./state/limit-switch-targets": {
       "types": "./src/state/limitSwitchTargets.ts",
       "default": "./src/state/limitSwitchTargets.ts"

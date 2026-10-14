@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { useNavigate } from "@tanstack/react-router";
 import { CalendarClockIcon, PencilIcon, PlayIcon, Settings2Icon } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -13,11 +13,20 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  relatedThreadAutomations,
+  summarizeAutomations,
+  type ThreadAutomationReason,
+} from "@t3tools/client-runtime/state/thread-automations";
 
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
 import { relativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { useThreadShell } from "../../state/entities";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { isTaskHeldByPause } from "@t3tools/contracts";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -39,11 +48,19 @@ const STATUS_DOT_CLASS: Record<ScheduledTask["lastRunStatus"], string> = {
   failed: "bg-destructive",
 };
 
+const RELATED_REASON_LABEL: Record<ThreadAutomationReason, string> = {
+  "covers-open-threads": "Sends to all open threads",
+  "waits-for-thread": "Starts when this thread finishes",
+  running: "Running in its own thread",
+};
+
 /**
  * Thread details panel section listing the automations (scheduled tasks) bound
- * to this thread. Fed by the live scheduled-task subscription, so run status
- * and next-run times update as the scheduler works — no manual refresh.
- * Renders nothing when the thread has no bound automations.
+ * to this thread, the ones that send to it or wait for it, any task running
+ * elsewhere, and one line saying how many are on and which starts next. Fed by
+ * the live scheduled-task subscription, so run status and next-run times update
+ * as the scheduler works — no manual refresh. Renders nothing when no task is
+ * on and none concerns this thread.
  */
 export function ThreadAutomationsPanel(props: {
   readonly environmentId: EnvironmentId;
@@ -75,13 +92,46 @@ export function ThreadAutomationsPanel(props: {
   const isHeld = (task: ScheduledTask) =>
     task.enabled && isTaskHeldByPause(task.id, allTasksPaused, pauseExemptIds);
 
-  const boundTasks = (tasksQuery.data?.tasks ?? []).filter(
-    (task) => task.threadId === props.threadId,
+  const threadRef = useMemo(
+    () => scopeThreadRef(props.environmentId, props.threadId),
+    [props.environmentId, props.threadId],
   );
+  const thread = useThreadShell(threadRef);
+  useNowMinute();
+
+  const tasks = tasksQuery.data?.tasks ?? [];
+  const boundTasks = tasks.filter((task) => task.threadId === props.threadId);
+  const relatedTasks = relatedThreadAutomations({ tasks, threadId: props.threadId, thread });
+  const summary = summarizeAutomations({
+    tasks,
+    paused: allTasksPaused,
+    exemptIds: pauseExemptIds,
+  });
   // A load error must not look like "no automations" — this thread may have
   // tasks whose controls would silently vanish. Only hide the section when we
-  // positively know there is nothing bound to it.
-  if (tasksQuery.error === null && boundTasks.length === 0) return null;
+  // positively know nothing is on and nothing concerns this thread.
+  if (
+    tasksQuery.error === null &&
+    boundTasks.length === 0 &&
+    relatedTasks.length === 0 &&
+    summary.onCount + summary.heldCount === 0
+  ) {
+    return null;
+  }
+
+  const openTask = (task: ScheduledTask) => {
+    if (task.threadId === null) {
+      void navigate({
+        to: "/settings/scheduled-tasks",
+        search: { environmentId: props.environmentId, taskId: task.id },
+      });
+      return;
+    }
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(scopeThreadRef(props.environmentId, task.threadId)),
+    });
+  };
 
   const reportFailure = (title: string, error: unknown) => {
     toastManager.add(
@@ -267,7 +317,65 @@ export function ThreadAutomationsPanel(props: {
             />
           </li>
         ))}
+        {relatedTasks.map(({ task, reason }) => (
+          <li key={task.id}>
+            <button
+              type="button"
+              data-testid="thread-automations-related"
+              onClick={() => openTask(task)}
+              className={cn(
+                "flex w-full cursor-pointer items-center rounded-lg py-1.5 text-left hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset",
+                THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
+              )}
+            >
+              <span className="relative inline-flex size-4 shrink-0 items-center justify-center">
+                <CalendarClockIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} />
+                <span
+                  className={cn(
+                    "absolute -right-1 -top-1 size-1.5 rounded-full",
+                    STATUS_DOT_CLASS[task.lastRunStatus],
+                  )}
+                  aria-hidden
+                />
+              </span>
+              <div className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-foreground/80">{task.title}</span>
+                <p className="truncate text-2xs text-muted-foreground">
+                  {RELATED_REASON_LABEL[reason]}
+                  {reason !== "running" && task.lastRunStatus === "running" ? " · running now" : ""}
+                  {reason !== "running" && isHeld(task) ? " · paused with all tasks" : ""}
+                </p>
+              </div>
+            </button>
+          </li>
+        ))}
       </ul>
+
+      {summary.onCount + summary.heldCount > 0 ? (
+        <button
+          type="button"
+          data-testid="thread-automations-summary"
+          onClick={() =>
+            void navigate({
+              to: "/settings/scheduled-tasks",
+              search: { environmentId: props.environmentId },
+            })
+          }
+          className={cn(
+            "block w-full cursor-pointer truncate py-1 text-left text-2xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset",
+            THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
+          )}
+        >
+          {[
+            `${summary.onCount} ${summary.onCount === 1 ? "automation" : "automations"} on`,
+            ...(summary.heldCount > 0 ? [`${summary.heldCount} paused`] : []),
+            ...(summary.runningCount > 0 ? [`${summary.runningCount} running`] : []),
+            ...(summary.next === null
+              ? []
+              : [`next: ${summary.next.title} ${relativeLabel(summary.next.nextRunAt)}`]),
+          ].join(" · ")}
+        </button>
+      ) : null}
     </ThreadDetailsSection>
   );
 }
