@@ -5264,7 +5264,6 @@ export default function ChatView(props: ChatViewProps) {
         (script) => commandForProjectScript(script.id) === input.keybindingCommand,
       );
       const changesKeybinding =
-        isElectron &&
         input.keybinding !== undefined &&
         (input.keybinding?.trim() || null) !== previousKeybinding &&
         (!isDeletingScript || readEnvironmentScope(environmentId, AuthSettingsWriteScope));
@@ -5325,8 +5324,6 @@ export default function ChatView(props: ChatViewProps) {
           ),
         );
       }
-
-      if (!isElectron) return updateResult;
 
       const scriptId = input.keybindingCommand
         ? projectScriptIdFromCommand(input.keybindingCommand)
@@ -12020,6 +12017,7 @@ export default function ChatView(props: ChatViewProps) {
                               pullRequestRepository={
                                 supportsPullRequests ? activeProjectRepository : null
                               }
+                              threadPullRequests={(activeThreadShell ?? activeThread)?.pullRequests}
                               restingControlsHost={restingComposerControlsHost}
                               restingControlsHaveLeadingContext={
                                 mountComposerContextStrip &&

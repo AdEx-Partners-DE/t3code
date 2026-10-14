@@ -348,7 +348,7 @@ describe("observability", () => {
             const closed = yield* Ref.make(false);
             const sink = yield* makeTraceSink({
               filePath: tracePath,
-              maxBytes: 1_000_000,
+              maxBytes: 5_000_000,
               maxFiles: 2,
               batchWindowMs: 10_000,
             }).pipe(
@@ -362,12 +362,16 @@ describe("observability", () => {
                   }),
               }),
             );
-            for (let index = 0; index < 256; index++) sink.push(makeRecord("first", String(index)));
+            sink.push(makeRecord("first"));
             const flushing = yield* Effect.forkChild(sink.flush);
             yield* Deferred.await(started);
-            // This burst runs while the OS write is held, without waiting on the disk.
+            // These pushes return while the write is held. The backlog keeps one
+            // trace file of records: every small one, then large ones until the
+            // next would not fit.
             for (let index = 0; index < 2_000; index++)
-              sink.push(makeRecord("next", String(index)));
+              sink.push(makeRecord("small", String(index)));
+            for (let index = 0; index < 3; index++)
+              sink.push({ ...makeRecord("large"), attributes: { payload: "x".repeat(2_000_000) } });
             const closing = yield* Effect.forkChild(
               sink.close().pipe(Effect.tap(() => Ref.set(closed, true))),
             );
@@ -377,10 +381,9 @@ describe("observability", () => {
             yield* Fiber.join(flushing);
             yield* Fiber.join(closing);
             const records = yield* readTraceRecords(tracePath);
-            assert.equal(records.length, 1_280);
             assert.deepStrictEqual(
-              records.slice(0, 256).map((record) => record.name),
-              Array.from({ length: 256 }, () => "first"),
+              records.map((record) => record.name),
+              ["first", ...Array.from({ length: 2_000 }, () => "small"), "large", "large"],
             );
             assert.isTrue(yield* Ref.get(closed));
           }),
