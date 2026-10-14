@@ -15,6 +15,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  formatAutomationsSummary,
   relatedThreadAutomations,
   summarizeAutomations,
   type ThreadAutomationReason,
@@ -97,16 +98,15 @@ export function ThreadAutomationsPanel(props: {
     [props.environmentId, props.threadId],
   );
   const thread = useThreadShell(threadRef);
-  useNowMinute();
+  const nowMinute = useNowMinute();
 
   const tasks = tasksQuery.data?.tasks ?? [];
   const boundTasks = tasks.filter((task) => task.threadId === props.threadId);
   const relatedTasks = relatedThreadAutomations({ tasks, threadId: props.threadId, thread });
-  const summary = summarizeAutomations({
-    tasks,
-    paused: allTasksPaused,
-    exemptIds: pauseExemptIds,
-  });
+  const summary = formatAutomationsSummary(
+    summarizeAutomations({ tasks, paused: allTasksPaused, exemptIds: pauseExemptIds }),
+    Date.parse(`${nowMinute}:00.000Z`),
+  );
   // A load error must not look like "no automations" — this thread may have
   // tasks whose controls would silently vanish. Only hide the section when we
   // positively know nothing is on and nothing concerns this thread.
@@ -114,7 +114,7 @@ export function ThreadAutomationsPanel(props: {
     tasksQuery.error === null &&
     boundTasks.length === 0 &&
     relatedTasks.length === 0 &&
-    summary.onCount + summary.heldCount === 0
+    summary === null
   ) {
     return null;
   }
@@ -351,7 +351,7 @@ export function ThreadAutomationsPanel(props: {
         ))}
       </ul>
 
-      {summary.onCount + summary.heldCount > 0 ? (
+      {summary !== null ? (
         <button
           type="button"
           data-testid="thread-automations-summary"
@@ -366,14 +366,7 @@ export function ThreadAutomationsPanel(props: {
             THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
           )}
         >
-          {[
-            `${summary.onCount} ${summary.onCount === 1 ? "automation" : "automations"} on`,
-            ...(summary.heldCount > 0 ? [`${summary.heldCount} paused`] : []),
-            ...(summary.runningCount > 0 ? [`${summary.runningCount} running`] : []),
-            ...(summary.next === null
-              ? []
-              : [`next: ${summary.next.title} ${relativeLabel(summary.next.nextRunAt)}`]),
-          ].join(" · ")}
+          {summary}
         </button>
       ) : null}
     </ThreadDetailsSection>
