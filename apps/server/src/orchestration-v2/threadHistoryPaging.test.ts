@@ -700,4 +700,90 @@ describe("threadHistoryPaging", () => {
     });
     expect(bounded.payloadBudgetExceeded).toBe(false);
   });
+
+  it("closes a window of user turns at a turn boundary once the byte budget is spent", () => {
+    // Ten user turns of one prompt and three 20 kB commands each.
+    const items = Array.from({ length: 10 }, (_, turn) => [
+      userTurnRow(turn * 4, `run-${turn}`),
+      ...[1, 2, 3].map((offset) => makeRow(turn * 4 + offset, { outputBytes: 20_000 })),
+    ]).flat();
+
+    const page = selectRecentTimelineWindow({
+      items,
+      snapshotSequence: 1,
+      policy: { maxUserTurns: 10, maxItems: 75, maxEncodedBytes: 100_000 },
+    });
+
+    // Two turns spend the budget; the window holds both whole turns and no part of a third.
+    expect(page.items).toHaveLength(8);
+    expect(page.items[0]?.item.type).toBe("user_message");
+    expect(page.items[0]?.sourceItemId).toBe("item-32");
+    expect(page.hasMoreHistory).toBe(true);
+
+    // A single turn larger than the budget still loads whole.
+    const one = selectRecentTimelineWindow({
+      items,
+      snapshotSequence: 1,
+      policy: { maxUserTurns: 10, maxItems: 75, maxEncodedBytes: 1_000 },
+    });
+    expect(one.items.map((row) => row.sourceItemId)).toEqual([
+      "item-36",
+      "item-37",
+      "item-38",
+      "item-39",
+    ]);
+  });
+
+  it("keeps nodes only for runs in the window, runs in flight and runless work", () => {
+    const rows = [userTurnRow(0, "run-old"), userTurnRow(1, "run-recent")];
+    const base = makeProjection(rows);
+    const node = (id: string, runId: string | null) => ({ id, runId, rootNodeId: id });
+    const projection = {
+      ...base,
+      runs: [
+        { id: "run-old", ordinal: 1, status: "completed", userMessageId: "prompt-0" },
+        { id: "run-recent", ordinal: 2, status: "completed", userMessageId: "prompt-1" },
+        { id: "run-queued", ordinal: 3, status: "queued", userMessageId: "prompt-2" },
+      ],
+      nodes: [
+        node("node-old", "run-old"),
+        node("node-recent", "run-recent"),
+        node("node-queued", "run-queued"),
+        node("node-runless", null),
+      ],
+    } as unknown as typeof base;
+
+    const bounded = buildBoundedThreadProjection({
+      projection,
+      snapshotSequence: 2,
+      policy: { maxUserTurns: 1, maxItems: 75, maxEncodedBytes: 10_000_000 },
+    });
+
+    expect(bounded.projection.visibleTurnItems.map((row) => row.sourceItemId)).toEqual(["item-1"]);
+    expect(bounded.projection.nodes.map((candidate) => candidate.id)).toEqual([
+      "node-recent",
+      "node-queued",
+      "node-runless",
+    ]);
+    expect(bounded.hasMoreHistory).toBe(true);
+  });
 });
+
+function userTurnRow(index: number, runId: string): OrchestrationV2ProjectedTurnItem {
+  const row = makeRow(index);
+  if (row.item.type !== "command_execution") throw new Error("Expected command fixture");
+  return {
+    ...row,
+    item: {
+      ...row.item,
+      type: "user_message",
+      runId: RunId.make(runId),
+      createdBy: "user",
+      creationSource: "web",
+      inputIntent: "turn_start",
+      messageId: MessageId.make(`prompt-${index}`),
+      text: `Prompt ${index}`,
+      attachments: [],
+    },
+  };
+}

@@ -7,8 +7,9 @@ import type {
 } from "@t3tools/contracts";
 
 /**
- * Match the V1 conversation windows. Item/byte budgets only apply to histories
- * without turn starts; tool activity must not split an ordinary conversation turn.
+ * Match the V1 conversation windows. Histories with turn starts close a page at
+ * a turn boundary once the byte budget is spent, so tool activity never splits
+ * a turn; histories without turn starts use item and byte budgets per row.
  */
 export const THREAD_HISTORY_PAGE_POLICY = {
   maxUserTurns: 10,
@@ -23,6 +24,13 @@ export function isConversationHistoryItem(item: Pick<OrchestrationV2TurnItem, "t
   return !["command_execution", "reasoning", "file_change", "dynamic_tool"].includes(item.type);
 }
 export const THREAD_HISTORY_MAX_RAW_TURNS = 150;
+
+/**
+ * Timeline bytes a bounded snapshot may always spend on recent turns, even when
+ * control state alone exceeds the page budget. Without it a long thread opens
+ * on a single turn.
+ */
+export const THREAD_HISTORY_MIN_WINDOW_BYTES = 262_144;
 
 /** Extra rows let the projection query retain an inclusive cursor and prove another page exists. */
 export const THREAD_HISTORY_SNAPSHOT_ROW_LIMIT = THREAD_HISTORY_PAGE_POLICY.maxItems + 2;
@@ -178,8 +186,9 @@ export function isThreadHistoryUserTurn(item: HistoryRow["item"]): boolean {
 
 /**
  * Walk a chronological timeline backward from the exclusive end, collecting rows
- * through complete user turns. Histories without turn starts use row budgets
- * and always admit at least one row so oversized items cannot deadlock paging.
+ * through complete user turns until a turn limit or, at a turn boundary, the
+ * byte budget is reached. Histories without turn starts use row budgets. Both
+ * always admit at least one row so oversized items cannot deadlock paging.
  */
 function selectOlderTimelinePage<Row extends HistoryRow>(input: {
   readonly items: ReadonlyArray<Row>;
@@ -204,12 +213,17 @@ function selectOlderTimelinePage<Row extends HistoryRow>(input: {
     : undefined;
   for (let index = end - 1; index >= 0; index -= 1) {
     const row = input.items[index]!;
-    const rowBytes = turnLimit === undefined ? rowCost(row) : 0;
+    const rowBytes = rowCost(row);
+    // Walking backward, a turn ends at its start row; only stop right after one.
+    const atTurnBoundary =
+      selected.length > 0 && isThreadHistoryTurnStart(selected[selected.length - 1]!.item);
     if (
       selected.length > 0 &&
       (turnLimit === undefined
         ? selected.length >= policy.maxItems || encodedBytes + rowBytes > policy.maxEncodedBytes
-        : userTurns >= turnLimit || rawTurns >= THREAD_HISTORY_MAX_RAW_TURNS)
+        : userTurns >= turnLimit ||
+          rawTurns >= THREAD_HISTORY_MAX_RAW_TURNS ||
+          (atTurnBoundary && encodedBytes >= policy.maxEncodedBytes))
     ) {
       break;
     }
@@ -378,6 +392,25 @@ function localTurnItemsForVisibleWindow(
   return projection.turnItems.filter((item) => localIds.has(String(item.id)));
 }
 
+/** The latest run and every run still in flight, which live reducers keep updating. */
+function retainedRuns(
+  projection: OrchestrationV2ThreadProjection,
+): OrchestrationV2ThreadProjection["runs"] {
+  const latestRun = projection.runs.reduce<(typeof projection.runs)[number] | null>(
+    (latest, run) => (latest === null || run.ordinal > latest.ordinal ? run : latest),
+    null,
+  );
+  return projection.runs.filter(
+    (run) =>
+      run.id === latestRun?.id ||
+      run.status === "preparing" ||
+      run.status === "starting" ||
+      run.status === "running" ||
+      run.status === "waiting" ||
+      run.status === "queued",
+  );
+}
+
 function messagesForBoundedProjection(
   projection: OrchestrationV2ThreadProjection,
   turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
@@ -389,23 +422,10 @@ function messagesForBoundedProjection(
     }
   }
 
-  const latestRun = projection.runs.reduce<(typeof projection.runs)[number] | null>(
-    (latest, run) => (latest === null || run.ordinal > latest.ordinal ? run : latest),
-    null,
-  );
   const retainedRunIds = new Set<string>();
-  for (const run of projection.runs) {
-    if (
-      run.id === latestRun?.id ||
-      run.status === "preparing" ||
-      run.status === "starting" ||
-      run.status === "running" ||
-      run.status === "waiting" ||
-      run.status === "queued"
-    ) {
-      retainedRunIds.add(String(run.id));
-      retainedMessageIds.add(String(run.userMessageId));
-    }
+  for (const run of retainedRuns(projection)) {
+    retainedRunIds.add(String(run.id));
+    retainedMessageIds.add(String(run.userMessageId));
   }
 
   return projection.messages.filter(
@@ -414,6 +434,25 @@ function messagesForBoundedProjection(
       (message.runId !== null && retainedRunIds.has(String(message.runId))) ||
       message.delegatedCompletion !== undefined,
   );
+}
+
+/**
+ * Execution nodes grow with every tool call a thread ever made and are the
+ * largest part of a long thread's projection. Clients read them to group a
+ * run's items by attempt and to show the status of in-flight work, so a bounded
+ * snapshot keeps the nodes of runs in the window, of retained runs, and runless
+ * nodes. Items paged in later fall back to run-level grouping.
+ */
+function nodesForBoundedProjection(
+  projection: OrchestrationV2ThreadProjection,
+  visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): OrchestrationV2ThreadProjection["nodes"] {
+  const runIds = new Set<string>();
+  for (const row of visibleTurnItems) {
+    if (row.item.runId !== null) runIds.add(String(row.item.runId));
+  }
+  for (const run of retainedRuns(projection)) runIds.add(String(run.id));
+  return projection.nodes.filter((node) => node.runId === null || runIds.has(String(node.runId)));
 }
 
 /**
@@ -452,8 +491,9 @@ export function boundedTimelineEncodedBytes(input: {
 }
 
 /**
- * Builds a partial thread projection with full control-plane arrays and a
- * bounded recent timeline window plus matching local turnItems.
+ * Builds a partial thread projection with control-plane arrays, nodes for the
+ * window's runs, and a bounded recent timeline window plus matching local
+ * turnItems.
  */
 export function buildBoundedThreadProjection(input: {
   readonly projection: OrchestrationV2ThreadProjection;
@@ -484,20 +524,21 @@ export function buildBoundedThreadProjection(input: {
     }
     return reserve;
   })();
+  // Nodes follow the window, so they are not part of the fixed control cost.
   const controlBytes = bytesOfJson({
     ...controlProjection,
+    nodes: [],
     messages: [],
     turnItems: [],
     visibleTurnItems: [],
   });
   const windowBudget = Math.max(
-    0,
+    Math.min(THREAD_HISTORY_MIN_WINDOW_BYTES, policy.maxEncodedBytes),
     policy.maxEncodedBytes - dependencyReserve - controlBytes - 1_024,
   );
   const windowPolicy: ThreadHistoryPagePolicy = {
     maxUserTurns: policy.maxUserTurns,
     maxItems: policy.maxItems,
-    // Zero still admits the first row via the at-least-one rule.
     maxEncodedBytes: windowBudget,
   };
 
@@ -554,6 +595,7 @@ export function buildBoundedThreadProjection(input: {
 
   const projection = {
     ...controlProjection,
+    nodes: nodesForBoundedProjection(controlProjection, visibleTurnItems),
     plans,
     contextHandoffs,
     messages: messagesForBoundedProjection(controlProjection, turnItems),

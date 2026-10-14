@@ -863,11 +863,13 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         projection: initial.projection,
         snapshotSequence: 0,
       });
-      assert.lengthOf(bounded.projection.visibleTurnItems, 10 * 102);
-      assert.strictEqual(bounded.projection.visibleTurnItems[0]?.sourceItemId, allIds[35 * 102]);
+      // The first window closes at a turn boundary once its byte budget is spent
+      // (three turns of about 430 kB here); older pages still go by turns alone.
+      assert.lengthOf(bounded.projection.visibleTurnItems, 3 * 102);
+      assert.strictEqual(bounded.projection.visibleTurnItems[0]?.sourceItemId, allIds[42 * 102]);
       const loaded = bounded.projection.visibleTurnItems.map((row) => String(row.sourceItemId));
       let cursor = bounded.historyCursor;
-      for (const turns of [20, 15]) {
+      for (const turns of [20, 20, 2]) {
         assert.isNotNull(cursor);
         const anchor = decodeThreadHistoryCursor(cursor!);
         const snapshot = yield* projectionStore.getThreadSnapshotWindow(threadId, {
@@ -876,10 +878,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           anchorItemId: TurnItemId.make(anchor.si),
           anchorThreadId: ThreadId.make(anchor.st),
         });
+        // Like getThreadHistoryPage, which selects from the index before loading bodies.
         const page = selectHistoryPageFromCursor({
           items: snapshot.projection.visibleTurnItems,
           cursor: cursor!,
           snapshotSequence: 0,
+          rowEncodedBytes: () => 0,
         });
         assert.lengthOf(page.items, turns * 102);
         loaded.unshift(...page.items.map((row) => String(row.sourceItemId)));
