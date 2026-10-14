@@ -1,6 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 
+import type { ThreadId } from "@t3tools/contracts";
+
 import {
+  newestContextLoad,
   pendingQuestionsOf,
   REPLY_PREVIEW_LENGTH,
   replyPreview,
@@ -51,5 +54,34 @@ describe("replyPreview", () => {
     const preview = replyPreview("word ".repeat(100));
     expect(preview.length).toBeLessThanOrEqual(REPLY_PREVIEW_LENGTH + 1);
     expect(preview.endsWith("word…")).toBe(true);
+  });
+});
+
+describe("newestContextLoad", () => {
+  const threadId = "thread-1" as ThreadId;
+
+  it("takes the newest report by its time, not by turn order", () => {
+    expect(
+      newestContextLoad(threadId, [
+        // A subagent's turn started later but reported earlier.
+        { used_tokens: 40_000, max_tokens: 200_000, updated_at: "2026-10-14T09:00:00.000Z" },
+        { used_tokens: 412_000, max_tokens: 1_000_000, updated_at: "2026-10-14T09:05:00.000Z" },
+        { used_tokens: null, max_tokens: null, updated_at: null },
+      ]),
+    ).toEqual({ threadId, usedTokens: 412_000, maxTokens: 1_000_000 });
+  });
+
+  it("knows nothing for a thread whose turns never reported", () => {
+    expect(
+      newestContextLoad(threadId, [{ used_tokens: null, max_tokens: null, updated_at: null }]),
+    ).toBeNull();
+  });
+
+  it("leaves the limit out when the provider did not say it", () => {
+    expect(
+      newestContextLoad(threadId, [
+        { used_tokens: 90_000, max_tokens: null, updated_at: "2026-10-14T09:00:00.000Z" },
+      ]),
+    ).toEqual({ threadId, usedTokens: 90_000 });
   });
 });

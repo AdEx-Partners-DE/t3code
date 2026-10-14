@@ -50,6 +50,48 @@ export interface PendingQuestion {
   readonly since: string;
 }
 
+export interface ContextLoad {
+  readonly threadId: ThreadId;
+  /** Tokens the thread's context held at the provider's last report. */
+  readonly usedTokens: number;
+  readonly maxTokens?: number;
+}
+
+interface ContextReportRow {
+  readonly used_tokens: number | null;
+  readonly max_tokens: number | null;
+  readonly updated_at: string | null;
+}
+
+/**
+ * The newest context report among a thread's recent provider turns. The turns
+ * of its provider threads (a handoff, a native subagent) interleave, so the
+ * newest report is picked by its time, as the composer's context meter does.
+ */
+export function newestContextLoad(
+  threadId: ThreadId,
+  rows: ReadonlyArray<ContextReportRow>,
+): ContextLoad | null {
+  let newest: ContextLoad | null = null;
+  let newestAt = Number.NEGATIVE_INFINITY;
+  // Rows come newest turn first, so a tie keeps the newer turn.
+  for (const row of rows) {
+    if (row.used_tokens === null || row.updated_at === null) continue;
+    const at = Date.parse(row.updated_at);
+    if (newest !== null && at <= newestAt) continue;
+    newestAt = at;
+    newest = {
+      threadId,
+      usedTokens: row.used_tokens,
+      ...(row.max_tokens === null ? {} : { maxTokens: row.max_tokens }),
+    };
+  }
+  return newest;
+}
+
+/** Provider turns read per thread for its context report; the newest is among the last few. */
+const CONTEXT_REPORT_TURNS = 20;
+
 export const REPLY_PREVIEW_LENGTH = 220;
 
 /** A reply as one short line: whitespace folded, cut at a word where one is near. */
@@ -192,6 +234,29 @@ export const make = Effect.gen(function* () {
     return replies.flat();
   });
 
+  // How much context each open thread carries now. Long threads spend the
+  // allowance: every request sends the whole context again, cached or not.
+  const readContextLoads = Effect.fn("QueueOverview.readContextLoads")(function* (
+    openThreadIds: ReadonlyArray<ThreadId>,
+  ) {
+    const loads = yield* Effect.forEach(
+      openThreadIds,
+      (threadId) =>
+        sql<ContextReportRow>`
+          SELECT
+            json_extract(payload_json, '$.tokenUsage.usedTokens') AS used_tokens,
+            json_extract(payload_json, '$.tokenUsage.maxTokens') AS max_tokens,
+            json_extract(payload_json, '$.tokenUsage.updatedAt') AS updated_at
+          FROM orchestration_v2_projection_provider_turns
+          WHERE thread_id = ${threadId}
+          ORDER BY started_at DESC
+          LIMIT ${CONTEXT_REPORT_TURNS}
+        `.pipe(Effect.map((rows) => newestContextLoad(threadId, rows))),
+      { concurrency: 1 },
+    );
+    return loads.filter((load) => load !== null);
+  });
+
   // The thread list is the costly read here (a scan of every thread row), so
   // it is read once and every part of the overview filters by it.
   const read = Effect.gen(function* () {
@@ -204,6 +269,7 @@ export const make = Effect.gen(function* () {
       activeRuns: yield* readActiveRuns,
       lastReplies: yield* readLastReplies(openThreadIds),
       pendingQuestions: yield* readPendingQuestions(openThreadIdSet),
+      contextLoads: yield* readContextLoads(openThreadIds),
     };
   });
 
@@ -211,8 +277,8 @@ export const make = Effect.gen(function* () {
     /**
      * Across the open threads: the waiting queues and the questions waiting
      * for the user, the longest wait first; the start of each thread's last
-     * reply; and every thread with a run under way with when it last showed
-     * a sign of life.
+     * reply; every thread with a run under way with when it last showed a
+     * sign of life; and how much context each open thread carries.
      */
     read,
   };

@@ -195,6 +195,18 @@ function CockpitStat(props: {
 }
 
 const STALE_QUEUE_MS = 60 * 60_000;
+/**
+ * Context a thread may carry before the cockpit suggests compacting it. Every
+ * request sends the whole context again, so long threads spend the allowance
+ * even when the prompt cache hits.
+ */
+const HEAVY_CONTEXT_TOKENS = 300_000;
+
+function tokensLabel(tokens: number): string {
+  return tokens >= 1_000_000
+    ? `${(tokens / 1_000_000).toFixed(1)}M`
+    : `${Math.round(tokens / 1_000)}k`;
+}
 /** A run under way with no event for this long is called out. */
 const QUIET_RUN_MS = 5 * 60_000;
 
@@ -239,6 +251,23 @@ function CockpitWaitingQueues({
   const quiet = (Option.getOrNull(AsyncResult.value(result))?.activeRuns ?? []).filter(
     (run) => !asking.has(run.threadId) && nowMs - Date.parse(run.lastEventAt) >= QUIET_RUN_MS,
   );
+  const heavy = (Option.getOrNull(AsyncResult.value(result))?.contextLoads ?? []).filter(
+    (load) => load.usedTokens >= HEAVY_CONTEXT_TOKENS,
+  );
+  const contextLine =
+    heavy.length === 0 ? null : (
+      <button
+        type="button"
+        data-testid="sidebar-cockpit-context"
+        onClick={() => onFilter(new Set(heavy.map((load) => load.threadId)))}
+        className="cursor-pointer self-start rounded-sm text-left tabular-nums hover:text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      >
+        {heavy.length} {heavy.length === 1 ? "thread carries" : "threads carry"} over{" "}
+        {tokensLabel(HEAVY_CONTEXT_TOKENS)} context, the largest{" "}
+        {tokensLabel(Math.max(...heavy.map((load) => load.usedTokens)))}: compact or start a new
+        thread
+      </button>
+    );
   const questionLine =
     questions.length === 0 ? null : (
       <button
@@ -269,6 +298,7 @@ function CockpitWaitingQueues({
         {holdLine}
         {questionLine}
         {quietLine}
+        {contextLine}
         {filterOn ? (
           <button
             type="button"
@@ -288,6 +318,7 @@ function CockpitWaitingQueues({
       {holdLine}
       {questionLine}
       {quietLine}
+      {contextLine}
       <button
         type="button"
         data-testid="sidebar-cockpit-queues"
