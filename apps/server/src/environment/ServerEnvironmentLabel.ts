@@ -1,4 +1,5 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -182,6 +183,17 @@ const resolveFriendlyHostLabel = Effect.fn("resolveFriendlyHostLabel")(function*
 export const resolveServerEnvironmentLabel = Effect.fn("resolveServerEnvironmentLabel")(function* (
   input: ResolveServerEnvironmentLabelInput,
 ) {
+  // A second server on the same machine (a fork beside the installed app)
+  // would otherwise show up under the same hostname in every client.
+  const configured = yield* Config.String("T3CODE_ENVIRONMENT_LABEL").pipe(
+    Config.option,
+    Effect.orElseSucceed(() => Option.none<string>()),
+  );
+  const configuredLabel = normalizeLabel(Option.getOrUndefined(configured));
+  if (configuredLabel) {
+    return configuredLabel;
+  }
+
   const friendlyHostLabel = yield* resolveFriendlyHostLabel();
   if (friendlyHostLabel) {
     return friendlyHostLabel;

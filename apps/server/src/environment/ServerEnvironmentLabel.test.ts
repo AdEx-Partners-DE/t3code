@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -61,6 +62,26 @@ afterEach(() => {
 });
 
 describe("resolveServerEnvironmentLabel", () => {
+  it.effect("prefers T3CODE_ENVIRONMENT_LABEL over every host name", () =>
+    Effect.gen(function* () {
+      const resolve = (env: Record<string, string>) =>
+        ServerEnvironmentLabel.resolveServerEnvironmentLabel({ cwdBaseName: "t3code" }).pipe(
+          Effect.provide(
+            Layer.merge(
+              withHostPlatform(layerLinuxMachineInfo, "linux", "desktop-gaming"),
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
+            ),
+          ),
+        );
+
+      expect(yield* resolve({ T3CODE_ENVIRONMENT_LABEL: "  DESKTOP-GAMING Alpha " })).toBe(
+        "DESKTOP-GAMING Alpha",
+      );
+      // Blank means unset, so the machine's own name still applies.
+      expect(yield* resolve({ T3CODE_ENVIRONMENT_LABEL: "  " })).toBe("Build Agent 01");
+    }),
+  );
+
   it.effect("uses hostname fallback regardless of launch mode", () =>
     Effect.gen(function* () {
       const result = yield* ServerEnvironmentLabel.resolveServerEnvironmentLabel({
