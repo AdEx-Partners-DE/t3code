@@ -7,7 +7,11 @@ import {
   type ScheduledTask,
 } from "@t3tools/contracts";
 
-import { relatedThreadAutomations, summarizeAutomations } from "./threadAutomations.ts";
+import {
+  formatAutomationsSummary,
+  relatedThreadAutomations,
+  summarizeAutomations,
+} from "./threadAutomations.ts";
 
 const project = ProjectId.make("project");
 const threadId = ThreadId.make("thread");
@@ -113,5 +117,17 @@ describe("summarizeAutomations", () => {
     expect(summary.onCount).toBe(2);
     expect(summary.heldCount).toBe(1);
     expect(summary.next?.id).toBe("soon");
+    expect(formatAutomationsSummary(summary, Date.parse("2026-10-14T10:00:00.000Z"))).toBe(
+      "2 automations on · 1 paused · next: soon in 5m",
+    );
+  });
+
+  it("says nothing when no task is switched on", () => {
+    const summary = summarizeAutomations({
+      tasks: [task("off", { enabled: false })],
+      paused: false,
+      exemptIds: [],
+    });
+    expect(formatAutomationsSummary(summary, 0)).toBeNull();
   });
 });

@@ -91,3 +91,27 @@ export function summarizeAutomations(input: {
     next,
   };
 }
+
+function untilLabel(at: string, nowMs: number): string {
+  const minutes = Math.ceil((Date.parse(at) - nowMs) / 60_000);
+  if (minutes <= 0) return "due now";
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  return hours < 24 ? `in ${hours}h` : `in ${Math.round(hours / 24)}d`;
+}
+
+/** "3 automations on · 1 paused · 1 running · next: Review in 6m", or null when none is switched on. */
+export function formatAutomationsSummary(
+  summary: AutomationsSummary,
+  nowMs: number,
+): string | null {
+  if (summary.onCount + summary.heldCount === 0) return null;
+  return [
+    `${summary.onCount} ${summary.onCount === 1 ? "automation" : "automations"} on`,
+    ...(summary.heldCount > 0 ? [`${summary.heldCount} paused`] : []),
+    ...(summary.runningCount > 0 ? [`${summary.runningCount} running`] : []),
+    ...(summary.next?.nextRunAt == null
+      ? []
+      : [`next: ${summary.next.title} ${untilLabel(summary.next.nextRunAt, nowMs)}`]),
+  ].join(" · ");
+}

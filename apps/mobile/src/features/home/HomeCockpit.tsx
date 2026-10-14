@@ -5,21 +5,28 @@ import {
   formatWait,
   HEAVY_CONTEXT_TOKENS,
 } from "@t3tools/client-runtime/state/cockpit-alerts";
+import {
+  formatAutomationsSummary,
+  summarizeAutomations,
+} from "@t3tools/client-runtime/state/thread-automations";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { useNavigation } from "@react-navigation/native";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
+import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 /**
  * The web sidebar's cockpit lines for one environment, above the thread list:
  * questions waiting for the user, runs gone silent, waiting queues, threads
- * with a heavy context, and whether tasks or queues are paused. Shows nothing
- * when there is nothing to say.
+ * with a heavy context, whether queues are paused, and how many automations
+ * are on and which starts next (tap for the task list). Shows nothing when
+ * there is nothing to say.
  */
 export function HomeCockpit({
   environmentId,
@@ -32,6 +39,17 @@ export function HomeCockpit({
   const result = useAtomValue(serverEnvironment.threadChecklists({ environmentId, input }));
   const settings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, "resume queues");
+  const navigation = useNavigation();
+  const tasks = useEnvironmentQuery(serverEnvironment.scheduledTasksLive({ environmentId, input }))
+    .data?.tasks;
+  const automations = formatAutomationsSummary(
+    summarizeAutomations({
+      tasks: tasks ?? [],
+      paused: settings?.scheduledTasksPaused === true,
+      exemptIds: settings?.scheduledTasksPauseExemptIds ?? [],
+    }),
+    nowMs,
+  );
   const alerts = deriveCockpitAlerts(Option.getOrNull(AsyncResult.value(result)), nowMs);
   const { questions, quietRuns, heavyContexts, waitingQueues } = alerts;
   const warnings = [
@@ -55,10 +73,11 @@ export function HomeCockpit({
     heavyContexts === null
       ? null
       : `${heavyContexts.threadIds.size} ${heavyContexts.threadIds.size === 1 ? "thread carries" : "threads carry"} over ${formatTokens(HEAVY_CONTEXT_TOKENS)} context, the largest ${formatTokens(heavyContexts.largestTokens)}: compact or start a new thread`,
-    settings?.scheduledTasksPaused ? "Automations are paused" : null,
   ].filter((line) => line !== null);
   const queuesPaused = settings?.threadQueuesPaused === true;
-  if (warnings.length === 0 && notes.length === 0 && !queuesPaused) return null;
+  if (warnings.length === 0 && notes.length === 0 && !queuesPaused && automations === null) {
+    return null;
+  }
   return (
     <View className="mx-3 mb-2 gap-1 rounded-xl border border-border bg-screen p-3">
       {warnings.map((line) => (
@@ -71,6 +90,20 @@ export function HomeCockpit({
           {line}
         </Text>
       ))}
+      {automations === null ? null : (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() =>
+            navigation.navigate("SettingsSheet", {
+              screen: "SettingsContent",
+              params: { screen: "SettingsScheduledTasks" },
+            })
+          }
+          className="active:opacity-70"
+        >
+          <Text className="text-sm text-foreground-muted">{automations}</Text>
+        </Pressable>
+      )}
       {queuesPaused ? (
         <View className="flex-row items-center justify-between gap-2">
           <Text className="text-sm text-foreground-muted">Queues are paused</Text>
