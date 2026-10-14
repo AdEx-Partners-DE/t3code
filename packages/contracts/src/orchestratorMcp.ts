@@ -23,6 +23,7 @@ import {
   ScheduledTaskUpsertSchedule,
 } from "./scheduledTask.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import { ServerProviderUsageWindow } from "./providerUsageLimits.ts";
 import { ThreadLinkedPullRequest } from "./threadPullRequest.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import {
@@ -501,6 +502,16 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
   canRunChildTask: Schema.Boolean,
   canRunCrossProviderChildTask: Schema.Boolean,
   constraints: Schema.Array(Schema.String),
+  /**
+   * The account's quota windows as last read, so an orchestrator can spread
+   * work by what is left. Omitted when the provider reports none.
+   */
+  usageLimits: Schema.optional(
+    Schema.Struct({
+      checkedAt: IsoDateTime,
+      windows: Schema.Array(ServerProviderUsageWindow),
+    }),
+  ),
 });
 export type OrchestratorMcpProviderCapability = typeof OrchestratorMcpProviderCapability.Type;
 

@@ -1087,6 +1087,64 @@ describe("OrchestratorMcpService provider resolution", () => {
     }),
   );
 
+  it.effect("reports each account's quota windows, and none for an account that cannot", () =>
+    Effect.gen(function* () {
+      const weekly = {
+        id: "seven_day",
+        kind: "weekly",
+        label: "Weekly",
+        usedPercent: 62,
+        resetsAt: "2026-10-18T09:00:00.000Z",
+      } as const;
+      const codex = providerSnapshot({
+        instanceId: codexInstanceId,
+        driver: ProviderDriverKind.make("codex"),
+        model: "gpt-5.4",
+      });
+      const claude = providerSnapshot({
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        model: "claude-opus-5-5",
+      });
+      const layerDependencies = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+        ServerSettings.layerTest(),
+        providerRegistryLayer([
+          {
+            ...codex,
+            usageLimits: { checkedAt: "2026-10-14T09:00:00.000Z", windows: [weekly] },
+          },
+          {
+            ...claude,
+            usageLimits: {
+              checkedAt: "2026-10-14T09:00:00.000Z",
+              windows: [],
+              unavailable: { reason: "unsupported" },
+            },
+          },
+        ]),
+        adapterRegistryLayer([codexInstanceId, ProviderInstanceId.make("claudeAgent")]),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(GitWorkflow.GitWorkflowService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const { providers } = yield* service.capabilities(scope);
+        assert.deepEqual(providers[0]?.usageLimits, {
+          checkedAt: "2026-10-14T09:00:00.000Z",
+          windows: [weekly],
+        });
+        assert.isUndefined(providers[1]?.usageLimits);
+      }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
+    }),
+  );
+
   it.effect(
     "delegates to an Antigravity instance whose adapter resolves through the registry",
     () =>

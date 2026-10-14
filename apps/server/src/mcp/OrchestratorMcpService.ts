@@ -1953,6 +1953,16 @@ const make = Effect.gen(function* () {
               canRunChildTask: constraints.length === 0,
               canRunCrossProviderChildTask: constraints.length === 0,
               constraints: [...constraints],
+              ...(provider.usageLimits === undefined ||
+              provider.usageLimits.unavailable !== undefined ||
+              provider.usageLimits.windows.length === 0
+                ? {}
+                : {
+                    usageLimits: {
+                      checkedAt: provider.usageLimits.checkedAt,
+                      windows: [...provider.usageLimits.windows],
+                    },
+                  }),
             };
           }),
           features: {
