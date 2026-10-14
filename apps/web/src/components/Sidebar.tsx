@@ -1337,6 +1337,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   scratchMachineLabel: string | null;
   project: EnvironmentProject | null;
   projectDisplayName: string | null;
+  // False under a project group header, which already names the project.
+  showProjectName?: boolean;
   providerEntryByInstanceId: ReadonlyMap<string, ProviderInstanceEntry>;
   timestampFormat: TimestampFormat;
   onThreadClick: (event: ReactMouseEvent, threadRef: ScopedThreadRef) => void;
@@ -2223,7 +2225,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               {props.project ? (
                 <ProjectFavicon project={props.project} className="size-4 shrink-0" />
               ) : null}
-              {props.projectDisplayName ? (
+              {props.projectDisplayName && props.showProjectName !== false ? (
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-secondary-label text-xs",
@@ -5997,6 +5999,7 @@ export default function Sidebar() {
                                 `${thread.environmentId}:${thread.projectId}`,
                               ) ?? null
                             }
+                            showProjectName={!(groupByProject && section === "active")}
                             providerEntryByInstanceId={
                               providerEntriesByEnvironment.get(thread.environmentId) ??
                               EMPTY_PROVIDER_ENTRIES
@@ -6051,6 +6054,8 @@ export default function Sidebar() {
                         );
                       };
                       const from = isContextDrag ? null : (dragState?.activeSection ?? null);
+                      // Active rows sit under a header naming their project.
+                      const groupByProject = inboxOrder === "project" && from === null;
                       const items: ReactNode[] = [
                         <SidebarDraftBlock
                           key="draft-sessions"
@@ -6062,7 +6067,6 @@ export default function Sidebar() {
                           onDraftContextMenu={handleDraftContextMenu}
                         />,
                       ];
-                      const groupByProject = inboxOrder === "project" && from === null;
                       const activeCountByProject = new Map<string, number>();
                       const waitingCountByProject = new Map<string, number>();
                       if (groupByProject) {
