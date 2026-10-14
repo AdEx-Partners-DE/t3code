@@ -5,6 +5,7 @@
  * @module SqliteClient
  */
 import * as NodeSqlite from "node:sqlite";
+import * as NodeUtil from "node:util";
 import * as NodeWorkerThreads from "node:worker_threads";
 
 import * as Cache from "effect/Cache";
@@ -46,6 +47,12 @@ export interface SqliteClientConfig {
   readonly readerWorker?: boolean | undefined;
   /** How long a reader worker may take to open the database before reads use the writer. Default 10 seconds. */
   readonly readerStartupTimeout?: Duration.Input | undefined;
+  /**
+   * Run WAL checkpoints on a read-write connection in a worker thread, so
+   * copying pages into the database and syncing it never block the event loop.
+   * Ignored for in-memory databases.
+   */
+  readonly checkpointWorker?: boolean | undefined;
 }
 
 /**
@@ -124,6 +131,54 @@ const classifyError = (cause: unknown, message: string, operation: string) => {
     Object.assign(cause, { errno: cause.errcode });
   }
   return classifySqliteError(cause, { message, operation });
+};
+
+/**
+ * SQLite keeps its copy of a statement's text and blob parameters until the
+ * statement is bound again or finalized, and `node:sqlite` cannot clear them.
+ * A cached statement would hold its last payload for as long as it stays
+ * cached, so executions binding more than this many string code units and
+ * blob bytes, or a named parameter behind a getter, get a throwaway statement
+ * instead.
+ */
+const LARGE_BINDING_SIZE = 64 * 1024;
+
+// `node:sqlite` binds both buffer views and raw buffers as blobs.
+const isBlob = (value: unknown): value is ArrayBufferView | ArrayBufferLike =>
+  ArrayBuffer.isView(value) || NodeUtil.types.isAnyArrayBuffer(value);
+
+const bindingSize = (value: unknown): number => {
+  if (typeof value === "string") {
+    return value.length;
+  }
+  return isBlob(value) ? value.byteLength : 0;
+};
+
+const hasLargeBinding = (params: ReadonlyArray<unknown>): boolean => {
+  try {
+    let size = 0;
+    for (const param of params) {
+      if (
+        (typeof param === "object" || typeof param === "function") &&
+        param !== null &&
+        !isBlob(param)
+      ) {
+        // `node:sqlite` takes named parameters as one object, callable or not.
+        // Read data properties only: calling a getter here would run it twice.
+        for (const property of Object.values(Object.getOwnPropertyDescriptors(param))) {
+          if (!property.enumerable) continue;
+          if (!("value" in property)) return true;
+          size += bindingSize(property.value);
+        }
+      } else {
+        size += bindingSize(param);
+      }
+    }
+    return size > LARGE_BINDING_SIZE;
+  } catch {
+    // A parameter that cannot be measured is left for the statement to report.
+    return true;
+  }
 };
 
 // Evaluated source instead of a worker file, so the reader also starts from
@@ -327,8 +382,10 @@ const makeReader = Effect.fnUntraced(function* (options: SqliteClientConfig) {
             },
           });
           if (pending.size === 1) worker.ref();
+          // The worker's statement cache would pin large parameters the same way.
+          const cached = input.cached && !hasLargeBinding(input.params);
           // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
-          worker.postMessage({ id, safeIntegers, ...input });
+          worker.postMessage({ id, safeIntegers, ...input, cached });
         });
       });
 
@@ -426,12 +483,115 @@ const makeReader = Effect.fnUntraced(function* (options: SqliteClientConfig) {
   });
 });
 
+// SQLite's default wal_autocheckpoint, in WAL frames (pages).
+const CHECKPOINT_FRAMES = 1000;
+// While the worker runs, the writer still checkpoints a WAL this long. Writes
+// with no pause leave the worker behind, and the WAL can only restart once
+// every frame is checkpointed, so this keeps the file from growing forever.
+const WRITER_BACKSTOP_FRAMES = 10 * CHECKPOINT_FRAMES;
+// How long writes must pause before the worker checkpoints the rest of a long WAL.
+const CHECKPOINT_IDLE_MS = 100;
+
+// Each message asks the worker to checkpoint if CHECKPOINT_FRAMES frames are
+// waiting, and it replies with the same message when done. Once writes pause, it also checkpoints the
+// frames that arrived during its last checkpoint, so the writer can restart the
+// WAL. NOOP only counts frames. SQLite before 3.51 reads NOOP as PASSIVE and
+// would checkpoint on every request, so the worker refuses to start there and
+// the writer keeps checkpointing.
+const checkpointWorkerSource = `
+const { parentPort, workerData } = require("node:worker_threads");
+const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(workerData.filename);
+const version = db.prepare("SELECT sqlite_version() AS version").get().version;
+const [major, minor] = version.split(".").map(Number);
+if (major < 3 || (major === 3 && minor < 51)) throw new Error("SQLite " + version + " has no NOOP checkpoint");
+// macOS fsync() does not flush the drive cache; F_FULLFSYNC does. Other platforms ignore this.
+db.exec("PRAGMA checkpoint_fullfsync = ON;");
+const frames = db.prepare("PRAGMA wal_checkpoint(NOOP)");
+const checkpoint = db.prepare("PRAGMA wal_checkpoint(PASSIVE)");
+const finish = () => {
+  const { log, checkpointed } = frames.get();
+  if (log >= workerData.frames && checkpointed < log) checkpoint.get();
+};
+let idle;
+parentPort.on("message", (request) => {
+  const { log, checkpointed } = frames.get();
+  if (log - checkpointed >= workerData.frames) checkpoint.get();
+  clearTimeout(idle);
+  idle = setTimeout(finish, workerData.idleMs);
+  parentPort.postMessage(request);
+});
+`;
+
+/**
+ * Moves the writer's WAL checkpoints to a worker. Call the returned function
+ * after each statement on the writer. While the worker runs, the writer only
+ * checkpoints at WRITER_BACKSTOP_FRAMES. If the worker fails or exits, the
+ * writer goes back to SQLite's default.
+ */
+const startCheckpointWorker = Effect.fnUntraced(function* (
+  filename: string,
+  writer: NodeSqlite.DatabaseSync,
+) {
+  let worker: NodeWorkerThreads.Worker;
+  try {
+    worker = new NodeWorkerThreads.Worker(checkpointWorkerSource, {
+      eval: true,
+      workerData: { filename, frames: CHECKPOINT_FRAMES, idleMs: CHECKPOINT_IDLE_MS },
+    });
+  } catch {
+    // No worker threads here: the writer keeps checkpointing.
+    return undefined;
+  }
+  writer.exec(`PRAGMA wal_autocheckpoint = ${WRITER_BACKSTOP_FRAMES};`);
+  let stopped = false;
+  let checking = false;
+  let checkAgain = false;
+  const handBack = () => {
+    if (stopped) return;
+    stopped = true;
+    try {
+      writer.exec(`PRAGMA wal_autocheckpoint = ${CHECKPOINT_FRAMES};`);
+    } catch {
+      // The writer is already closed.
+    }
+  };
+  worker.on("error", handBack);
+  worker.on("exit", handBack);
+  yield* Effect.addFinalizer(() => Effect.promise(() => worker.terminate()));
+
+  // At most one request is in flight. A statement that runs during it asks for
+  // one more check, so the frames of a last commit before idle still get one.
+  const check = () => {
+    if (stopped) return;
+    if (checking) {
+      checkAgain = true;
+      return;
+    }
+    checking = true;
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
+    worker.postMessage(null);
+  };
+  worker.on("message", () => {
+    checking = false;
+    if (checkAgain) {
+      checkAgain = false;
+      check();
+    }
+  });
+  // After the listeners: adding a "message" listener refs the worker again.
+  // A checkpoint in progress must not keep the process alive.
+  worker.unref();
+  return check;
+});
+
 const make = Effect.fn("makeWithDatabase")(function* (
   options: SqliteClientConfig,
 ): Effect.fn.Return<Client.SqlClient, SqlError, Scope.Scope | Reactivity.Reactivity> {
   yield* checkNodeSqliteCompat();
 
   const compiler = Statement.makeCompilerSqlite(options.transformQueryNames);
+  const isFileDatabase = options.filename !== ":memory:" && options.filename !== "";
   const transformRows = options.transformResultNames
     ? Statement.defaultTransforms(options.transformResultNames).array
     : undefined;
@@ -459,6 +619,11 @@ const make = Effect.fn("makeWithDatabase")(function* (
           }),
       }).pipe(Effect.orDie),
     );
+    // Started after the close finalizer, so the worker stops before the writer closes.
+    const checkpoint =
+      options.checkpointWorker && isFileDatabase
+        ? yield* startCheckpointWorker(options.filename, db)
+        : undefined;
 
     const statementReaderCache = new WeakMap<NodeSqlite.StatementSync, boolean>();
     const hasRows = (statement: NodeSqlite.StatementSync): boolean => {
@@ -487,6 +652,9 @@ const make = Effect.fn("makeWithDatabase")(function* (
         Exit.isSuccess(exit) ? (options.prepareCacheTTL ?? Duration.minutes(10)) : Duration.zero,
     });
 
+    const statementFor = (sql: string, params: ReadonlyArray<unknown>) =>
+      hasLargeBinding(params) ? prepare(sql) : Cache.get(prepareCache, sql);
+
     const runStatement = (
       statement: NodeSqlite.StatementSync,
       params: ReadonlyArray<unknown>,
@@ -496,9 +664,12 @@ const make = Effect.fn("makeWithDatabase")(function* (
         try {
           statement.setReadBigInts(Boolean(Context.get(fiber.context, Client.SafeIntegers)));
           if (hasRows(statement)) {
-            return Effect.succeed(statement.all(...(params as any)));
+            const rows = statement.all(...(params as any));
+            checkpoint?.();
+            return Effect.succeed(rows);
           }
           const result = statement.run(...(params as any));
+          checkpoint?.();
           return Effect.succeed(raw ? (result as unknown as ReadonlyArray<any>) : []);
         } catch (cause) {
           return Effect.fail(
@@ -510,7 +681,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
       });
 
     const run = (sql: string, params: ReadonlyArray<unknown>, raw = false) =>
-      Effect.flatMap(Cache.get(prepareCache, sql), (s) => runStatement(s, params, raw));
+      Effect.flatMap(statementFor(sql, params), (s) => runStatement(s, params, raw));
 
     const runStatementValues = (
       statement: NodeSqlite.StatementSync,
@@ -521,14 +692,20 @@ const make = Effect.fn("makeWithDatabase")(function* (
         (statement) =>
           Effect.try({
             try: () => {
+              statement.setReadBigInts(
+                Boolean(Context.get(Fiber.getCurrent()!.context, Client.SafeIntegers)),
+              );
               if (hasRows(statement)) {
                 statement.setReturnArrays(true);
                 // Safe to cast to array after we've setReturnArrays(true)
-                return statement.all(...(params as any)) as unknown as ReadonlyArray<
+                const rows = statement.all(...(params as any)) as unknown as ReadonlyArray<
                   ReadonlyArray<unknown>
                 >;
+                checkpoint?.();
+                return rows;
               }
               statement.run(...(params as any));
+              checkpoint?.();
               return [];
             },
             catch: (cause) =>
@@ -555,7 +732,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
       );
 
     const runValues = (sql: string, params: ReadonlyArray<unknown>) =>
-      Effect.flatMap(Cache.get(prepareCache, sql), (statement) =>
+      Effect.flatMap(statementFor(sql, params), (statement) =>
         runStatementValues(statement, params),
       );
 
@@ -589,9 +766,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
   const semaphore = yield* Semaphore.make(1);
   const connection = yield* makeConnection;
   const acquireReader =
-    options.readerWorker && options.filename !== ":memory:" && options.filename !== ""
-      ? yield* makeReader(options)
-      : undefined;
+    options.readerWorker && isFileDatabase ? yield* makeReader(options) : undefined;
   const readerSemaphore = yield* Semaphore.make(1);
 
   const writer = { lock: semaphore, connection };

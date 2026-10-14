@@ -131,6 +131,102 @@ layer("NodeSqliteClient", (it) => {
   );
 });
 
+const largeText = "x".repeat(64 * 1024 + 1);
+
+it.effect("keeps large text and blob parameters off cached statements", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const statements: Array<NodeSqlite.StatementSync> = [];
+    const all = NodeSqlite.StatementSync.prototype.all;
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        vi.spyOn(NodeSqlite.StatementSync.prototype, "all").mockImplementation(function (
+          this: NodeSqlite.StatementSync,
+          ...params
+        ) {
+          statements.push(this);
+          return all.apply(this, params);
+        }),
+      ),
+      (spy) => Effect.sync(() => spy.mockRestore()),
+    );
+
+    const small = "small";
+    const queries = [
+      (value: string | Uint8Array | ArrayBuffer) => sql`SELECT length(${value}) AS size`,
+      (value: string | Uint8Array | ArrayBuffer) =>
+        sql.unsafe("SELECT length($value) AS size", [{ $value: value }]),
+      (value: string | Uint8Array | ArrayBuffer) =>
+        sql.unsafe("SELECT length($value) AS callable", [
+          Object.assign(() => {}, { $value: value }),
+        ]),
+    ];
+    const cached = new Set<NodeSqlite.StatementSync>();
+    const large = new Set<NodeSqlite.StatementSync>();
+    const largeBlobs = [new Uint8Array(64 * 1024 + 1), new ArrayBuffer(64 * 1024 + 1)];
+    for (const value of [small, largeText, ...largeBlobs, small]) {
+      const expected = typeof value === "string" ? value.length : value.byteLength;
+      for (const query of queries) {
+        assert.deepEqual((yield* query(value)).map(Object.values), [[expected]]);
+        assert.deepEqual(yield* query(value).values, [[expected]]);
+        for (const statement of statements.splice(0)) {
+          (value === small ? cached : large).add(statement);
+        }
+      }
+    }
+
+    // Small parameters keep reusing the one cached statement for each query.
+    assert.equal(cached.size, queries.length);
+    // Each large execution gets a statement that nothing holds on to afterwards.
+    assert.equal(large.size, queries.length * 6);
+    assert.isTrue(cached.isDisjointFrom(large));
+  }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("reads integers on the values path as the caller asked, cached or not", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    for (const value of ["small", largeText]) {
+      const values = sql`SELECT 1 AS id, length(${value}) AS size`.values;
+      assert.deepEqual(yield* values.pipe(Effect.provideService(SqlClient.SafeIntegers, true)), [
+        [1n, BigInt(value.length)],
+      ]);
+      assert.deepEqual(yield* values, [[1, value.length]]);
+    }
+  }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("leaves a parameter it cannot measure for the statement to handle", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const detached = new DataView(new ArrayBuffer(8));
+    structuredClone(detached.buffer, { transfer: [detached.buffer] });
+    // What a detached view binds as varies by Node version; match the statement itself.
+    const native = new NodeSqlite.DatabaseSync(":memory:");
+    const expected = native.prepare("SELECT length(?) AS size").all(detached);
+    native.close();
+    assert.deepEqual(yield* sql`SELECT length(${detached}) AS size`, expected);
+
+    const throwing = {
+      get $value(): string {
+        throw new Error("unreadable");
+      },
+    };
+    const error = yield* sql.unsafe("SELECT length($value) AS size", [throwing]).pipe(Effect.flip);
+    assert.equal(error.reason.operation, "execute");
+
+    // Only the statement reads a getter, so it runs once as it would natively.
+    let reads = 0;
+    const counting = {
+      get $value(): number {
+        return ++reads;
+      },
+    };
+    assert.deepEqual(yield* sql.unsafe("SELECT $value AS value", [counting]), [{ value: 1 }]);
+    assert.equal(reads, 1);
+  }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))),
+);
+
 const makeTempDatabase = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -308,6 +404,38 @@ it.effect("keeps read-only work inside a write transaction on the writer", () =>
         assert.equal(count, 2);
       }),
     ),
+  ),
+);
+
+it.effect("keeps large parameters off the reader worker's cached statements", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      const read = (value: string) =>
+        sql<{ size: number }>`SELECT length(${value}) AS size`.pipe(
+          Effect.map((rows) => rows[0]?.size),
+        );
+      // Start the worker so its requests can be recorded.
+      yield* countEntries(sql).pipe(SqliteClient.readOnly);
+      const worker = startedWorkers.at(-1)!;
+      const cached: Array<boolean> = [];
+      const postMessage = worker.postMessage;
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi.spyOn(worker, "postMessage").mockImplementation(function (
+            this: NodeWorkerThreads.Worker,
+            message: { readonly cached: boolean },
+          ) {
+            cached.push(message.cached);
+            return postMessage.call(this, message);
+          }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
+
+      assert.equal(yield* read("small").pipe(SqliteClient.readOnly), 5);
+      assert.equal(yield* read(largeText).pipe(SqliteClient.readOnly), largeText.length);
+      assert.deepEqual(cached, [true, false]);
+    }).pipe(Effect.scoped),
   ),
 );
 
@@ -547,6 +675,90 @@ it.effect("does not hand out a worker that reports ready after another read time
       );
 
       assert.deepEqual(counts, [1, 1]);
+    }),
+  ),
+);
+
+const withCheckpointClient = <A, E>(
+  use: (
+    sql: SqlClient.SqlClient,
+    filename: string,
+  ) => Effect.Effect<A, E, SqlClient.SqlClient | FileSystem.FileSystem>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sqlite-checkpoint-" });
+    const filename = path.join(directory, "state.sqlite");
+    return yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`PRAGMA journal_mode = WAL`;
+      return yield* use(sql, filename);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+// Resolves once the worker has handled a request sent now, after every
+// statement so far. Earlier requests from the writer reply with null.
+const checkpointWorkerReply = (worker: NodeWorkerThreads.Worker) =>
+  Effect.promise(
+    () =>
+      new Promise<void>((resolve) => {
+        const onReply = (reply: unknown) => {
+          if (reply !== "barrier") return;
+          worker.off("message", onReply);
+          resolve();
+        };
+        worker.on("message", onReply);
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
+        worker.postMessage("barrier");
+      }),
+  );
+
+it.effect("checkpoints the WAL on the worker instead of the writer", () =>
+  withCheckpointClient((sql, filename) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const walSize = Effect.map(fs.stat(`${filename}-wal`), (info) => Number(info.size));
+      const worker = startedWorkers.at(-1)!;
+      const limit = 1024 * 1024;
+      yield* sql.unsafe(`PRAGMA journal_size_limit = ${limit}`);
+      const autocheckpoint = yield* sql<{
+        readonly wal_autocheckpoint: number;
+      }>`PRAGMA wal_autocheckpoint`;
+      // The writer leaves a WAL of this size to the worker.
+      assert.equal(autocheckpoint[0]?.wal_autocheckpoint, 10_000);
+
+      // About 1200 frames, past the 1000 that start a checkpoint.
+      yield* sql`CREATE TABLE pages(payload BLOB)`;
+      yield* sql`
+        WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1200)
+        INSERT INTO pages(payload) SELECT randomblob(4000) FROM n
+      `;
+      yield* checkpointWorkerReply(worker);
+      const wal = yield* sql<{
+        readonly log: number;
+        readonly checkpointed: number;
+      }>`PRAGMA wal_checkpoint(NOOP)`;
+      assert.isAbove(wal[0]!.log, 1000);
+      assert.equal(wal[0]!.checkpointed, wal[0]!.log);
+
+      // Every frame is in the database, so the next commit restarts the WAL and
+      // cuts the file back to the size limit.
+      assert.isAbove(yield* walSize, limit);
+      yield* sql`INSERT INTO pages(payload) VALUES (x'00')`;
+      assert.isAtMost(yield* walSize, limit);
+    }),
+  ),
+);
+
+it.effect("hands checkpoints back to the writer when the worker stops", () =>
+  withCheckpointClient((sql) =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() => startedWorkers.at(-1)!.terminate());
+      const autocheckpoint = yield* sql<{
+        readonly wal_autocheckpoint: number;
+      }>`PRAGMA wal_autocheckpoint`;
+      assert.equal(autocheckpoint[0]?.wal_autocheckpoint, 1000);
     }),
   ),
 );
