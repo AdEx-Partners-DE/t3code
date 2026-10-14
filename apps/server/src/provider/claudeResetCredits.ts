@@ -283,10 +283,23 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
 
 /** How long one reading of the banked resets stands before the next request. */
 export const RESET_CREDITS_READ_INTERVAL_MS = 10 * 60_000;
+/** The longest wait after refused requests; the endpoint answered 429 to most reads. */
+export const RESET_CREDITS_READ_MAX_INTERVAL_MS = 60 * 60_000;
 
-/** Whether the banked resets are asked for again: never asked, or the last request is old enough. */
-export function resetCreditsReadDue(lastAttemptMs: number | null, nowMs: number): boolean {
-  return lastAttemptMs === null || nowMs - lastAttemptMs >= RESET_CREDITS_READ_INTERVAL_MS;
+/**
+ * Whether the banked resets are asked for again: never asked, or the last
+ * request is old enough. Each refused request in a row doubles the wait.
+ */
+export function resetCreditsReadDue(
+  lastAttemptMs: number | null,
+  nowMs: number,
+  refusedInARow = 0,
+): boolean {
+  const interval = Math.min(
+    RESET_CREDITS_READ_INTERVAL_MS * 2 ** refusedInARow,
+    RESET_CREDITS_READ_MAX_INTERVAL_MS,
+  );
+  return lastAttemptMs === null || nowMs - lastAttemptMs >= interval;
 }
 
 /**
@@ -303,22 +316,27 @@ export const makeThrottledResetCreditsReader = <A, R>(
     const state = yield* Ref.make<{
       readonly attemptedAt: number | null;
       readonly value: A | undefined;
+      readonly refusedInARow: number;
     }>({
       attemptedAt: null,
       value: undefined,
+      refusedInARow: 0,
     });
     return {
       read: (version: string) =>
         Effect.gen(function* () {
           const known = yield* Ref.get(state);
           const now = yield* Clock.currentTimeMillis;
-          if (!resetCreditsReadDue(known.attemptedAt, now)) return known.value;
+          if (!resetCreditsReadDue(known.attemptedAt, now, known.refusedInARow)) {
+            return known.value;
+          }
           const fresh = yield* read(version);
           // A failed read comes back as undefined: keep what was known.
           const value = fresh ?? known.value;
-          yield* Ref.set(state, { attemptedAt: now, value });
+          const refusedInARow = fresh === undefined ? known.refusedInARow + 1 : 0;
+          yield* Ref.set(state, { attemptedAt: now, value, refusedInARow });
           return value;
         }),
-      forget: Ref.set(state, { attemptedAt: null, value: undefined }),
+      forget: Ref.set(state, { attemptedAt: null, value: undefined, refusedInARow: 0 }),
     };
   });
