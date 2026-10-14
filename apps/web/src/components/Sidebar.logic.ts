@@ -980,6 +980,7 @@ export function sidebarProjectPriorityKey(
 
 type InboxOrderInput = SidebarThreadStatusInput &
   Pick<SidebarThreadSummary, "environmentId" | "projectId" | "pendingRequestSince"> &
+  Partial<Pick<SidebarThreadSummary, "pullRequests">> &
   Pick<ThreadStatusInput, "latestRun" | "lastVisitedAt">;
 
 // Your turn first, then what is still running. A blocked agent is idle until
@@ -1005,14 +1006,38 @@ function inboxStatusTier(thread: InboxOrderInput): number {
 
 const PROJECT_PRIORITY_RANK = { high: 0, normal: 1, low: 2 } as const;
 
+/** Whether the thread has a pull request that is still open; it is closest to shipping. */
+function hasOpenPullRequest(thread: InboxOrderInput): boolean {
+  return (
+    thread.pullRequests?.some(
+      (link) => link.source !== "stack-dismissed" && link.snapshot?.state === "open",
+    ) === true
+  );
+}
+
+/**
+ * Since when a thread has waited on the user: the question it asked, or the
+ * end of the run that failed, hit a limit or finished unread. Running threads
+ * do not wait on the user and keep their incoming order.
+ */
+function waitingOnUserSince(thread: InboxOrderInput): number {
+  const tier = inboxStatusTier(thread);
+  const since =
+    tier === 0 ? thread.pendingRequestSince : tier <= 3 ? thread.latestRun?.completedAt : null;
+  const at = since ? Date.parse(since) : Number.NaN;
+  // Unknown and running both sort last and keep their incoming order.
+  return Number.isNaN(at) ? Number.MAX_SAFE_INTEGER : at;
+}
+
 /**
  * Rearranges the inbox for the chosen order. Both orders are stable, so the
  * incoming order (manual placement, or return time with the Working shelf)
  * still decides where nothing else does.
  *
- * "status" sorts by tier, then by the project's priority, and puts the
- * longest-waiting blocked thread first. "project" keeps each project's threads
- * together, high-priority projects first, otherwise in order of first thread.
+ * "status", in one sentence: within each status, high-priority projects
+ * first, then threads with an open pull request, then the one that has waited
+ * on you longest. "project" keeps each project's threads together,
+ * high-priority projects first, otherwise in order of first thread.
  */
 export function orderInboxThreads<T extends InboxOrderInput>(
   threads: ReadonlyArray<T>,
@@ -1023,15 +1048,13 @@ export function orderInboxThreads<T extends InboxOrderInput>(
   const priorityRank = (thread: T) =>
     PROJECT_PRIORITY_RANK[priorities[sidebarProjectPriorityKey(thread)] ?? "normal"];
   if (order === "status") {
-    const waitedSince = (thread: T) =>
-      inboxStatusTier(thread) === 0 && thread.pendingRequestSince
-        ? Date.parse(thread.pendingRequestSince)
-        : 0;
+    const openPullRequestRank = (thread: T) => (hasOpenPullRequest(thread) ? 0 : 1);
     return [...threads].sort(
       (left, right) =>
         inboxStatusTier(left) - inboxStatusTier(right) ||
         priorityRank(left) - priorityRank(right) ||
-        waitedSince(left) - waitedSince(right),
+        openPullRequestRank(left) - openPullRequestRank(right) ||
+        waitingOnUserSince(left) - waitingOnUserSince(right),
     );
   }
   const byProject = new Map<string, T[]>();

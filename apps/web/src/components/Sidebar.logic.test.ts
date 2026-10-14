@@ -955,6 +955,27 @@ describe("orderInboxThreads", () => {
     expect(ids("status", { "env:beta": "low" })[0]).toBe("question-a");
   });
 
+  it("puts an open pull request first inside a tier, then the longest wait", () => {
+    const unread = (id: string, completedAt: string, openPullRequest = false) => ({
+      ...thread(id, "alpha", { unread: true }),
+      latestRun: makeLatestRun({ completedAt }),
+      lastVisitedAt: "2026-03-09T09:00:00.000Z",
+      ...(openPullRequest
+        ? { pullRequests: [{ source: "agent", snapshot: { state: "open" } }] as never }
+        : {}),
+    });
+    const list = [
+      unread("recent", "2026-03-09T10:40:00.000Z"),
+      unread("oldest", "2026-03-09T10:05:00.000Z"),
+      unread("with-pr", "2026-03-09T10:50:00.000Z", true),
+    ];
+    expect(orderInboxThreads(list, "status").map((entry) => entry.id)).toEqual([
+      "with-pr",
+      "oldest",
+      "recent",
+    ]);
+  });
+
   it("picks the thread that waits longest, skips the open one, and stops at read work", () => {
     const next = (currentId: string | null, list = threads) =>
       resolveNextWaitingThread(list, {}, (entry) => entry.id === currentId)?.id ?? null;
