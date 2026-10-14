@@ -197,6 +197,8 @@ export function runOrchestratorV2ProviderReplayScenario<
     // as server startup does after a crash or restart.
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    // The environment-wide pause of every thread's queue.
+    readonly threadQueuesPaused?: boolean;
   } = {},
 ): Effect.Effect<
   OrchestratorV2ScenarioResult,
@@ -239,6 +241,8 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
     // as server startup does after a crash or restart.
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    // The environment-wide pause of every thread's queue.
+    readonly threadQueuesPaused?: boolean;
     readonly replayGate?: ProviderReplayGate;
   } = {},
 ): Layer.Layer<
@@ -275,6 +279,8 @@ export function layerWithRegistry<Error>(
     // as server startup does after a crash or restart.
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    // The environment-wide pause of every thread's queue.
+    readonly threadQueuesPaused?: boolean;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
@@ -306,6 +312,9 @@ export function layerWithRegistry<Error>(
     ...(options.continueThreadsAfterServerUpdate === undefined
       ? {}
       : { continueThreadsAfterServerUpdate: options.continueThreadsAfterServerUpdate }),
+    ...(options.threadQueuesPaused === undefined
+      ? {}
+      : { threadQueuesPaused: options.threadQueuesPaused }),
   }).pipe(Layer.orDie);
   const layerStores = Layer.mergeAll(
     EventStore.layer,
