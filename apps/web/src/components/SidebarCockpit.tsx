@@ -7,6 +7,13 @@ import { useNavigate } from "@tanstack/react-router";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import {
+  deriveCockpitAlerts,
+  formatTokens,
+  formatWait,
+  HEAVY_CONTEXT_TOKENS,
+} from "@t3tools/client-runtime/state/cockpit-alerts";
+
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { randomUUID } from "../lib/utils";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../state/server";
@@ -194,29 +201,6 @@ function CockpitStat(props: {
   );
 }
 
-const STALE_QUEUE_MS = 60 * 60_000;
-/**
- * Context a thread may carry before the cockpit suggests compacting it. Every
- * request sends the whole context again, so long threads spend the allowance
- * even when the prompt cache hits.
- */
-const HEAVY_CONTEXT_TOKENS = 300_000;
-
-function tokensLabel(tokens: number): string {
-  return tokens >= 1_000_000
-    ? `${(tokens / 1_000_000).toFixed(1)}M`
-    : `${Math.round(tokens / 1_000)}k`;
-}
-/** A run under way with no event for this long is called out. */
-const QUIET_RUN_MS = 5 * 60_000;
-
-function waitLabel(ms: number): string {
-  const minutes = Math.max(0, Math.round(ms / 60_000));
-  if (minutes < 60) return `${minutes} min`;
-  const hours = minutes / 60;
-  return hours < 10 ? `${hours.toFixed(1)} h` : `${Math.round(hours)} h`;
-}
-
 /**
  * Messages that wait in the queues of open threads, and for how long the
  * oldest has waited. A queue behind a pause or a hold is otherwise silent.
@@ -235,64 +219,58 @@ function CockpitWaitingQueues({
 }) {
   const input = useMemo(() => ({}), []);
   const result = useAtomValue(serverEnvironment.threadChecklists({ environmentId, input }));
-  const queues = Option.getOrNull(AsyncResult.value(result))?.waitingQueues ?? [];
-  const heldUntil = Option.getOrNull(AsyncResult.value(result))?.tasksHeldForUpdateUntil;
+  const alerts = deriveCockpitAlerts(Option.getOrNull(AsyncResult.value(result)), nowMs);
+  const alertClassName =
+    "cursor-pointer self-start rounded-sm text-left font-medium tabular-nums text-warning-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset";
   // Tasks read "on" while an update keeps them back, so say that they wait and until when.
   const holdLine =
-    heldUntil === undefined || Date.parse(heldUntil) <= nowMs ? null : (
+    alerts.updateHoldMs === null ? null : (
       <span data-testid="sidebar-cockpit-update-hold" className="font-medium tabular-nums">
-        An update is waiting to go in: tasks start again in{" "}
-        {waitLabel(Date.parse(heldUntil) - nowMs)} at the latest
+        An update is waiting to go in: tasks start again in {formatWait(alerts.updateHoldMs)} at the
+        latest
       </span>
     );
-  const questions = Option.getOrNull(AsyncResult.value(result))?.pendingQuestions ?? [];
-  const asking = new Set<string>(questions.map((question) => question.threadId));
-  // A run that waits for an answer is silent too, but it does not hang: it is named on its own.
-  const quiet = (Option.getOrNull(AsyncResult.value(result))?.activeRuns ?? []).filter(
-    (run) => !asking.has(run.threadId) && nowMs - Date.parse(run.lastEventAt) >= QUIET_RUN_MS,
-  );
-  const heavy = (Option.getOrNull(AsyncResult.value(result))?.contextLoads ?? []).filter(
-    (load) => load.usedTokens >= HEAVY_CONTEXT_TOKENS,
-  );
-  const contextLine =
-    heavy.length === 0 ? null : (
-      <button
-        type="button"
-        data-testid="sidebar-cockpit-context"
-        onClick={() => onFilter(new Set(heavy.map((load) => load.threadId)))}
-        className="cursor-pointer self-start rounded-sm text-left tabular-nums hover:text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
-      >
-        {heavy.length} {heavy.length === 1 ? "thread carries" : "threads carry"} over{" "}
-        {tokensLabel(HEAVY_CONTEXT_TOKENS)} context, the largest{" "}
-        {tokensLabel(Math.max(...heavy.map((load) => load.usedTokens)))}: compact or start a new
-        thread
-      </button>
-    );
+  const { questions, quietRuns, heavyContexts, waitingQueues } = alerts;
   const questionLine =
-    questions.length === 0 ? null : (
+    questions === null ? null : (
       <button
         type="button"
         data-testid="sidebar-cockpit-questions"
-        onClick={() => onFilter(asking)}
-        className="cursor-pointer self-start rounded-sm text-left font-medium tabular-nums text-warning-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+        onClick={() => onFilter(questions.threadIds)}
+        className={alertClassName}
       >
-        {questions.length} {questions.length === 1 ? "thread waits" : "threads wait"} for your
-        answer, the longest for {waitLabel(nowMs - Date.parse(questions[0]!.since))}
+        {questions.threadIds.size}{" "}
+        {questions.threadIds.size === 1 ? "thread waits" : "threads wait"} for your answer, the
+        longest for {formatWait(questions.longestMs)}
       </button>
     );
   const quietLine =
-    quiet.length === 0 ? null : (
+    quietRuns === null ? null : (
       <button
         type="button"
         data-testid="sidebar-cockpit-quiet"
-        onClick={() => onFilter(new Set(quiet.map((run) => run.threadId)))}
-        className="cursor-pointer self-start rounded-sm text-left font-medium tabular-nums text-warning-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+        onClick={() => onFilter(quietRuns.threadIds)}
+        className={alertClassName}
       >
-        {quiet.length} running {quiet.length === 1 ? "turn" : "turns"} without a sign of life for{" "}
-        {waitLabel(nowMs - Math.min(...quiet.map((run) => Date.parse(run.lastEventAt))))}
+        {quietRuns.threadIds.size} running {quietRuns.threadIds.size === 1 ? "turn" : "turns"}{" "}
+        without a sign of life for {formatWait(quietRuns.longestMs)}
       </button>
     );
-  if (queues.length === 0) {
+  const contextLine =
+    heavyContexts === null ? null : (
+      <button
+        type="button"
+        data-testid="sidebar-cockpit-context"
+        onClick={() => onFilter(heavyContexts.threadIds)}
+        className="cursor-pointer self-start rounded-sm text-left tabular-nums hover:text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      >
+        {heavyContexts.threadIds.size}{" "}
+        {heavyContexts.threadIds.size === 1 ? "thread carries" : "threads carry"} over{" "}
+        {formatTokens(HEAVY_CONTEXT_TOKENS)} context, the largest{" "}
+        {formatTokens(heavyContexts.largestTokens)}: compact or start a new thread
+      </button>
+    );
+  if (waitingQueues === null) {
     return (
       <>
         {holdLine}
@@ -311,8 +289,7 @@ function CockpitWaitingQueues({
       </>
     );
   }
-  const waiting = queues.reduce((total, queue) => total + queue.waiting, 0);
-  const oldestMs = nowMs - Date.parse(queues[0]!.oldestQueuedAt);
+  const threadCount = waitingQueues.threadIds.size;
   return (
     <>
       {holdLine}
@@ -323,14 +300,13 @@ function CockpitWaitingQueues({
         type="button"
         data-testid="sidebar-cockpit-queues"
         aria-pressed={filterOn}
-        onClick={() => onFilter(filterOn ? null : new Set(queues.map((queue) => queue.threadId)))}
+        onClick={() => onFilter(filterOn ? null : waitingQueues.threadIds)}
         className="cursor-pointer self-start rounded-sm text-left tabular-nums hover:text-sidebar-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
       >
-        <span
-          className={oldestMs >= STALE_QUEUE_MS ? "font-medium text-warning-foreground" : undefined}
-        >
-          {waiting} {waiting === 1 ? "message waits" : "messages wait"} in {queues.length}{" "}
-          {queues.length === 1 ? "thread" : "threads"}, oldest {waitLabel(oldestMs)}
+        <span className={waitingQueues.stale ? "font-medium text-warning-foreground" : undefined}>
+          {waitingQueues.messages}{" "}
+          {waitingQueues.messages === 1 ? "message waits" : "messages wait"} in {threadCount}{" "}
+          {threadCount === 1 ? "thread" : "threads"}, oldest {formatWait(waitingQueues.oldestMs)}
         </span>
         {filterOn ? " · show all" : ""}
       </button>

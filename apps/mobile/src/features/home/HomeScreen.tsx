@@ -79,6 +79,7 @@ import { createSwipeRowActivation } from "./swipe-row-activation";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
 import { useMaterialFabScroll } from "./MaterialFabScrollContext";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { HomeCockpit } from "./HomeCockpit";
 import { ThreadListFilters } from "./ThreadListFilters";
 
 /* ─── Types ──────────────────────────────────────────────────────────── */
@@ -980,6 +981,10 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const listHeader = Platform.OS === "ios" ? undefined : <HomeTopContentSpacer />;
 
+  // The cockpit speaks for one environment: the chosen one, or the only one.
+  const cockpitEnvironmentId =
+    props.selectedEnvironmentId ??
+    (props.environments.length === 1 ? props.environments[0]!.environmentId : null);
   const v2ListHeader = (
     <>
       {listHeader}
@@ -993,6 +998,12 @@ export function HomeScreen(props: HomeScreenProps) {
           onProjectChange={props.onProjectChange}
         />
       ) : null}
+      {cockpitEnvironmentId === null ? null : (
+        <HomeCockpit
+          environmentId={cockpitEnvironmentId}
+          nowMs={Date.parse(`${nowMinute}:00.000Z`)}
+        />
+      )}
     </>
   );
 
