@@ -28,6 +28,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { isImageAttachment, type ChatMessage } from "../../types";
 import { cn, randomUUID } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
+import { canMergeQueuedMessages, mergeQueuedMessageTexts } from "./queuedMessageMerge";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -75,6 +76,7 @@ export function QueuedRunsControl({
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
+  const editQueued = useAtomCommand(threadEnvironment.editQueuedRun, "merge queued messages");
   const holdQueue = useAtomCommand(threadEnvironment.holdThreadQueue, "pause queue");
   const resumeQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
   const clearQueue = useAtomCommand(threadEnvironment.clearThreadQueue, "clear queue");
@@ -271,6 +273,41 @@ export function QueuedRunsControl({
 
   if (items.length === 0) return null;
 
+  // The first message takes every text in queue order and the others leave the
+  // queue, so they run as one turn. Nothing is removed unless the edit landed.
+  const merge = async () => {
+    const [first, ...rest] = queued;
+    if (first === undefined || busyRunId !== null || !canMergeQueuedMessages(queued)) return;
+    const confirmed = await ensureLocalApi().dialogs.confirm(
+      `Merge the ${queued.length} queued messages into one? They run as one turn, in this order.`,
+    );
+    if (!confirmed) return;
+    setBusyRunId(first.run.id);
+    try {
+      const edited = await editQueued({
+        environmentId: props.environmentId,
+        input: {
+          threadId: props.threadId,
+          runId: first.run.id,
+          text: mergeQueuedMessageTexts(queued),
+        },
+      });
+      if (edited._tag !== "Success") return;
+      for (const { run } of rest) {
+        await cancel({
+          environmentId: props.environmentId,
+          input: { threadId: props.threadId, runId: run.id },
+        });
+      }
+      toastManager.add({
+        type: "success",
+        title: `Merged ${queued.length} queued messages into one`,
+      });
+    } finally {
+      setBusyRunId(null);
+    }
+  };
+
   const remove = async (runId: RunId) => {
     setBusyRunId(runId);
     try {
@@ -343,6 +380,16 @@ export function QueuedRunsControl({
                       {queueHeld ? "Resume queue" : "Pause queue"}
                     </Button>
                   )}
+                  {canMergeQueuedMessages(queued) && props.editingRunId === null ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      disabled={busyRunId !== null}
+                      onClick={() => void merge()}
+                    >
+                      Merge into one
+                    </Button>
+                  ) : null}
                   <Button
                     size="xs"
                     variant="ghost"
