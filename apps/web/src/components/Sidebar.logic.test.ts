@@ -65,6 +65,7 @@ import {
   type SidebarListMarker,
   type SidebarSection,
   resolveSidebarDropVerb,
+  waitStripeTier,
 } from "./Sidebar.logic";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
@@ -2461,5 +2462,15 @@ describe("Working shelf (beta)", () => {
         unsnooze: false,
       });
     });
+  });
+});
+
+describe("waitStripeTier", () => {
+  it("marks a wait faintly, then stronger after 5 and after 30 minutes", () => {
+    expect(waitStripeTier(0)).toBe("fresh");
+    expect(waitStripeTier(5 * 60_000 - 1)).toBe("fresh");
+    expect(waitStripeTier(5 * 60_000)).toBe("waiting");
+    expect(waitStripeTier(30 * 60_000 - 1)).toBe("waiting");
+    expect(waitStripeTier(30 * 60_000)).toBe("long");
   });
 });

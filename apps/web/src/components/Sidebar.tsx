@@ -251,6 +251,7 @@ import {
   type SidebarListItem,
   type SidebarListMarker,
   type SidebarSection,
+  waitStripeTier,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -1284,6 +1285,30 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
   ),
 };
 
+const WAIT_STRIPE_CLASS_NAME = {
+  fresh: "bg-warning/25",
+  waiting: "bg-warning/60",
+  long: "bg-warning",
+} as const;
+
+/**
+ * A stripe on the card's left edge while the agent waits for an answer or an
+ * approval. It owns the minute clock, so only waiting cards re-render on it.
+ */
+function SidebarRowWaitStripe({ since }: { readonly since: string }) {
+  const nowMs = Date.parse(`${useNowMinute()}:00.000Z`);
+  return (
+    <span
+      aria-hidden="true"
+      data-testid="sidebar-row-wait-stripe"
+      className={cn(
+        "pointer-events-none absolute inset-y-1.5 left-0 z-10 w-0.5 rounded-full",
+        WAIT_STRIPE_CLASS_NAME[waitStripeTier(nowMs - Date.parse(since))],
+      )}
+    />
+  );
+}
+
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
@@ -2219,6 +2244,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           }
         >
           {accessibleTitle}
+          {(status === "approval" || status === "input") && thread.pendingRequestSince ? (
+            <SidebarRowWaitStripe since={thread.pendingRequestSince} />
+          ) : null}
           <div className="relative z-10 h-[4.875rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}

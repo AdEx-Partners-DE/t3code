@@ -1652,3 +1652,12 @@ export function sortScopedProjectsForSidebar<
       left.id.localeCompare(right.id),
   );
 }
+
+/**
+ * How strongly a card marks that the agent has waited on the user: a faint
+ * stripe at first, stronger after 5 minutes, full after 30. The tiers are
+ * coarse on purpose, so the longest wait stands out without reading labels.
+ */
+export function waitStripeTier(waitedMs: number): "fresh" | "waiting" | "long" {
+  return waitedMs >= 30 * 60_000 ? "long" : waitedMs >= 5 * 60_000 ? "waiting" : "fresh";
+}
