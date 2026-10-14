@@ -1,3 +1,4 @@
+import { applyThreadPullRequestLinkUpdate } from "@t3tools/shared/threadPullRequests";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import * as Stream from "effect/Stream";
 import { makeThreadFind, findProjectedThreadItems } from "./ThreadFind.ts";
@@ -722,6 +723,11 @@ export function applyToProjection(
   };
 
   switch (event.type) {
+    case "thread.pull-request-link-updated":
+      return {
+        ...base,
+        thread: applyThreadPullRequestLinkUpdate(projection.thread, event.payload),
+      };
     case "thread.created":
     case "thread.archived":
     case "thread.unarchived":
@@ -1830,6 +1836,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const apply: ProjectionStoreV2Shape["apply"] = (event) =>
       Effect.gen(function* () {
         switch (event.type) {
+          case "thread.pull-request-link-updated": {
+            const thread = yield* getThread(event.threadId);
+            yield* apply({
+              ...event,
+              type: "thread.pull-request-synced",
+              payload: applyThreadPullRequestLinkUpdate(thread, event.payload),
+            });
+            break;
+          }
           case "thread.created":
           case "thread.archived":
           case "thread.unarchived":
@@ -3662,6 +3677,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   ON bindings.provider_session_id = sessions.provider_session_id
                 WHERE sessions.status NOT IN ('stopped', 'error')
                 UNION
+                -- A detach drops the binding but keeps the session's status.
+                SELECT sessions.thread_id
+                FROM orchestration_v2_projection_provider_sessions AS sessions
+                WHERE sessions.status NOT IN ('stopped', 'error')
+                  AND sessions.thread_id IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_provider_session_bindings AS bindings
+                    WHERE bindings.provider_session_id = sessions.provider_session_id
+                  )
+                UNION
                 SELECT thread_id FROM pending_provider_threads
                 UNION
                 SELECT nodes.thread_id FROM pending_provider_threads
@@ -4122,22 +4147,36 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               ORDER BY COALESCE(subagent.started_at, ''), subagent.subagent_id ASC
             `,
           sql<PayloadRow>`
-              SELECT DISTINCT session.payload_json
+              SELECT session.payload_json
               FROM orchestration_v2_projection_provider_sessions AS session
-              JOIN orchestration_v2_projection_provider_session_bindings AS binding
-                ON binding.provider_session_id = session.provider_session_id
-              WHERE binding.thread_id = ${threadId}
-                AND (
-                  session.status NOT IN ('stopped', 'error')
-                  OR session.provider_session_id IN (
-                    SELECT provider_thread.provider_session_id
-                    FROM orchestration_v2_projection_provider_threads AS provider_thread
-                    WHERE provider_thread.provider_thread_id IN (
-                      SELECT run.provider_thread_id
-                      FROM orchestration_v2_projection_runs AS run
-                      WHERE run.thread_id = ${threadId}
-                        AND run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+              WHERE (
+                  session.provider_session_id IN (
+                    SELECT binding.provider_session_id
+                    FROM orchestration_v2_projection_provider_session_bindings AS binding
+                    WHERE binding.thread_id = ${threadId}
+                  )
+                  AND (
+                    session.status NOT IN ('stopped', 'error')
+                    OR session.provider_session_id IN (
+                      SELECT provider_thread.provider_session_id
+                      FROM orchestration_v2_projection_provider_threads AS provider_thread
+                      WHERE provider_thread.provider_thread_id IN (
+                        SELECT run.provider_thread_id
+                        FROM orchestration_v2_projection_runs AS run
+                        WHERE run.thread_id = ${threadId}
+                          AND run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+                      )
                     )
+                  )
+                )
+                -- This thread detached it, which keeps its status. Its process
+                -- did not outlive the server either, so recovery stops it.
+                OR (
+                  session.thread_id = ${threadId}
+                  AND session.status NOT IN ('stopped', 'error')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_provider_session_bindings AS binding
+                    WHERE binding.provider_session_id = session.provider_session_id
                   )
                 )
               ORDER BY session.updated_at ASC, session.provider_session_id ASC
