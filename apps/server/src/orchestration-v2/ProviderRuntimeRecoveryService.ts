@@ -23,6 +23,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { recordDecision } from "../decisionLog.ts";
 import { restartContinuationRun } from "./RestartContinuation.ts";
+import { isBufferedProviderNotification } from "./NotificationMailbox.ts";
 import {
   endOrphanedNativeSubagent,
   endRunlessRootTurns,
@@ -300,11 +301,31 @@ export const make = Effect.gen(function* () {
           cancelledBackgroundNativeIds.add(item.nativeItemRef.nativeId);
         }
       };
+      const queuedRuns = projection.runs.filter((run) => run.status === "queued");
+      const queuedMessages =
+        queuedRuns.length === 0
+          ? []
+          : (yield* projections
+              .getThreadRecords(projection.thread.id, ["messages"], {
+                messageIds: queuedRuns.map((run) => run.userMessageId),
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderRuntimeRecoveryError({
+                      operation: "read-projections",
+                      threadId: projection.thread.id,
+                      cause,
+                    }),
+                ),
+              )).messages;
+      const bufferedMessageIds = new Set(
+        queuedMessages.filter(isBufferedProviderNotification).map((message) => message.id),
+      );
       // Queued runs have not started provider work. Preserve their execution
       // identities and order, but require explicit consent before draining them.
       // A handoff's sole continuation already has that consent, and the old
       // session was detached to run it in the newly bound worktree.
-      const queuedRuns = projection.runs.filter((run) => run.status === "queued");
       const handoffContinuation =
         continueAfterRestart &&
         projection.thread.worktreePath != null &&
@@ -313,9 +334,14 @@ export const make = Effect.gen(function* () {
         isWorktreeContinuationRun(queuedRuns[0]!)
           ? queuedRuns[0]
           : undefined;
-      for (const run of projection.runs) {
-        if (run.status !== "queued" || run.queueHeld === true || run === handoffContinuation)
+      // Buffered wakes lost their output with the process. Durable queued messages
+      // keep their execution identities and order until the user resumes them.
+      for (const run of queuedRuns) {
+        if (bufferedMessageIds.has(run.userMessageId)) {
+          runs.push(run);
           continue;
+        }
+        if (run.queueHeld === true || run === handoffContinuation) continue;
         // "Continue threads after a server update" is that consent, given
         // once for every restart. Without it each update would park every
         // waiting queue until the user resumed the threads one by one.
