@@ -1,10 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import { ThreadId } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 
 import { deriveCockpitAlerts, formatTokens, formatWait } from "./cockpitAlerts.ts";
 
 const nowMs = Date.parse("2026-10-14T10:00:00.000Z");
-const minutesAgo = (minutes: number) => new Date(nowMs - minutes * 60_000).toISOString();
+const minutesAgo = (minutes: number) =>
+  DateTime.formatIso(DateTime.makeUnsafe(nowMs - minutes * 60_000));
 const asking = ThreadId.make("asking");
 const silent = ThreadId.make("silent");
 const busy = ThreadId.make("busy");
