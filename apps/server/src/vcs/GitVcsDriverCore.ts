@@ -1,4 +1,5 @@
 import * as Cache from "effect/Cache";
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -37,6 +38,7 @@ import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import { indexLockDetail } from "./gitIndexLock.ts";
 import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
 import {
   parseRemoteNames,
@@ -1869,26 +1871,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (indexResult === null) return NON_REPOSITORY_STATUS_DETAILS;
     if (indexResult.exitCode === 0) {
       const lockPath = `${path.resolve(cwd, indexResult.stdout.trim())}.lock`;
-      const lockError = new GitCommandError({
-        operation: "GitVcsDriver.statusDetails.indexPath",
-        command: "git",
-        cwd,
-        detail: "Git index is locked. Status will resume when the index lock is removed.",
-      });
       // Status can succeed while locked, repeatedly running LFS clean filters without caching.
       if (
         yield* fileSystem.exists(lockPath).pipe(
           Effect.mapError(
             (cause) =>
               new GitCommandError({
-                ...lockError,
+                operation: "GitVcsDriver.statusDetails.indexPath",
+                command: "git",
+                cwd,
                 detail: "Failed to check the Git index lock.",
                 cause,
               }),
           ),
         )
       ) {
-        return yield* lockError;
+        const modifiedAt = yield* fileSystem.stat(lockPath).pipe(
+          Effect.map((info) => Option.getOrUndefined(info.mtime)),
+          Effect.orElseSucceed(() => undefined),
+        );
+        return yield* new GitCommandError({
+          operation: "GitVcsDriver.statusDetails.indexPath",
+          command: "git",
+          cwd,
+          detail: indexLockDetail({
+            lockPath,
+            modifiedAtMs: modifiedAt?.getTime(),
+            nowMs: yield* Clock.currentTimeMillis,
+          }),
+        });
       }
     }
     const statusResult = yield* executeGitWithStableDiagnostics(

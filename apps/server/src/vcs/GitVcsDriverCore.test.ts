@@ -292,6 +292,14 @@ it.effect.each(["root", "nested", "worktree"] as const)(
       assert.isFalse(yield* fs.exists(runsPath));
       assert.isTrue(yield* fs.exists(lockPath));
 
+      // A lock left behind by a command that died names the file to delete.
+      const nowMs = 1_791_960_000_000;
+      yield* TestClock.setTime(nowMs);
+      const leftAtSeconds = (nowMs - 3_600_000) / 1000;
+      NodeFS.utimesSync(lockPath, leftAtSeconds, leftAtSeconds);
+      const abandoned = yield* driver.statusDetailsLocal(statusCwd).pipe(Effect.flip);
+      assert.include(abandoned.detail, `delete ${lockPath}`);
+
       yield* fs.remove(lockPath);
       const status = yield* driver.statusDetailsLocal(statusCwd);
       assert.isFalse(status.hasWorkingTreeChanges);
