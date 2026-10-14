@@ -2025,12 +2025,10 @@ const layerWsRpc = (
               };
             }
             const updateHoldEndsAt = yield* currentUpdateHold;
+            const { openThreadIds, ...overview } = yield* queueOverview.read;
             return {
-              checklists: yield* threadChecklist.listOpen,
-              waitingQueues: yield* queueOverview.read,
-              activeRuns: yield* queueOverview.readActiveRuns,
-              lastReplies: yield* queueOverview.readLastReplies,
-              pendingQuestions: yield* queueOverview.readPendingQuestions,
+              checklists: yield* threadChecklist.listOf(openThreadIds),
+              ...overview,
               ...(updateHoldEndsAt === null
                 ? {}
                 : {
