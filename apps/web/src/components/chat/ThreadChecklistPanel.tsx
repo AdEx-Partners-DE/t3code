@@ -23,6 +23,7 @@ import {
   LocateFixedIcon,
   MessageSquarePlusIcon,
   RefreshCwIcon,
+  SparklesIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -126,6 +127,8 @@ export function ChecklistItemMenu(props: {
   readonly onFollowUp?: (() => void) | undefined;
   /** Sets the item's status by hand; a rewrite keeps it. Left out without permission. */
   readonly onSetStatus?: ((status: ThreadChecklistItem["status"]) => void) | undefined;
+  /** Gives a hand-set item back to the model, which rewrites the list. Left out without permission. */
+  readonly onRelease?: (() => void) | undefined;
 }) {
   const { item } = props;
   return (
@@ -183,6 +186,12 @@ export function ChecklistItemMenu(props: {
                 {action.label}
               </MenuItem>
             ))}
+        {props.onRelease === undefined || item.setByUser !== true ? null : (
+          <MenuItem onClick={props.onRelease}>
+            <SparklesIcon />
+            Let the checklist decide
+          </MenuItem>
+        )}
       </MenuPopup>
     </Menu>
   );
@@ -278,6 +287,31 @@ export function ThreadChecklistPanel(props: {
           description: String(squashAtomCommandFailure(result)),
         }),
       );
+    }
+  };
+
+  // Giving an item back rewrites the list, so it reads as busy like a refresh.
+  const release = async (item: ThreadChecklistItem) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await refresh({
+        environmentId,
+        input: { threadId, trigger: "manual", releaseItem: { text: item.text } },
+      });
+      if (result._tag === "Success") {
+        setFresh(result.value.checklist);
+      } else if (!isAtomCommandInterrupted(result)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not give the item back to the checklist",
+            description: String(squashAtomCommandFailure(result)),
+          }),
+        );
+      }
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -454,6 +488,7 @@ export function ThreadChecklistPanel(props: {
                               })
                       }
                       onSetStatus={allowed ? (status) => void setStatus(item, status) : undefined}
+                      onRelease={allowed ? () => void release(item) : undefined}
                     />
                   </li>
                 ))}

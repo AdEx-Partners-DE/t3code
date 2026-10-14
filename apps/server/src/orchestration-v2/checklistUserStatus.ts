@@ -23,6 +23,19 @@ export function setChecklistItemStatus(
   );
 }
 
+/** Drops the hand mark of the item with this text; null when the list has none. */
+export function releaseChecklistItem(
+  items: ReadonlyArray<ThreadChecklistItem>,
+  text: string,
+): ReadonlyArray<ThreadChecklistItem> | null {
+  if (!items.some((item) => sameText(item.text, text))) return null;
+  return items.map((item) => {
+    if (!sameText(item.text, text)) return item;
+    const { setByUser: _setByUser, ...released } = item;
+    return released;
+  });
+}
+
 /** The previous list as the model reads it, with the statuses the user set marked. */
 export function checklistForPrompt(items: ReadonlyArray<ThreadChecklistItem>) {
   return items.map((item) => ({

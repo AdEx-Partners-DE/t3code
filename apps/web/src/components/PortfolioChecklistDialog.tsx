@@ -241,6 +241,19 @@ export function PortfolioChecklistDialog({
                                   }).then(() => query.refresh())
                               : undefined
                           }
+                          onRelease={
+                            allowed
+                              ? () =>
+                                  void refresh({
+                                    environmentId,
+                                    input: {
+                                      threadId: row.thread.id,
+                                      trigger: "manual",
+                                      releaseItem: { text: item.text },
+                                    },
+                                  }).then(() => query.refresh())
+                              : undefined
+                          }
                         />
                       </li>
                     ))}

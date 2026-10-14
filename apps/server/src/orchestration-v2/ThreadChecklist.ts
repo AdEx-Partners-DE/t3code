@@ -29,6 +29,7 @@ import * as ThreadManagement from "./ThreadManagementService.ts";
 import {
   checklistForPrompt,
   keepUserStatuses,
+  releaseChecklistItem,
   setChecklistItemStatus,
 } from "./checklistUserStatus.ts";
 import { recordDecision } from "../decisionLog.ts";
@@ -195,9 +196,27 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /** Gives a hand-set item back to the model and rewrites the list, so it shows the model's status. */
+  const releaseItem = (threadId: ThreadId, text: string, trigger: "auto" | "manual" | "batch") =>
+    lockOf(threadId).withPermits(1)(
+      Effect.gen(function* () {
+        const stored = yield* read(threadId);
+        const items = stored === null ? null : releaseChecklistItem(stored.items, text);
+        if (stored === null || items === null) {
+          return yield* new ChecklistMissingError({
+            detail: "This item is no longer on the checklist.",
+          });
+        }
+        const released: Checklist = { ...stored, items: [...items] };
+        yield* fileSystem.writeFileString(fileOf(threadId), encodeChecklist(released));
+        return yield* lock.withPermits(1)(refresh(threadId, trigger));
+      }),
+    );
+
   /**
    * Writes the checklist anew from the thread as it stands and stores it, or
-   * with `setItem` sets one item's status by hand without a model call.
+   * with `setItem` sets one item's status by hand without a model call, or
+   * with `releaseItem` gives a hand-set item back to the model and rewrites.
    */
   const write = Effect.fn("ThreadChecklist.write")(function* (input: {
     readonly threadId: ThreadId;
@@ -205,7 +224,11 @@ export const make = Effect.gen(function* () {
     readonly setItem?:
       | { readonly text: string; readonly status: ThreadChecklistItem["status"] }
       | undefined;
+    readonly releaseItem?: { readonly text: string } | undefined;
   }) {
+    if (input.releaseItem !== undefined) {
+      return yield* releaseItem(input.threadId, input.releaseItem.text, input.trigger ?? "manual");
+    }
     if (input.setItem === undefined) {
       return yield* lockOf(input.threadId).withPermits(1)(
         lock.withPermits(1)(refresh(input.threadId, input.trigger)),

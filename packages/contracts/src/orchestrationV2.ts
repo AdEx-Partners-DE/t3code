@@ -4023,6 +4023,11 @@ export const OrchestrationV2RpcSchemas = {
           status: Schema.Literals(["done", "open", "backlog", "attention"]),
         }),
       ),
+      /**
+       * Gives an item set by hand back to the model: drops the hand mark, then
+       * rewrites the list so the item shows what the transcript says.
+       */
+      releaseItem: Schema.optional(Schema.Struct({ text: TrimmedNonEmptyString })),
     }),
     output: Schema.Struct({ checklist: ThreadChecklist }),
   },

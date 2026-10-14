@@ -4,6 +4,7 @@ import type { ThreadChecklistItem } from "@t3tools/contracts";
 import {
   checklistForPrompt,
   keepUserStatuses,
+  releaseChecklistItem,
   setChecklistItemStatus,
 } from "./checklistUserStatus.ts";
 
@@ -51,6 +52,33 @@ describe("keepUserStatuses", () => {
   it("changes nothing when the user set nothing", () => {
     const generated = [item("New point", "open")];
     expect(keepUserStatuses([item("Old", "open")], generated)).toBe(generated);
+  });
+});
+
+describe("releaseChecklistItem", () => {
+  it("gives a hand-set item back, so the next rewrite decides its status again", () => {
+    const released = releaseChecklistItem(
+      [item("Deploy the fix", "open", true), item("Write docs", "backlog", true)],
+      "deploy the fix",
+    );
+    expect(released).toEqual([item("Deploy the fix", "open"), item("Write docs", "backlog", true)]);
+    expect(
+      keepUserStatuses(released ?? [], [
+        item("Deploy the fix", "done"),
+        item("Write docs", "open"),
+      ]),
+    ).toEqual([item("Deploy the fix", "done"), item("Write docs", "backlog", true)]);
+  });
+
+  it("lets the model drop a given-back item", () => {
+    const released = releaseChecklistItem([item("Old step", "open", true)], "Old step");
+    expect(keepUserStatuses(released ?? [], [item("New point", "open")])).toEqual([
+      item("New point", "open"),
+    ]);
+  });
+
+  it("knows no item it cannot find", () => {
+    expect(releaseChecklistItem([item("Deploy the fix", "open", true)], "Other")).toBeNull();
   });
 });
 
