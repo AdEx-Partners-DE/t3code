@@ -82,7 +82,9 @@ export interface ThreadChecklistGenerationInput {
   /** The thread so far, oldest first, already cut to what a prompt can carry. */
   transcript: string;
   /** The checklist from the last run, so items keep their wording as their status moves. */
-  previous?: ReadonlyArray<{ text: string; status: ThreadChecklistItemStatus }> | undefined;
+  previous?:
+    | ReadonlyArray<{ text: string; status: ThreadChecklistItemStatus; setByUser?: boolean }>
+    | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
 }

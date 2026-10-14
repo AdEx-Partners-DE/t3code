@@ -9,7 +9,12 @@
  *
  * @module ThreadChecklist
  */
-import { ThreadChecklist as ThreadChecklistSchema, type ThreadId } from "@t3tools/contracts";
+import {
+  ThreadChecklist as ThreadChecklistSchema,
+  type ThreadChecklistItem,
+  type ThreadId,
+} from "@t3tools/contracts";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -21,6 +26,11 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import {
+  checklistForPrompt,
+  keepUserStatuses,
+  setChecklistItemStatus,
+} from "./checklistUserStatus.ts";
 import { recordDecision } from "../decisionLog.ts";
 import {
   buildChecklistTranscriptWithSources,
@@ -37,6 +47,11 @@ const TRANSCRIPT_BUDGET = 90_000;
 type Checklist = typeof ThreadChecklistSchema.Type;
 const decodeChecklist = Schema.decodeUnknownOption(Schema.fromJsonString(ThreadChecklistSchema));
 const encodeChecklist = Schema.encodeSync(Schema.fromJsonString(ThreadChecklistSchema));
+
+/** Raised when an item's status is set on a thread whose checklist was never written. */
+export class ChecklistMissingError extends Data.TaggedError("ChecklistMissingError")<{
+  readonly detail: string;
+}> {}
 
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -110,22 +125,25 @@ export const make = Effect.gen(function* () {
             // alone, not from a project's instructions.
             cwd: config.stateDir,
             transcript,
-            previous: previous?.items.map((item) => ({ text: item.text, status: item.status })),
+            previous: previous === null ? undefined : checklistForPrompt(previous.items),
             modelSelection,
           });
     const checklist: Checklist = {
       threadId,
       generatedAt: DateTime.formatIso(yield* DateTime.now),
       basedOnRunId,
-      items: generated.items.map((item) => {
-        const messageId = item.entry === undefined ? undefined : messageIdOfEntry.get(item.entry);
-        return {
-          text: item.text,
-          status: item.status,
-          ...(item.note === undefined ? {} : { note: item.note }),
-          ...(messageId === undefined ? {} : { messageId }),
-        };
-      }),
+      items: keepUserStatuses(
+        previous?.items ?? [],
+        generated.items.map((item) => {
+          const messageId = item.entry === undefined ? undefined : messageIdOfEntry.get(item.entry);
+          return {
+            text: item.text,
+            status: item.status,
+            ...(item.note === undefined ? {} : { note: item.note }),
+            ...(messageId === undefined ? {} : { messageId }),
+          };
+        }),
+      ),
     };
     yield* fileSystem.makeDirectory(directory, { recursive: true });
     const encoded = encodeChecklist(checklist);
@@ -164,14 +182,52 @@ export const make = Effect.gen(function* () {
       Effect.map((checklists) => checklists.filter((checklist) => checklist !== null)),
     );
 
+  /** Sets one item's status by hand; the stored list is unchanged when no item has that text. */
+  const setItemStatus = (threadId: ThreadId, text: string, status: ThreadChecklistItem["status"]) =>
+    lockOf(threadId).withPermits(1)(
+      Effect.gen(function* () {
+        const stored = yield* read(threadId);
+        const items = stored === null ? null : setChecklistItemStatus(stored.items, text, status);
+        if (stored === null || items === null) return stored;
+        const checklist: Checklist = { ...stored, items: [...items] };
+        yield* fileSystem.writeFileString(fileOf(threadId), encodeChecklist(checklist));
+        return checklist;
+      }),
+    );
+
+  /**
+   * Writes the checklist anew from the thread as it stands and stores it, or
+   * with `setItem` sets one item's status by hand without a model call.
+   */
+  const write = Effect.fn("ThreadChecklist.write")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly trigger?: "auto" | "manual" | "batch" | undefined;
+    readonly setItem?:
+      | { readonly text: string; readonly status: ThreadChecklistItem["status"] }
+      | undefined;
+  }) {
+    if (input.setItem === undefined) {
+      return yield* lockOf(input.threadId).withPermits(1)(
+        lock.withPermits(1)(refresh(input.threadId, input.trigger)),
+      );
+    }
+    const checklist = yield* setItemStatus(
+      input.threadId,
+      input.setItem.text,
+      input.setItem.status,
+    );
+    if (checklist === null) {
+      return yield* new ChecklistMissingError({ detail: "This thread has no checklist yet." });
+    }
+    return checklist;
+  });
+
   return {
     /** The stored checklist, or null when none was written yet. */
     read,
+    write,
     /** The stored checklists of these threads; threads without one are left out. */
     listOf,
-    /** Writes the checklist anew from the thread as it stands and stores it. */
-    refresh: (threadId: ThreadId, trigger?: "auto" | "manual" | "batch") =>
-      lockOf(threadId).withPermits(1)(lock.withPermits(1)(refresh(threadId, trigger))),
     turnsBehind,
   };
 });

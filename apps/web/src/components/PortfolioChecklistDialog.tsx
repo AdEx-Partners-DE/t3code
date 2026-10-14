@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ProjectId, ThreadChecklistItem, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
@@ -61,6 +62,9 @@ export function PortfolioChecklistDialog({
   const input = useMemo(() => ({}), []);
   const query = useEnvironmentQuery(serverEnvironment.threadChecklists({ environmentId, input }));
   const refresh = useAtomCommand(serverEnvironment.refreshThreadChecklist, "update checklist");
+  const allowed = useAtomValue(
+    serverEnvironment.refreshThreadChecklist.permissionAtom(environmentId),
+  );
   const followUp = useChecklistFollowUp();
   const [status, setStatus] = useState<ThreadChecklistItem["status"]>(initialStatus ?? "attention");
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -225,6 +229,18 @@ export function PortfolioChecklistDialog({
                               item,
                             });
                           }}
+                          onSetStatus={
+                            allowed
+                              ? (next) =>
+                                  void refresh({
+                                    environmentId,
+                                    input: {
+                                      threadId: row.thread.id,
+                                      setItem: { text: item.text, status: next },
+                                    },
+                                  }).then(() => query.refresh())
+                              : undefined
+                          }
                         />
                       </li>
                     ))}

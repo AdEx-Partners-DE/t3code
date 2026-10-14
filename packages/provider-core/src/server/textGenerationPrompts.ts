@@ -511,7 +511,8 @@ Rules:
 - Every item has an "entry": the number in square brackets of the thread entry where the point was raised or, for "done", where it was reported finished. Use null only when no single entry fits.
 - Order: "attention" first, then "open", then "backlog", then "done" with the most recent first.
 - At most 40 items. Merge small finished steps into one "done" item rather than listing each.
-- If a previous checklist is given, keep the wording of items that are still valid and only move their status; drop items that no longer matter.`;
+- If a previous checklist is given, keep the wording of items that are still valid and only move their status; drop items that no longer matter.
+- An item marked "set by the user" keeps that status and its wording; the user decided it.`;
 
 const THREAD_BLOCKER_PROMPT = `A coding agent stopped and handed the work back to its user. Decide whether the user is really needed.
 
@@ -568,14 +569,21 @@ export function readThreadBlockerVerdict(generated: {
 
 export interface ThreadChecklistPromptInput {
   readonly transcript: string;
-  readonly previous?: ReadonlyArray<{ readonly text: string; readonly status: string }> | undefined;
+  readonly previous?:
+    | ReadonlyArray<{
+        readonly text: string;
+        readonly status: string;
+        /** The user set this status by hand; the model keeps it. */
+        readonly setByUser?: boolean;
+      }>
+    | undefined;
 }
 
 export function buildThreadChecklistPrompt(input: ThreadChecklistPromptInput) {
   const previous =
     input.previous === undefined || input.previous.length === 0
       ? ""
-      : `\n\nPrevious checklist:\n${input.previous.map((item) => `- [${item.status}] ${item.text}`).join("\n")}`;
+      : `\n\nPrevious checklist:\n${input.previous.map((item) => `- [${item.status}${item.setByUser === true ? ", set by the user" : ""}] ${item.text}`).join("\n")}`;
   const prompt = `${THREAD_CHECKLIST_PROMPT}${previous}\n\nThread, oldest first:\n${input.transcript}`;
   const outputSchema = Schema.Struct({
     items: Schema.Array(

@@ -3322,6 +3322,8 @@ export const ThreadChecklistItem = Schema.Struct({
   note: Schema.optional(Schema.String),
   /** The message where the point was raised or last settled, when the model named one. */
   messageId: Schema.optional(MessageId),
+  /** The user set this status by hand; a rewrite keeps it. */
+  setByUser: Schema.optional(Schema.Literal(true)),
 });
 export type ThreadChecklistItem = typeof ThreadChecklistItem.Type;
 
@@ -4010,6 +4012,17 @@ export const OrchestrationV2RpcSchemas = {
       threadId: ThreadId,
       /** What asked for the rewrite; kept with the cost record of the call. */
       trigger: Schema.optional(Schema.Literals(["auto", "manual", "batch"])),
+      /**
+       * Sets one item's status by hand instead of rewriting, without a model
+       * call. Here and not in a method of its own: the RPC group is near the
+       * size the type checker takes.
+       */
+      setItem: Schema.optional(
+        Schema.Struct({
+          text: TrimmedNonEmptyString,
+          status: Schema.Literals(["done", "open", "backlog", "attention"]),
+        }),
+      ),
     }),
     output: Schema.Struct({ checklist: ThreadChecklist }),
   },

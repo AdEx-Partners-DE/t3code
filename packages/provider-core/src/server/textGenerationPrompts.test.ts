@@ -6,6 +6,7 @@ import {
   buildPrContentPrompt,
   buildReviewGuidePrompt,
   buildThreadTitlePrompt,
+  buildThreadChecklistPrompt,
 } from "./textGenerationPrompts.ts";
 import {
   normalizeCliError,
@@ -416,5 +417,19 @@ describe("normalizeCliError", () => {
 
     expect(result.detail).toBe("Failed to generate a commit message");
     expect(result.message).not.toContain("secret-token");
+  });
+});
+
+describe("buildThreadChecklistPrompt", () => {
+  it("marks the statuses the user set, so a rewrite keeps them", () => {
+    const { prompt } = buildThreadChecklistPrompt({
+      transcript: "[1] user: deploy it",
+      previous: [
+        { text: "Deploy the fix", status: "done", setByUser: true },
+        { text: "Write docs", status: "open" },
+      ],
+    });
+    expect(prompt).toContain("- [done, set by the user] Deploy the fix");
+    expect(prompt).toContain("- [open] Write docs");
   });
 });

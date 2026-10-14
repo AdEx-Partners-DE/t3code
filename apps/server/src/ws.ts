@@ -2047,7 +2047,7 @@ const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist]: (input) =>
-          threadChecklist.refresh(input.threadId, input.trigger).pipe(
+          threadChecklist.write(input).pipe(
             Effect.map((checklist) => ({ checklist })),
             Effect.mapError(
               (cause) =>

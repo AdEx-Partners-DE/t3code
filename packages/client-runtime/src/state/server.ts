@@ -1007,7 +1007,9 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist,
       concurrency: {
         mode: "singleFlight",
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+        // A status set by hand is its own request, never folded into a rewrite.
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.setItem ?? null]),
       },
     }),
     clearAllQueues: createEnvironmentRpcCommand(runtime, {

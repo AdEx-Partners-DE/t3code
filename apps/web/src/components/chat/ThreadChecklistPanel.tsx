@@ -103,6 +103,17 @@ export function useChecklistFollowUp() {
   );
 }
 
+/** Statuses the user can set by hand; the model keeps them when it rewrites the list. */
+const SET_STATUS_ACTIONS: ReadonlyArray<{
+  readonly status: ThreadChecklistItem["status"];
+  readonly label: string;
+}> = [
+  { status: "done", label: "Mark done" },
+  { status: "backlog", label: "Move to backlog" },
+  { status: "open", label: "Mark open" },
+  { status: "attention", label: "Needs me" },
+];
+
 /** A checklist item as a row that opens what can be done with it. */
 export function ChecklistItemMenu(props: {
   readonly item: ThreadChecklistItem;
@@ -112,6 +123,8 @@ export function ChecklistItemMenu(props: {
   readonly onTakeUp: () => void;
   /** Starts a new thread about the item; left out where the project is not known. */
   readonly onFollowUp?: (() => void) | undefined;
+  /** Sets the item's status by hand; a rewrite keeps it. Left out without permission. */
+  readonly onSetStatus?: ((status: ThreadChecklistItem["status"]) => void) | undefined;
 }) {
   const { item } = props;
   return (
@@ -161,6 +174,14 @@ export function ChecklistItemMenu(props: {
           <CopyIcon />
           Copy
         </MenuItem>
+        {props.onSetStatus === undefined
+          ? null
+          : SET_STATUS_ACTIONS.filter((action) => action.status !== item.status).map((action) => (
+              <MenuItem key={action.status} onClick={() => props.onSetStatus?.(action.status)}>
+                <ChecklistStatusIcon status={action.status} />
+                {action.label}
+              </MenuItem>
+            ))}
       </MenuPopup>
     </Menu>
   );
@@ -234,6 +255,24 @@ export function ThreadChecklistPanel(props: {
       }
     } finally {
       setBusy(false);
+    }
+  };
+
+  const setStatus = async (item: ThreadChecklistItem, status: ThreadChecklistItem["status"]) => {
+    const result = await refresh({
+      environmentId,
+      input: { threadId, setItem: { text: item.text, status } },
+    });
+    if (result._tag === "Success") {
+      setFresh(result.value.checklist);
+    } else if (!isAtomCommandInterrupted(result)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not change the checklist item",
+          description: String(squashAtomCommandFailure(result)),
+        }),
+      );
     }
   };
 
@@ -399,6 +438,7 @@ export function ThreadChecklistPanel(props: {
                                 item,
                               })
                       }
+                      onSetStatus={allowed ? (status) => void setStatus(item, status) : undefined}
                     />
                   </li>
                 ))}
