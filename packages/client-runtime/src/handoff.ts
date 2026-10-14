@@ -89,3 +89,22 @@ function latestRunModelBefore(
   }
   return latest?.modelSelection.model;
 }
+
+type HandoffStrategy = Extract<OrchestrationV2TurnItem, { type: "handoff" }>["strategy"];
+
+const HANDOFF_STRATEGY_LABELS: Record<HandoffStrategy, string> = {
+  full_thread_summary: "summary of the whole thread",
+  delta_since_target_last_seen: "what changed since it last took part",
+  fork_delta_summary: "summary of the fork",
+  checkpoint_summary: "summary up to a checkpoint",
+  manual_context: "context written by hand",
+};
+
+/**
+ * What the receiving model got in a handoff, for the row's label. A handoff
+ * never carries the provider's own transcript, so a long thread arrives as a
+ * summary; the row says which kind.
+ */
+export function handoffStrategyLabel(strategy: HandoffStrategy): string {
+  return HANDOFF_STRATEGY_LABELS[strategy];
+}

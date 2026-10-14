@@ -11,6 +11,7 @@ import { MiddleTruncate } from "../ui/middle-truncate";
 import * as DateTime from "effect/DateTime";
 import { WorkLogRow } from "./WorkLog";
 import {
+  handoffStrategyLabel,
   resolveHandoffEndpoints,
   type HandoffEndpoints,
   type HandoffTimelineRun,
@@ -135,6 +136,7 @@ export function V2LifecycleRow(props: {
         environmentId={props.environmentId}
         endpoints={resolveHandoffEndpoints(item, props.runs)}
         providers={props.providerStatuses}
+        strategy={item.strategy}
         failed={item.status === "failed"}
       />
     );
@@ -556,13 +558,21 @@ export function HandoffRow(props: {
   readonly environmentId: EnvironmentId;
   readonly endpoints: HandoffEndpoints;
   readonly providers: ReadonlyArray<ServerProvider>;
+  /** What the receiving model got; a pending handoff does not know it yet. */
+  readonly strategy?: Extract<OrchestrationV2TurnItem, { type: "handoff" }>["strategy"];
   readonly pending?: boolean;
   readonly failed?: boolean;
 }) {
   const { from: fromEndpoints, to } = props.endpoints;
   return (
     <TimelineSystemDivider
-      label={props.pending ? "Context handoff pending" : "Context handoff"}
+      label={
+        props.pending
+          ? "Context handoff pending"
+          : props.strategy === undefined
+            ? "Context handoff"
+            : `Context handoff: ${handoffStrategyLabel(props.strategy)}`
+      }
       icon={ArrowRightLeftIcon}
       showDetailSeparator={false}
       tone={props.failed ? "danger" : "neutral"}

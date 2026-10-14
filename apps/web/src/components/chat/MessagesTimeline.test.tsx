@@ -1884,7 +1884,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Context handoff");
+    expect(markup).toContain("Context handoff: summary of the whole thread");
     expect(markup).toContain("GPT 5.6 Sol");
     expect(markup).toContain("Claude Fable 5");
     expect(markup).not.toContain("Full conversation context");
