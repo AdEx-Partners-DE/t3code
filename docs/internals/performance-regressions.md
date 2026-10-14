@@ -90,6 +90,11 @@ counts keep the full status path. Cached fetch failures share the existing backo
 the actual failed attempt. Unchanged desktop environment bootstrap reads retain their array
 identity so polling does not invalidate subscribers.
 
+Local trace records and provider event logs use asynchronous, serialized file writes and rotation.
+Batching synchronous appends still stalls the server event loop on slow storage, especially on
+Windows. Trace producers keep a bounded next batch and drop excess records under disk pressure;
+provider logging retains backpressure. Shutdown drains accepted writes before closing their scope.
+
 Relay awareness queues one pending publication per thread and retains a follow-up when the thread
 changes during a send. Transcript deltas and tool output do not enqueue awareness work. Run,
 request, and relevant thread metadata events do. Configuration is checked before shell reads, and
