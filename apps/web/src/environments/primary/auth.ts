@@ -76,7 +76,8 @@ export class PrimaryEnvironmentPairingCredentialRejectedError extends Schema.Tag
   },
 ) {
   override get message(): string {
-    return "Invalid pairing token. Check the token and try again.";
+    // Pairing links work once and expire, so retrying the same link cannot succeed.
+    return "This pairing link or token is not valid: it was already used, has expired, or was mistyped. Create a new one on the computer that runs T3 Code under Settings → Connections.";
   }
 }
 
