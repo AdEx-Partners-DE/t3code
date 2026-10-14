@@ -525,6 +525,17 @@ function ScheduledTaskRow({
   });
   const act = async (action: "toggle" | "run" | "delete") => {
     if (busy || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
+    // A deleted task cannot be restored: ask first, as mobile does.
+    if (
+      action === "delete" &&
+      !(
+        (await requestConfirmDialog(`Delete "${task.title}"?\nIts schedule and prompt are gone.`, {
+          variant: "destructive",
+        })) ?? window.confirm(`Delete "${task.title}"? Its schedule and prompt are gone.`)
+      )
+    ) {
+      return;
+    }
     setBusy(true);
     const result =
       action === "toggle"
