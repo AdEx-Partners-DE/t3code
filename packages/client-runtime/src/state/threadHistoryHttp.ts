@@ -10,7 +10,9 @@ import {
   withOrchestrationProtocolHeader,
 } from "./environmentHttpAuth.ts";
 
-const DEFAULT_THREAD_HISTORY_TIMEOUT_MS = 6_000;
+// Pages hold whole turns, and one agent turn can run to megabytes; see the
+// bounded snapshot timeout for why slow remote links need the longer wait.
+const DEFAULT_THREAD_HISTORY_TIMEOUT_MS = 20_000;
 
 export const fetchEnvironmentThreadHistoryPage = Effect.fn(
   "clientRuntime.state.fetchEnvironmentThreadHistoryPage",
