@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as EffectScheduler from "effect/Scheduler";
 import * as Schema from "effect/Schema";
@@ -19,6 +20,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -72,8 +74,15 @@ const withService = <A, E>(
     readonly launches: Queue.Queue<LaunchInput>;
     /** Secrets the user entered for an agent, by ref; consuming one removes it. */
     readonly secretsByRef: Map<string, string>;
+    /** The settings service, when `options.settings` provided one. */
+    readonly settings: Option.Option<ServerSettings.ServerSettingsService["Service"]>;
   }) => Effect.Effect<A, E, never>,
-  options: { readonly gate?: Deferred.Deferred<void>; readonly relayHookBaseUrl?: string } = {},
+  options: {
+    readonly gate?: Deferred.Deferred<void>;
+    readonly relayHookBaseUrl?: string;
+    /** Server settings the service reads, such as "Pause all tasks"; none by default. */
+    readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+  } = {},
 ) =>
   Effect.gen(function* () {
     const launches = yield* Queue.unbounded<LaunchInput>();
@@ -102,11 +111,13 @@ const withService = <A, E>(
         ScheduledTaskService.ScheduledTaskWebhookOrigin,
         Effect.succeed({ relayHookBaseUrl: options.relayHookBaseUrl ?? null }),
       ),
+      options.settings === undefined ? Layer.empty : ServerSettings.layerTest(options.settings),
     );
     return yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
-      return yield* body({ service, launches, secretsByRef });
-    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(layerDependencies))));
+      const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+      return yield* body({ service, launches, secretsByRef, settings });
+    }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provideMerge(layerDependencies))));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory));
 
 it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
@@ -336,6 +347,26 @@ it.effect("checks the configured signature and keeps the secret write-only", () 
       ]);
     }),
   ),
+);
+
+it.effect(
+  "does not run deliveries to a task Pause all tasks holds, but runs one switched back on",
+  () =>
+    withService(
+      ({ service, launches, settings }) =>
+        Effect.gen(function* () {
+          const { task } = yield* service.upsert(yield* webhookTaskInput());
+          assert.equal((yield* service.triggerWebhook(requestFor(task)))._tag, "disabled");
+          assert.equal(yield* Queue.size(launches), 0);
+
+          yield* Option.getOrThrow(settings).updateSettings({
+            scheduledTasksPauseExemptIds: [task.id],
+          });
+          assert.equal((yield* service.triggerWebhook(requestFor(task)))._tag, "accepted");
+          yield* Queue.take(launches);
+        }),
+      { settings: { scheduledTasksPaused: true } },
+    ),
 );
 
 it.effect("logs but does not run deliveries to a disabled task, and refuses run now", () =>

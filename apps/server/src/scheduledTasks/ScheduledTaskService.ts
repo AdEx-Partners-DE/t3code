@@ -2210,7 +2210,9 @@ export const layer = Layer.effect(
                 outcome: "rate_limited" as const,
               });
             }
-            if (!task.enabled) {
+            // "Pause all tasks" holds a webhook task like any other: its switch
+            // reads off, so a request to it does not run either.
+            if (!task.enabled || (yield* isHeldByPause(task.id))) {
               yield* log("disabled");
               yield* observe("disabled");
               return { _tag: "disabled" as const };
