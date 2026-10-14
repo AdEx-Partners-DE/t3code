@@ -33,6 +33,7 @@ import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useEnvironmentQuery } from "../../state/query";
 import { useThreadShell } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
+import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { cn } from "../../lib/utils";
 import { relativeLabel } from "../settings/ScheduledTasksSettings";
@@ -42,7 +43,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { checklistAutoRefreshNeeded } from "./ThreadChecklistPanel.logic";
-import { revealInTimeline } from "./timelineReveal";
+import { revealInTimeline, revealInTimelineWhenLoaded } from "./timelineReveal";
 
 const AUTO_REFRESH_KEY = "t3code:thread-checklist:auto";
 const DONE_SHOWN = 5;
@@ -222,6 +223,10 @@ export function ThreadChecklistPanel(props: {
     serverEnvironment.refreshThreadChecklist.permissionAtom(environmentId),
   );
   const refresh = useAtomCommand(serverEnvironment.refreshThreadChecklist);
+  const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
+    label: "load earlier thread history",
+    reportFailure: false,
+  });
   const followUp = useChecklistFollowUp();
   // What the last refresh returned, until the query catches up.
   const [fresh, setFresh] = useState<ThreadChecklist | null>(null);
@@ -322,8 +327,18 @@ export function ThreadChecklistPanel(props: {
     turnsBehind,
   ]);
 
-  const showInThread = (item: ThreadChecklistItem) => {
+  const showInThread = async (item: ThreadChecklistItem) => {
     if (item.messageId !== undefined && revealInTimeline(item.messageId)) return;
+    if (item.messageId !== undefined) {
+      // Earlier turns load through the item's message; the timeline scrolls
+      // there once it has the rows.
+      revealInTimelineWhenLoaded(item.messageId);
+      const loaded = await loadEarlierHistory({
+        environmentId,
+        input: { threadId, throughEntryId: item.messageId },
+      });
+      if (loaded._tag === "Success" && loaded.value._tag === "loaded") return;
+    }
     toastManager.add(
       stackedThreadToast({
         type: "info",
@@ -422,7 +437,7 @@ export function ThreadChecklistPanel(props: {
                     <ChecklistItemMenu
                       item={item}
                       showLabel="Show in thread"
-                      onShow={() => showInThread(item)}
+                      onShow={() => void showInThread(item)}
                       takeUpLabel="Take up in the composer"
                       onTakeUp={() =>
                         quoteChecklistItem(scopeThreadRef(environmentId, threadId), item)
