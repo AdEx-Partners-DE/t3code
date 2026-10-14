@@ -12,11 +12,13 @@ import type {
   ServerProviderResetCredits,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
@@ -278,3 +280,63 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   }
   return CLAIM_OUTCOMES[body.result];
 });
+
+/** How long one reading of the banked resets stands before the next request. */
+export const RESET_CREDITS_READ_INTERVAL_MS = 10 * 60_000;
+/** The longest wait after refused requests; the endpoint answered 429 to most reads. */
+export const RESET_CREDITS_READ_MAX_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * Whether the banked resets are asked for again: never asked, or the last
+ * request is old enough. Each refused request in a row doubles the wait.
+ */
+export function resetCreditsReadDue(
+  lastAttemptMs: number | null,
+  nowMs: number,
+  refusedInARow = 0,
+): boolean {
+  const interval = Math.min(
+    RESET_CREDITS_READ_INTERVAL_MS * 2 ** refusedInARow,
+    RESET_CREDITS_READ_MAX_INTERVAL_MS,
+  );
+  return lastAttemptMs === null || nowMs - lastAttemptMs >= interval;
+}
+
+/**
+ * Asks for the banked resets at most once per interval and keeps the last
+ * answer in between. Every provider check called the endpoint, about once a
+ * minute per account, and it answered 429 each time; a refused request then
+ * also emptied the display. `forget` makes the next call ask again, for the
+ * moment a reset has just been redeemed.
+ */
+export const makeThrottledResetCreditsReader = <A, R>(
+  read: (version: string) => Effect.Effect<A | undefined, never, R>,
+) =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make<{
+      readonly attemptedAt: number | null;
+      readonly value: A | undefined;
+      readonly refusedInARow: number;
+    }>({
+      attemptedAt: null,
+      value: undefined,
+      refusedInARow: 0,
+    });
+    return {
+      read: (version: string) =>
+        Effect.gen(function* () {
+          const known = yield* Ref.get(state);
+          const now = yield* Clock.currentTimeMillis;
+          if (!resetCreditsReadDue(known.attemptedAt, now, known.refusedInARow)) {
+            return known.value;
+          }
+          const fresh = yield* read(version);
+          // A failed read comes back as undefined: keep what was known.
+          const value = fresh ?? known.value;
+          const refusedInARow = fresh === undefined ? known.refusedInARow + 1 : 0;
+          yield* Ref.set(state, { attemptedAt: now, value, refusedInARow });
+          return value;
+        }),
+      forget: Ref.set(state, { attemptedAt: null, value: undefined, refusedInARow: 0 }),
+    };
+  });
