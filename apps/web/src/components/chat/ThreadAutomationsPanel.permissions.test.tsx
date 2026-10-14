@@ -24,6 +24,8 @@ vi.mock("../../hooks/useSettings", () => ({
   useEnvironmentSettings: () => false,
   useUpdateEnvironmentSettings: () => () => undefined,
 }));
+vi.mock("../../hooks/useNowMinute", () => ({ useNowMinute: () => "2026-10-14T10:00" }));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: string) => (command === "toggle" ? state.toggle : state.run),
 }));
