@@ -68,6 +68,8 @@ export function PortfolioChecklistDialog({
   const followUp = useChecklistFollowUp();
   const [status, setStatus] = useState<ThreadChecklistItem["status"]>(initialStatus ?? "attention");
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // Threads whose checklist is being rewritten after an item was given back to the model.
+  const [rewriting, setRewriting] = useState<ReadonlySet<string>>(() => new Set());
 
   const checklistByThread = useMemo(
     () => new Map((query.data?.checklists ?? []).map((entry) => [entry.threadId as string, entry])),
@@ -115,6 +117,22 @@ export function PortfolioChecklistDialog({
       query.refresh();
     }
   };
+  const releaseItem = async (threadId: PortfolioThread["id"], text: string) => {
+    setRewriting((current) => new Set(current).add(threadId));
+    try {
+      await refresh({
+        environmentId,
+        input: { threadId, trigger: "manual", releaseItem: { text } },
+      });
+    } finally {
+      setRewriting((current) => {
+        const next = new Set(current);
+        next.delete(threadId);
+        return next;
+      });
+      query.refresh();
+    }
+  };
   const openThread = (thread: PortfolioThread) => {
     onClose();
     void navigate({
@@ -157,14 +175,16 @@ export function PortfolioChecklistDialog({
             <Button
               size="xs"
               variant="outline"
-              disabled={progress !== null || toUpdate.length === 0}
+              disabled={progress !== null || rewriting.size > 0 || toUpdate.length === 0}
               onClick={() => void updateBatch()}
             >
               {progress !== null
                 ? `Reading ${progress.done + 1} of ${progress.total}…`
-                : toUpdate.length === 0
-                  ? "All checklists are current"
-                  : `Write ${Math.min(REFRESH_BATCH, toUpdate.length)} missing or outdated`}
+                : rewriting.size > 0
+                  ? `Reading ${rewriting.size === 1 ? "1 thread" : `${rewriting.size} threads`}…`
+                  : toUpdate.length === 0
+                    ? "All checklists are current"
+                    : `Write ${Math.min(REFRESH_BATCH, toUpdate.length)} missing or outdated`}
             </Button>
           </div>
           {query.data === null ? (
@@ -196,8 +216,14 @@ export function PortfolioChecklistDialog({
                         : row.thread.title}
                     </button>
                     <span className="shrink-0 text-2xs text-muted-foreground">
-                      {row.checklist ? relativeLabel(row.checklist.generatedAt) : ""}
-                      {row.behind ? " · behind" : ""}
+                      {rewriting.has(row.thread.id) ? (
+                        "Reading the thread…"
+                      ) : (
+                        <>
+                          {row.checklist ? relativeLabel(row.checklist.generatedAt) : ""}
+                          {row.behind ? " · behind" : ""}
+                        </>
+                      )}
                     </span>
                   </div>
                   <ul className="mt-2 flex flex-col gap-1 text-xs">
@@ -242,16 +268,8 @@ export function PortfolioChecklistDialog({
                               : undefined
                           }
                           onRelease={
-                            allowed
-                              ? () =>
-                                  void refresh({
-                                    environmentId,
-                                    input: {
-                                      threadId: row.thread.id,
-                                      trigger: "manual",
-                                      releaseItem: { text: item.text },
-                                    },
-                                  }).then(() => query.refresh())
+                            allowed && !rewriting.has(row.thread.id)
+                              ? () => void releaseItem(row.thread.id, item.text)
                               : undefined
                           }
                         />
