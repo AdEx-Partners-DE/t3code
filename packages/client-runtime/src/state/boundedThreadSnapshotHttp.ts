@@ -15,8 +15,11 @@ import {
 } from "./environmentHttpAuth.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
 
-// Same cold-open budget as the full snapshot path; bounded payloads should fit.
-const DEFAULT_BOUNDED_THREAD_SNAPSHOT_TIMEOUT_MS = 6_000;
+// A phone on a relayed tailnet path moves a few hundred kB per second, so a
+// bounded snapshot of a long thread can take well over six seconds. Waiting
+// here is cheaper than the socket fallback, which carries the same snapshot in
+// one frame and holds back the keep-alive replies behind it.
+const DEFAULT_BOUNDED_THREAD_SNAPSHOT_TIMEOUT_MS = 20_000;
 
 /**
  * Load a bounded recent-window thread snapshot over HTTP. Opts into compact

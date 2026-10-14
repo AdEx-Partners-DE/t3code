@@ -12,8 +12,13 @@ client can produce reassuring timings while missing the active transport path.
 
 The v2 checks pin these invariants:
 
-- Client cold opens target 75 recent timeline rows and about 1 MiB of encoded data. Required
-  control records and the at-least-one-row rule can exceed the byte target; it is not a hard cap.
+- Client cold opens target 75 recent timeline rows and about 1 MiB of encoded data. Histories
+  with user turns close the window at a turn boundary once the byte budget is spent (never below
+  256 KiB of timeline), so a thread of long agent turns does not ship ten turns of tool activity.
+  Required control records, the at-least-one-turn rule and the at-least-one-row rule can exceed
+  the byte target; it is not a hard cap. Phones on a relayed tailnet path need this: a 12 MB
+  snapshot of a 400-run thread kept their sockets past the 15 second ping timeout, so the client
+  re-fetched it in a loop.
 - The bounded snapshot does not retain the full duplicate conversation-message table.
 - Older activity is fetched in bounded HTTP pages and merged without disturbing the live scroll
   window.
@@ -21,8 +26,11 @@ The v2 checks pin these invariants:
   bounded recent-history window and carry the cursor needed to fetch older history. Older clients
   and WebSocket-only starts retain the compatible full-snapshot fallback.
 - Snapshot queries bound timeline reads per fork ancestor, not total rows: dependency and
-  control records still accompany the window. Smaller socket frames alone do not establish a
-  whole-server memory reduction.
+  control records still accompany the window. Execution nodes grow with every tool call, so the
+  bounded snapshot keeps only those of runs in the window, runs in flight, and runless work; rows
+  paged in later group by run instead of by attempt. Runs, attempts, checkpoints and subagents
+  stay complete because the diff picker and thread relationships list all of them. Smaller socket
+  frames alone do not establish a whole-server memory reduction.
 - Resume catch-up checks the original 1 MiB persisted-payload budget before decoding, then
   replays at most 128 thread events and 1 MiB of projected event JSON before falling back to a
   snapshot. Raw JSON bytes are not a heap-memory cap. Raising this budget merely because output
@@ -92,8 +100,9 @@ identity so polling does not invalidate subscribers.
 
 Local trace records and provider event logs use asynchronous, serialized file writes and rotation.
 Batching synchronous appends still stalls the server event loop on slow storage, especially on
-Windows. Trace producers keep a bounded next batch and drop excess records under disk pressure;
-provider logging retains backpressure. Shutdown drains accepted writes before closing their scope.
+Windows. While a trace write is slow, producers keep up to one trace file of records, so the spans
+that time a stall survive it; records drop only while the disk stays stuck. Provider logging
+retains backpressure. Shutdown drains accepted writes before closing their scope.
 
 Relay awareness queues one pending publication per thread and retains a follow-up when the thread
 changes during a send. Transcript deltas and tool output do not enqueue awareness work. Run,

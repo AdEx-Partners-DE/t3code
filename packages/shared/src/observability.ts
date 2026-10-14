@@ -374,8 +374,10 @@ export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: Trac
 
   let buffer: Array<{ readonly text: string; readonly bytes: number }> = [];
   let bufferBytes = 0;
+  // While a write is slow, push keeps up to one trace file of records (at least
+  // 4 MiB), so the spans that time a stall still reach the file. Only a disk
+  // that stays stuck drops records, instead of growing memory or blocking push.
   const maxBufferBytes = Math.max(options.maxBytes, 4 * 1024 * 1024);
-  const maxBufferRecords = FLUSH_BUFFER_THRESHOLD * 4;
   const flushRequests = yield* Queue.sliding<void>(1);
   const flushSemaphore = yield* Semaphore.make(1);
   // A failure episode starts at the first dropped record and ends when a flush
@@ -401,12 +403,8 @@ export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: Trac
     let persistedCount = 0;
 
     while (persistedCount < records.length) {
+      // push drops any record larger than a file, so the first one always fits.
       const firstRecordBytes = records[persistedCount]!.bytes;
-      if (firstRecordBytes > options.maxBytes) {
-        persistedCount += 1;
-        continue;
-      }
-
       let nextIndex = persistedCount + 1;
       let chunkBytes = firstRecordBytes;
       while (nextIndex < records.length) {
@@ -486,11 +484,12 @@ export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: Trac
 
   yield* Effect.addFinalizer(() => flush.pipe(Effect.ignore));
   yield* Effect.forkScoped(
-    // @effect-diagnostics-next-line raceFirstWithSleepToTimeout:off -- races a threshold signal against the batch interval, not a timeout
-    Effect.raceFirst(
-      Queue.take(flushRequests),
-      Effect.sleep(`${options.batchWindowMs} millis`),
-    ).pipe(Effect.andThen(flush), Effect.forever),
+    // Flush when push fills a batch or the batch window passes.
+    Queue.take(flushRequests).pipe(
+      Effect.timeoutOption(`${options.batchWindowMs} millis`),
+      Effect.andThen(flush),
+      Effect.forever,
+    ),
   );
 
   return {
@@ -500,9 +499,7 @@ export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: Trac
         const text = `${JSON.stringify(record)}\n`;
         const bytes = Buffer.byteLength(text);
         if (bytes > options.maxBytes) return;
-        // The disk can be arbitrarily slow. Keep only a bounded next batch,
-        // rather than stalling the producer or retaining unlimited trace data.
-        if (bufferBytes + bytes > maxBufferBytes || buffer.length >= maxBufferRecords) {
+        if (bufferBytes + bytes > maxBufferBytes) {
           droppedCount++;
           return;
         }
