@@ -21,7 +21,8 @@ The v2 checks pin these invariants:
   re-fetched it in a loop.
 - The bounded snapshot does not retain the full duplicate conversation-message table.
 - Older activity is fetched in bounded HTTP pages and merged without disturbing the live scroll
-  window.
+  window. Pages are chosen from the light index before bodies load, so they close at a turn
+  boundary by stored payload size; a search jump pages by turns so it reaches its target.
 - Clients with confirmed history paging opt into socket snapshot fallbacks that use the same
   bounded recent-history window and carry the cursor needed to fetch older history. Older clients
   and WebSocket-only starts retain the compatible full-snapshot fallback.

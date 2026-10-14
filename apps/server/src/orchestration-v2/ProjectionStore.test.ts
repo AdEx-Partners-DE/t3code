@@ -776,7 +776,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("pages complete user turns through SQL regardless of tool count or payload size", () =>
+  it.effect("pages complete user turns through SQL and closes served pages by payload size", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const sql = yield* SqlClient.SqlClient;
@@ -954,6 +954,14 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       }
       assert.isNull(cursor);
       assert.deepEqual(loaded, allIds);
+
+      // The served page measures stored payloads: about 220 kB a turn closes it after
+      // five whole turns instead of twenty.
+      const served = yield* projectionStore.getThreadHistoryPage(threadId, bounded.historyCursor!);
+      assert.lengthOf(served.items, 5 * 102);
+      assert.strictEqual(served.items[0]?.item.type, "user_message");
+      assert.strictEqual(served.items[0]?.sourceItemId, allIds[37 * 102]);
+      assert.isTrue(served.hasMoreHistory);
     }),
   );
 

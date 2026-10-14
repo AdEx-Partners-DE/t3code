@@ -4937,6 +4937,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       readonly visibility: OrchestrationV2ProjectedTurnItem["visibility"];
       readonly item: TimelineIndexItem;
       readonly synthetic?: OrchestrationV2TurnItem;
+      /** Stored payload size, so history pages can close at a turn boundary by bytes. */
+      readonly payloadBytes?: number;
     };
     const readTimelineIndex = (
       threadId: ThreadId,
@@ -4959,7 +4961,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           input_intent: NonNullable<TimelineIndexItem["inputIntent"]> | null;
           created_by: "user" | "agent" | "system" | null;
           message_id: string | null;
-        }>`SELECT turn_item_id, run_id, node_id, type,
+          payload_bytes: number;
+        }>`SELECT turn_item_id, run_id, node_id, type, octet_length(payload_json) AS payload_bytes,
           CASE WHEN type = 'user_message' THEN json_extract(payload_json, '$.inputIntent') END AS input_intent,
           CASE WHEN type = 'user_message' THEN json_extract(payload_json, '$.createdBy') END AS created_by,
           CASE WHEN type IN ('user_message', 'assistant_message') THEN json_extract(payload_json, '$.messageId') END AS message_id
@@ -4975,11 +4978,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ...(row.created_by === null ? {} : { createdBy: row.created_by }),
           ...(row.message_id === null ? {} : { messageId: MessageId.make(row.message_id) }),
         }));
-        const local: Array<TimelineIndexRow> = items.map((item) => ({
+        const local: Array<TimelineIndexRow> = items.map((item, index) => ({
           sourceThreadId: threadId,
           sourceItemId: item.id,
           visibility: "local",
           item,
+          payloadBytes: rows[index]!.payload_bytes,
         }));
         const isVisible = createOrchestrationV2TurnItemVisibility({
           runs: records.runs,
@@ -5077,7 +5081,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   })),
                   cursor,
                   snapshotSequence,
-                  rowEncodedBytes: () => 0,
+                  // Stored payload size stands in for the wire size: a page of long agent
+                  // turns closes at a turn boundary near the budget instead of shipping
+                  // megabytes to a phone. A search jump must reach its target, so it pages
+                  // by turns alone.
+                  rowEncodedBytes:
+                    throughEntryId === undefined ? (row) => row.payloadBytes ?? 0 : () => 0,
                   throughEntryId,
                 }),
               catch: (cause) => new ProjectionStoreReadError({ threadId, cause }),

@@ -3317,6 +3317,11 @@ export const layer = Layer.unwrap(
         const clientOrigin = readClientConnectionOrigin(request);
         const clientAnalyticsProps = readClientAnalyticsProps(request);
         yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
+        // Phones on relayed links depend on compressed frames; the trace shows who offers them.
+        yield* Effect.annotateCurrentSpan(
+          "ws.client_offers_deflate",
+          /permessage-deflate/i.test(request.headers["sec-websocket-extensions"] ?? ""),
+        );
         yield* analytics.record("client.connected", clientAnalyticsProps);
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
