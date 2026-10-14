@@ -2077,8 +2077,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     })();
   }, [onReveal, targetPath]);
 
-  const handleCopy = useCallback(
-    (value: string, title: string) => {
+  const handleCopyFilePath = useCallback(
+    (path: string, title: string) => {
       if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
         toastManager.add(
           stackedThreadToast({
@@ -2090,12 +2090,14 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         return;
       }
 
-      void navigator.clipboard.writeText(value).then(
+      // A remote file's host OS can differ from the browser's OS.
+      const clipboardPath = isWindowsAbsolutePath(targetPath) ? path.replaceAll("/", "\\") : path;
+      void navigator.clipboard.writeText(clipboardPath).then(
         () => {
           toastManager.add({
             type: "success",
             title: `${title} copied`,
-            description: value,
+            description: clipboardPath,
           });
         },
         (error) => {
@@ -2153,11 +2155,11 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           return;
         }
         if (clicked === "copy-relative") {
-          handleCopy(displayPath, "Relative path");
+          handleCopyFilePath(displayPath, "Relative path");
           return;
         }
         if (clicked === "copy-full") {
-          handleCopy(targetPath, "Full path");
+          handleCopyFilePath(targetPath, "Full path");
         }
       } catch (cause) {
         reportMarkdownActionFailure(
@@ -2168,7 +2170,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     },
     [
       displayPath,
-      handleCopy,
+      handleCopyFilePath,
       handleOpenInBrowser,
       handleOpenInEditor,
       handleRevealInFileManager,
