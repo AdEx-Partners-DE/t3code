@@ -225,7 +225,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       );
 
       const resetCredits = yield* ClaudeResetCredits.makeThrottledResetCreditsReader((version) =>
-        ClaudeResetCredits.readClaudeResetCredits(configDir, version).pipe(
+        ClaudeResetCredits.fetchClaudeResetCredits(configDir, version).pipe(
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
@@ -336,6 +336,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
             Effect.gen(function* () {
               const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
               yield* Cache.invalidateAll(capabilitiesProbeCache);
+              // A check during the redeem may have read the count from before it.
+              yield* resetCredits.forget;
               const refreshed = yield* snapshot.refresh;
               const after = refreshed.usageLimits?.checkedAt;
               if (
