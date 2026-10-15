@@ -568,9 +568,14 @@ function ScheduledTaskRow({
                 ? "Paused with all tasks; switch it on to resume just this one"
                 : isWebhook
                   ? "Listening"
-                  : task.nextRunAt
-                    ? `Next run ${relativeLabel(task.nextRunAt)}`
-                    : "Not scheduled"}
+                  : task.schedule.type === "idle"
+                    ? // An idle task has no time; it starts when a run finishes.
+                      task.schedule.allOpenThreads
+                      ? "Watching open threads"
+                      : "Starts after the next finished run"
+                    : task.nextRunAt
+                      ? `Next run ${relativeLabel(task.nextRunAt)}`
+                      : "Not scheduled"}
           </span>
           {task.lastRunStatus !== "never" ? (
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
