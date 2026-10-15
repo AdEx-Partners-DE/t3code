@@ -57,7 +57,7 @@ import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { recordDecision } from "../decisionLog.ts";
 import { startsWithoutTheUser } from "./QueuePauseHold.ts";
-import { alignThreadWithStandingOverride } from "./StandingModelOverride.ts";
+import { alignsBeforeMessage, alignThreadWithStandingOverride } from "./StandingModelOverride.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -862,7 +862,7 @@ const make = Effect.gen(function* () {
     command: Parameters<ThreadManagementServiceShape["dispatch"]>[0],
   ) =>
     command.type !== "message.dispatch" ||
-    command.modelSelection !== undefined ||
+    !alignsBeforeMessage(command) ||
     !startsWithoutTheUser(command) ||
     Option.isNone(standingOverrideServices.fileSystem) ||
     Option.isNone(standingOverrideServices.path) ||

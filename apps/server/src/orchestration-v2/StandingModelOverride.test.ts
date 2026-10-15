@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
 import {
+  alignsBeforeMessage,
   parseStandingOverrides,
   scopeCovers,
   standingOverrideFromApplied,
@@ -107,6 +108,20 @@ describe("standing overrides per part", () => {
     const split = withScopedOverride(both, "tasks", sonnet);
     expect(split).toEqual({ tasks: sonnet, adhoc: opus });
     expect(withScopedOverride(split, "adhoc", null)).toEqual({ tasks: sonnet, adhoc: null });
+  });
+
+  it("leaves a provider's own wake on the session that holds its work", () => {
+    // 15.10.: aligning such a wake moved a thread to the other Claude account,
+    // which closed the session and killed the subagent the wake reported on.
+    expect(alignsBeforeMessage({ creationSource: "provider" })).toBe(false);
+    expect(alignsBeforeMessage({ creationSource: "server" })).toBe(true);
+    expect(alignsBeforeMessage({ creationSource: "mcp" })).toBe(true);
+    expect(
+      alignsBeforeMessage({
+        creationSource: "server",
+        modelSelection: { instanceId: "codex", model: "gpt-6-astra" },
+      }),
+    ).toBe(false);
   });
 
   it("counts a thread a task posts to as a task thread", () => {

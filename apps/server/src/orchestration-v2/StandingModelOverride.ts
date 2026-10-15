@@ -68,6 +68,22 @@ export function scopeCovers(scope: ModelOverrideScope, thread: ThreadScope): boo
 }
 
 /**
+ * Whether a message that starts without the user may move its thread to the
+ * standing model first. A provider's own wake (`creationSource: "provider"`)
+ * reports work still running in the thread's live session, and the adapter
+ * attaches that session's buffered output to it: moving the thread to another
+ * account closes the session, which kills that work and loses the output. Such
+ * a wake keeps the thread as it is; the next message from a task, an agent or
+ * the server aligns it.
+ */
+export function alignsBeforeMessage(message: {
+  readonly modelSelection?: unknown;
+  readonly creationSource: string;
+}): boolean {
+  return message.modelSelection === undefined && message.creationSource !== "provider";
+}
+
+/**
  * Reads the kept file. Before the split one override stood for every thread,
  * so a file in that form stands for both parts.
  */
