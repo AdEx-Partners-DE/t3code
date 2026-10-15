@@ -308,11 +308,6 @@ function nextRunAt(
 
 const SCHEDULED_MESSAGE_ID_PREFIX = "scheduled-task-message:";
 
-/**
- * Whether a prompt this task sent earlier is still queued or running in its
- * thread. Scheduled prompts carry the task id in their message id.
- */
-/** Whether a task pause still holds anything: it is over once every enabled task runs again. */
 /** The least time between two starts while a pile of due tasks is worked off. */
 export const TASK_START_GAP_MS = 20_000;
 /** From this many tasks due at once they count as a pile and start one by one. */
@@ -335,6 +330,7 @@ export function dueTasksToStartNow<T>(
   return due.slice(0, 1);
 }
 
+/** Whether a task pause still holds anything: it is over once every enabled task runs again. */
 export function pauseIsOver(
   enabledTaskIds: ReadonlyArray<string>,
   exemptIds: ReadonlyArray<string>,
@@ -342,6 +338,10 @@ export function pauseIsOver(
   return enabledTaskIds.every((taskId) => exemptIds.includes(taskId));
 }
 
+/**
+ * Whether a prompt this task sent earlier is still queued or running in its
+ * thread. Scheduled prompts carry the task id in their message id.
+ */
 export function hasPendingScheduledPrompt(
   taskId: string,
   runs: ReadonlyArray<{ readonly status: string; readonly userMessageId?: string | null }>,
