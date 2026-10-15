@@ -20,7 +20,11 @@ import type {
   ProjectSearchEntriesResult,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
+import {
+  isExplicitRelativePath,
+  isWindowsAbsolutePath,
+  stripSlashPrefixedWindowsDrive,
+} from "@t3tools/shared/path";
 import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
@@ -119,8 +123,11 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
     });
   }
 
-  if (!isExplicitRelativePath(input.partialPath)) {
-    return path.resolve(expandHomePath(input.partialPath, yield* HostProcess.HomeDirectory));
+  // `/D:/dev/` is a URL-style drive path; resolved as-is on Windows it becomes `D:\D:\dev`.
+  const partialPath =
+    platform === "win32" ? stripSlashPrefixedWindowsDrive(input.partialPath) : input.partialPath;
+  if (!isExplicitRelativePath(partialPath)) {
+    return path.resolve(expandHomePath(partialPath, yield* HostProcess.HomeDirectory));
   }
 
   if (!input.cwd) {

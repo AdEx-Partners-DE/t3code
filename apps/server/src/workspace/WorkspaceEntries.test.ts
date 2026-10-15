@@ -817,6 +817,25 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       }),
     );
 
+    it.effect("reads a slash-prefixed drive path as the drive path on Windows", () =>
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) !== "win32") return;
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-browse-slash-drive-" });
+        yield* writeTextFile(cwd, "packages/pkg.json", "{}");
+
+        const result = yield* workspaceEntries.browse({
+          partialPath: `/${cwd.replaceAll("\\", "/")}/`,
+        });
+
+        expect(result).toEqual({
+          parentPath: cwd,
+          entries: [{ name: "packages", fullPath: path.join(cwd, "packages") }],
+        });
+      }),
+    );
+
     it.effect("supports relative paths when cwd is provided", () =>
       Effect.gen(function* () {
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
