@@ -1771,6 +1771,7 @@ describe("ClaudeAdapterV2 native fork", () => {
         const forkCalls: Array<{
           readonly sessionId: string;
           readonly options: unknown;
+          readonly environment: NodeJS.ProcessEnv;
           readonly threadId: ThreadId;
           readonly providerSessionId: ProviderSessionId;
         }> = [];
