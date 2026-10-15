@@ -111,6 +111,9 @@ export interface EnvironmentThreadShell {
   readonly hasPendingUserInput: boolean;
   /** When the open approval or question was raised, so clients can show how long it has waited. */
   readonly pendingRequestSince: string | null;
+  /** What a live subagent below this thread waits on the user for. Subagent
+      rows are hidden, so the threads above them carry it. */
+  readonly pendingSubagentRequest?: PendingSubagentRequest | null;
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: ReadonlyArray<
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
@@ -209,9 +212,12 @@ export function scopeProject(
   return { ...project, environmentId };
 }
 
+export type PendingSubagentRequest = "approval" | "user_input";
+
 export function presentThreadShell(
   environmentId: EnvironmentId,
   thread: OrchestrationV2ThreadShell,
+  pendingSubagentRequest: PendingSubagentRequest | null = null,
 ): EnvironmentThreadShell {
   const updatedAt = iso(thread.updatedAt);
   const latestRun =
@@ -265,6 +271,7 @@ export function presentThreadShell(
       thread.pendingRuntimeRequest === null || thread.pendingRuntimeRequest.kind === "auth_refresh"
         ? null
         : nullableIso(thread.pendingRuntimeRequest.createdAt),
+    pendingSubagentRequest,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
     providerInstanceHistory: thread.providerInstanceHistory ?? [],
