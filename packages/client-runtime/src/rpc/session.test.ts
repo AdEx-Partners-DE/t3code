@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -1114,6 +1115,49 @@ describe("RpcSessionFactory", () => {
       });
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
+
+  it.effect("keeps a session whose timers wake late while the server answers", () => {
+    // Time that passes without timers firing: a hidden browser tab wakes them
+    // about once a minute, a suspended phone not at all.
+    let sleptMs = 0;
+    const layerSleepyClock = Layer.effect(
+      Clock.Clock,
+      Effect.map(TestClock.make(), (testClock) => ({
+        ...testClock,
+        currentTimeMillisUnsafe: () => testClock.currentTimeMillisUnsafe() + sleptMs,
+        currentTimeMillis: Effect.sync(() => testClock.currentTimeMillisUnsafe() + sleptMs),
+      })),
+    );
+    return Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const socket = yield* awaitSocket(sockets);
+      const pings = () => socket.sent.map((message) => decodeJson(message)).filter(isPing).length;
+
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      for (let minute = 1; minute <= 3; minute += 1) {
+        sleptMs += 55_000;
+        yield* TestClock.adjust("5 seconds");
+        expect(pings()).toBe(minute);
+        socket.serverMessage(encodeJson({ _tag: "Pong" }));
+        yield* Effect.yieldNow;
+      }
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+
+      // A server that stops answering is still caught on the next late wake-up.
+      sleptMs += 55_000;
+      yield* TestClock.adjust("5 seconds");
+      sleptMs += 55_000;
+      yield* TestClock.adjust("5 seconds");
+      const error = yield* Fiber.join(closedFiber);
+      expect(error).toMatchObject({ detail: "Test environment stopped responding." });
+    }).pipe(Effect.scoped, Effect.provide(layerSleepyClock));
+  });
 
   it.effect("keeps reading replies after closing a stream with a full buffer", () =>
     Effect.gen(function* () {
