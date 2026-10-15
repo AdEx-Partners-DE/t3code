@@ -2473,9 +2473,10 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
-      const navigationResult = await settlePromise(() =>
-        handleNewThread(scopeProjectRef(input.environmentId, projectId)),
-      );
+      // Same wait as the clone flow: the draft must open with its new project already resolved.
+      const projectRef = scopeProjectRef(input.environmentId, projectId);
+      await waitForProject(projectRef, 3_000).catch(() => null);
+      const navigationResult = await settlePromise(() => handleNewThread(projectRef));
       if (navigationResult._tag === "Failure") {
         const error = squashAtomCommandFailure(navigationResult);
         toastManager.add(
