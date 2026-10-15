@@ -780,7 +780,8 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
-  payload: Schema.Struct({}),
+  // The server keeps a scan for a few minutes; `refresh` scans again now.
+  payload: Schema.Struct({ refresh: Schema.optional(Schema.Boolean) }),
   success: SourceControlDiscoveryResult,
   error: EnvironmentAuthorizationError,
 });

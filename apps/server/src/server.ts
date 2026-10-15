@@ -107,6 +107,7 @@ import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -345,6 +346,12 @@ const layerPullRequestService = PullRequestService.layer.pipe(
   Layer.provide(PullRequestReadCache.layer),
   Layer.provide(layerSourceControlProviderRegistry),
   Layer.provide(SourceControlRateLimit.layer),
+);
+
+// One discovery for every client: it keeps its scan for ten minutes, which only
+// helps if a reconnecting client meets the same instance.
+const layerSourceControlDiscovery = SourceControlDiscovery.layer.pipe(
+  Layer.provide(layerSourceControlProviderRegistry),
 );
 
 const layerGitManager = GitManager.layer.pipe(
@@ -744,6 +751,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP. Provided
   // after the guide service so it reaches that too.
   Layer.provide(layerPullRequestService),
+  Layer.provide(layerSourceControlDiscovery),
   // The stream route and the WebSocket RPCs share one browser.
   Layer.provide(ServerBrowser.layer.pipe(Layer.provide(DesktopBrowserChannel.layer))),
   // Server browser tabs and HTML render previews install and run the same headless browser.

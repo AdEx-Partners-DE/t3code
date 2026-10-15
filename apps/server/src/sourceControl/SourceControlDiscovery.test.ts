@@ -1,7 +1,10 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import type * as Context from "effect/Context";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -222,6 +225,79 @@ it.effect("reports implemented tools separately from locally available executabl
     assert.ok(bitbucket);
     assert.strictEqual(bitbucket.executable, undefined);
   }).pipe(Effect.provide(layerTest));
+});
+
+/** A discovery whose `jj` probe counts its spawns; `jjDelay` keeps a scan in flight. */
+const makeCachingDiscoveryTest = (jjDelay?: Duration.Input) => {
+  let jjSpawns = 0;
+  const processMock = {
+    // Counts when the spawn runs, as a real process start would, not when it is built.
+    run: (input: VcsProcess.VcsProcessInput) =>
+      Effect.suspend(() => {
+        if (input.command === "git") {
+          return Effect.succeed(processOutput("git version 2.51.0\n"));
+        }
+        const spawnFailure = new VcsProcessSpawnError({
+          operation: input.operation,
+          command: input.command,
+          cwd: input.cwd,
+          cause: new Error(`${input.command} not found`),
+        });
+        if (input.command !== "jj") return Effect.fail(spawnFailure);
+        jjSpawns += 1;
+        return jjDelay === undefined
+          ? Effect.fail(spawnFailure)
+          : Effect.sleep(jjDelay).pipe(Effect.andThen(Effect.fail(spawnFailure)));
+      }),
+  } satisfies Partial<VcsProcess.VcsProcess["Service"]>;
+  const layer = SourceControlDiscovery.layer.pipe(
+    Layer.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-source-control-discovery-cache-" }),
+    ),
+    Layer.provide(Layer.mock(VcsProcess.VcsProcess)(processMock)),
+    Layer.provide(
+      layerSourceControlProviderRegistryTest({
+        process: processMock,
+        bitbucket: {
+          probeAuth: Effect.succeed({
+            status: "unauthenticated",
+            account: Option.none(),
+            host: Option.some("bitbucket.org"),
+            detail: Option.none(),
+          }),
+        },
+      }),
+    ),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  return { layer, jjSpawns: () => jjSpawns };
+};
+
+it.effect("keeps a scan for repeated discovers and scans again on rescan", () => {
+  const test = makeCachingDiscoveryTest();
+  return Effect.gen(function* () {
+    const discovery = yield* SourceControlDiscovery.SourceControlDiscovery;
+    yield* discovery.discover;
+    yield* discovery.discover;
+    assert.strictEqual(test.jjSpawns(), 1);
+    yield* discovery.rescan;
+    assert.strictEqual(test.jjSpawns(), 2);
+    yield* discovery.discover;
+    assert.strictEqual(test.jjSpawns(), 2);
+  }).pipe(Effect.provide(test.layer));
+});
+
+it.effect("keeps the scan when the client that started it leaves before it ends", () => {
+  const test = makeCachingDiscoveryTest("1 second");
+  return Effect.gen(function* () {
+    const discovery = yield* SourceControlDiscovery.SourceControlDiscovery;
+    const leaving = yield* Effect.forkChild(discovery.discover);
+    yield* TestClock.adjust("10 millis");
+    yield* Fiber.interrupt(leaving);
+    yield* TestClock.adjust("2 seconds");
+    yield* discovery.discover;
+    assert.strictEqual(test.jjSpawns(), 1);
+  }).pipe(Effect.provide(test.layer));
 });
 
 it.effect("probes provider authentication without exposing token details", () => {

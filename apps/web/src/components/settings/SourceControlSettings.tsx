@@ -516,7 +516,8 @@ export function SourceControlSettingsPanel() {
       ? null
       : sourceControlEnvironment.discovery({
           environmentId,
-          input: {},
+          // This page and its Rescan show what is installed now, not the server's kept scan.
+          input: { refresh: true },
         }),
   );
   const result = discovery.data ?? EMPTY_DISCOVERY_RESULT;

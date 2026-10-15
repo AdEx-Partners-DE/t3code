@@ -4,7 +4,9 @@ import {
   type VcsDriverKind,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
@@ -60,7 +62,10 @@ const VCS_PROBES: ReadonlyArray<VcsProbe> = [
 export class SourceControlDiscovery extends Context.Service<
   SourceControlDiscovery,
   {
+    /** The last scan, at most ten minutes old. Clients ask on every connect. */
     readonly discover: Effect.Effect<SourceControlDiscoveryResult>;
+    /** Scans again now and keeps the result for the next `discover`. */
+    readonly rescan: Effect.Effect<SourceControlDiscoveryResult>;
   }
 >()("t3/sourceControl/SourceControlDiscovery") {}
 
@@ -129,14 +134,27 @@ export const make = Effect.gen(function* () {
       );
   };
 
+  const scan = Effect.all({
+    versionControlSystems: Effect.all(
+      VCS_PROBES.map((entry) => probe(entry)) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
+      { concurrency: "unbounded" },
+    ),
+    sourceControlProviders: sourceControlProviders.discover,
+  });
+  // A scan spawns every CLI, and on Windows each missing one is a failed
+  // process start. Clients scan on every connect, so a reconnecting phone
+  // respawned five missing CLIs every few minutes. The scan takes seconds and
+  // runs detached: a client that leaves early stops waiting, but the scan
+  // finishes and is kept, since an interrupted one would not be.
+  const [cachedScan, invalidate] = yield* Effect.cachedInvalidateWithTTL(
+    scan,
+    Duration.minutes(10),
+  );
+  const discover = Effect.forkDetach(cachedScan).pipe(Effect.flatMap(Fiber.join));
+
   return SourceControlDiscovery.of({
-    discover: Effect.all({
-      versionControlSystems: Effect.all(
-        VCS_PROBES.map((entry) => probe(entry)) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
-        { concurrency: "unbounded" },
-      ),
-      sourceControlProviders: sourceControlProviders.discover,
-    }),
+    discover,
+    rescan: invalidate.pipe(Effect.andThen(discover)),
   });
 });
 
