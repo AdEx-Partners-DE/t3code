@@ -262,8 +262,8 @@ function OpenThreadModelOverrideControls({
             <p key={line}>{line}</p>
           ))}
           <p>
-            Threads that open later, or that a task wakes, are set to it as well, until you put it
-            back.
+            Until you put it back, a thread that opens later is set to it when a task, an agent or
+            the server writes to it. A message you send keeps the model you picked in the composer.
           </p>
         </div>
       )}
