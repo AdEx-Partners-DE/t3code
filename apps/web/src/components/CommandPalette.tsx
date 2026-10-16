@@ -72,6 +72,8 @@ import {
   MonitorIcon,
   MoonIcon,
   PaletteIcon,
+  PauseIcon,
+  PlayIcon,
   RotateCcwIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -105,7 +107,11 @@ import {
   copyPromptLink,
   promptLinkRepositoryOf,
 } from "./promptLinks/copyPromptLink";
-import { useClientSettings } from "../hooks/useSettings";
+import {
+  useClientSettings,
+  usePrimarySettings,
+  useUpdatePrimarySettings,
+} from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { useCustomThemes } from "../hooks/useCustomThemes";
 import { useEnvironmentThemeDefinitions } from "../hooks/useEnvironmentTheme";
@@ -1804,7 +1810,42 @@ function OpenCommandPaletteDialog(props: {
     });
   }, [clearOpenIntent, browseNavigation, openIntent, projectThreadItems, pushPaletteView]);
 
+  const tasksPaused = usePrimarySettings((settings) => settings.scheduledTasksPaused);
+  const queuesPaused = usePrimarySettings((settings) => settings.threadQueuesPaused);
+  const updatePrimarySettings = useUpdatePrimarySettings();
+
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+
+  // The same switches as Settings → Scheduled tasks and the sidebar status line; listed last.
+  const pauseItems: CommandPaletteActionItem[] = [];
+  pauseItems.push({
+    kind: "action",
+    value: "action:toggle-tasks-paused",
+    searchTerms: ["pause all tasks", "resume all tasks", "scheduled tasks", "automations"],
+    title: tasksPaused ? "Resume all tasks" : "Pause all tasks",
+    icon: tasksPaused ? (
+      <PlayIcon className={ITEM_ICON_CLASS} />
+    ) : (
+      <PauseIcon className={ITEM_ICON_CLASS} />
+    ),
+    run: async () => {
+      await updatePrimarySettings({ scheduledTasksPaused: !tasksPaused });
+    },
+  });
+  pauseItems.push({
+    kind: "action",
+    value: "action:toggle-queues-paused",
+    searchTerms: ["pause queues", "resume queues", "queued messages", "hold queue"],
+    title: queuesPaused ? "Resume queues" : "Pause queues",
+    icon: queuesPaused ? (
+      <PlayIcon className={ITEM_ICON_CLASS} />
+    ) : (
+      <PauseIcon className={ITEM_ICON_CLASS} />
+    ),
+    run: async () => {
+      await updatePrimarySettings({ threadQueuesPaused: !queuesPaused });
+    },
+  });
 
   if (projects.length > 0) {
     const activeProjectTitle =
@@ -2294,6 +2335,8 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push(...pauseItems);
 
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
   const settingsSearchItems: CommandPaletteActionItem[] = searchSettings(
