@@ -832,7 +832,11 @@ const make = Effect.gen(function* () {
     Option.isNone(providerRegistry)
       ? Effect.void
       : alignThreadWithStandingOverride(
-          { getThreadShell: orchestrator.getThreadShell, dispatch: orchestrator.dispatch },
+          {
+            getThreadShell: orchestrator.getThreadShell,
+            getThreadRecords: orchestrator.getThreadRecords,
+            dispatch: orchestrator.dispatch,
+          },
           command.threadId,
           command.scheduledTaskId === undefined ? command.creationSource : "scheduled task",
           command.scheduledTaskId === undefined ? "adhoc" : "tasks",

@@ -14,11 +14,13 @@ import {
   ModelSelection,
   TrimmedNonEmptyString,
   type ModelOverrideScope,
+  type OrchestrationV2ConversationMessage,
 } from "@t3tools/contracts";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { overriddenModelSelection, type ModelOverride } from "@t3tools/shared/modelOverride";
 import * as Clock from "effect/Clock";
+
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -222,6 +224,32 @@ export function userChoseOtherModel(
   return applied !== undefined && !modelSelectionsEqual(current, applied);
 }
 
+/**
+ * Whether the user typed in a thread the override never moved after the
+ * override was set: the model they wrote on is their pick for that thread,
+ * so an automation must not move it either. A task the user created also
+ * posts as "user", so only messages without a task count.
+ */
+export function userWroteSinceOverride(input: {
+  readonly applied: ModelSelection | undefined;
+  readonly messages: ReadonlyArray<
+    Pick<OrchestrationV2ConversationMessage, "createdBy" | "scheduledTaskId" | "createdAt">
+  >;
+  readonly overrideSetAtMs: number | null;
+}): boolean {
+  const setAt = input.overrideSetAtMs;
+  return (
+    input.applied === undefined &&
+    setAt !== null &&
+    input.messages.some(
+      (message) =>
+        message.createdBy === "user" &&
+        message.scheduledTaskId === undefined &&
+        message.createdAt.epochMilliseconds > setAt,
+    )
+  );
+}
+
 /** The overrides in force for task threads and for the others. */
 export const readStandingOverride = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -273,7 +301,10 @@ export function standingSelectionFor(input: {
  * fails: a thread that cannot be aligned simply runs on what it has.
  */
 export const alignThreadWithStandingOverride = (
-  threads: Pick<ThreadManagement.ThreadManagementServiceShape, "getThreadShell" | "dispatch">,
+  threads: Pick<
+    ThreadManagement.ThreadManagementServiceShape,
+    "getThreadShell" | "getThreadRecords" | "dispatch"
+  >,
   threadId: Parameters<ThreadManagement.ThreadManagementServiceShape["getThreadShell"]>[0],
   reason: string,
   messageScope: ThreadScope,
@@ -298,7 +329,33 @@ export const alignThreadWithStandingOverride = (
     const scope = saved[threadId]?.scope ?? messageScope;
     const override = standing[scope];
     if (override === null) return;
-    if (userChoseOtherModel(saved[threadId]?.applied, thread.modelSelection)) {
+    // The rule file is written only when the rule is set or put back, so its
+    // modification time is when the rule began to stand.
+    const overrideSetAtMs = yield* fileSystem.stat(yield* filePath).pipe(
+      Effect.map((info) => Option.getOrNull(Option.map(info.mtime, (mtime) => mtime.getTime()))),
+      Effect.orElseSucceed(() => null),
+    );
+    // The shell's latest "user" message also counts tasks the user created;
+    // read the messages only when it says someone wrote after the rule.
+    const maybeWroteSince =
+      saved[threadId] === undefined &&
+      overrideSetAtMs !== null &&
+      thread.latestUserAuthoredMessageAt != null &&
+      thread.latestUserAuthoredMessageAt.epochMilliseconds > overrideSetAtMs;
+    const userMessages = maybeWroteSince
+      ? yield* threads.getThreadRecords(threadId, ["messages"], { messageRoles: ["user"] }).pipe(
+          Effect.map((records) => records.messages),
+          Effect.orElseSucceed(() => []),
+        )
+      : [];
+    if (
+      userChoseOtherModel(saved[threadId]?.applied, thread.modelSelection) ||
+      userWroteSinceOverride({
+        applied: saved[threadId]?.applied,
+        messages: userMessages,
+        overrideSetAtMs,
+      })
+    ) {
       const current = `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`;
       // A task on a timer comes by every few minutes; the same choice is recorded once.
       const key = `${threadId}\0${current}`;

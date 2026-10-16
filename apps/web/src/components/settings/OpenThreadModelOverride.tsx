@@ -263,7 +263,8 @@ function OpenThreadModelOverrideControls({
           ))}
           <p>
             Until you put it back, a thread that opens later is set to it when a task, an agent or
-            the server writes to it. A message you send keeps the model you picked in the composer.
+            the server writes to it. A thread you have written in since keeps the model you picked
+            in the composer.
           </p>
         </div>
       )}
