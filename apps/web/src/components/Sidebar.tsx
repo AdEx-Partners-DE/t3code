@@ -292,6 +292,7 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { PendingRequestsDialog } from "./PendingRequestsDialog";
 import { PortfolioChecklistDialog } from "./PortfolioChecklistDialog";
+import { onOpenPortfolioChecklists } from "../portfolioChecklistBus";
 import { SidebarAutomationStatus } from "./SidebarAutomationStatus";
 import { SidebarCockpit } from "./SidebarCockpit";
 import { subscribeNextWaitingThread } from "./threadNextWaitingBus";
@@ -4986,6 +4987,14 @@ export default function Sidebar() {
   const [portfolioChecklistOpen, setPortfolioChecklistOpen] = useState(false);
   const [portfolioChecklistStatus, setPortfolioChecklistStatus] =
     useState<ThreadChecklistItem["status"]>("attention");
+  useEffect(
+    () =>
+      onOpenPortfolioChecklists(() => {
+        setPortfolioChecklistStatus("attention");
+        setPortfolioChecklistOpen(true);
+      }),
+    [],
+  );
   const portfolioThreads = useMemo(
     () =>
       portfolioChecklistOpen
