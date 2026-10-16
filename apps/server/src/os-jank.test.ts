@@ -130,7 +130,7 @@ effectIt.effect("keeps mise's PATH record with the login shell PATH", () =>
   ),
 );
 
-effectIt.effect("keeps the prepared Windows PATH when the desktop marks it prepared", () =>
+effectIt.effect("keeps the prepared Windows PATH without probing", () =>
   Effect.gen(function* () {
     const env: NodeJS.ProcessEnv = { PATH: "C:\\Prepared\\Bin;C:\\Windows" };
     const commands: string[] = [];
@@ -139,7 +139,7 @@ effectIt.effect("keeps the prepared Windows PATH when the desktop marks it prepa
       Effect.provideService(HostProcess.Platform, "win32"),
       Effect.provideService(HostProcess.Environment, env),
       Effect.provideService(WindowsShellEnvironment, () => {
-        throw new Error("The prepared Windows environment must not launch another shell");
+        throw new Error("The prepared environment must not launch another shell");
       }),
       Effect.provideService(CommandAvailability, (command) =>
         Effect.sync(() => {
@@ -155,26 +155,18 @@ effectIt.effect("keeps the prepared Windows PATH when the desktop marks it prepa
   }),
 );
 
-effectIt.effect("repairs Windows PATH when the desktop handoff is absent", () =>
+effectIt.effect("replaces a Path-spelled Windows PATH instead of adding a second key", () =>
   Effect.gen(function* () {
     const env: NodeJS.ProcessEnv = { Path: "C:\\Windows" };
-    const commands: string[] = [];
 
     yield* fixPath().pipe(
       Effect.provideService(HostProcess.Platform, "win32"),
       Effect.provideService(HostProcess.Environment, env),
       Effect.provideService(WindowsShellEnvironment, () => ({ PATH: "C:\\Tools" })),
-      Effect.provideService(CommandAvailability, (command) =>
-        Effect.sync(() => {
-          commands.push(command);
-          return true;
-        }),
-      ),
+      Effect.provideService(CommandAvailability, () => Effect.succeed(true)),
       Effect.provide(NodeServices.layer),
     );
 
-    assert.deepEqual(commands, ["node"]);
-    assert.equal(env.PATH, "C:\\Tools;C:\\Windows");
-    assert.equal(env.Path, undefined);
+    assert.deepEqual(env, { PATH: "C:\\Tools;C:\\Windows" });
   }),
 );

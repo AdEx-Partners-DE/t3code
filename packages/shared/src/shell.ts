@@ -877,30 +877,28 @@ function readWindowsEnvironmentSafely(
   }
 }
 
+/** Keep one PATH spelling in copied Windows environment records. */
+export function setWindowsPath(env: NodeJS.ProcessEnv, value: string): void {
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === "PATH") {
+      delete env[key];
+    }
+  }
+  env.PATH = value;
+}
+
 function mergeWindowsEnv(
   currentEnv: NodeJS.ProcessEnv,
   patch: Partial<Record<string, string>>,
 ): NodeJS.ProcessEnv {
   const nextEnv: NodeJS.ProcessEnv = { ...currentEnv };
   for (const [key, value] of Object.entries(patch)) {
-    if (value !== undefined && key.toUpperCase() !== "PATH") {
+    if (value === undefined) continue;
+    if (key === "PATH") {
+      setWindowsPath(nextEnv, value);
+    } else {
       nextEnv[key] = value;
     }
-  }
-  // Windows env keys are case-insensitive, so collapse every PATH spelling into
-  // one key, keeping the patch value readEnvPath would have preferred.
-  const patchPath =
-    readEnvPath(patch) ??
-    Object.entries(patch).find(
-      ([key, value]) => value !== undefined && key.toUpperCase() === "PATH",
-    )?.[1];
-  if (patchPath !== undefined) {
-    for (const existingKey of Object.keys(nextEnv)) {
-      if (existingKey.toUpperCase() === "PATH") {
-        delete nextEnv[existingKey];
-      }
-    }
-    nextEnv.PATH = patchPath;
   }
   return nextEnv;
 }
