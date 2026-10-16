@@ -34,6 +34,7 @@ import {
   cancelledTurnItemWork,
   isWorktreeContinuationRun,
   mergeRestartCancelledBackgroundWork,
+  restartPromptSource,
 } from "./RestartBackgroundNote.ts";
 
 export class ProviderRuntimeRecoveryError extends Schema.TaggedError<ProviderRuntimeRecoveryError>()(
@@ -738,6 +739,15 @@ export const make = Effect.gen(function* () {
             settingOn: continueAfterRestart,
             runId: cut.id,
             runStatus: cut.status,
+            // The continuation sends the original message again: it never reached the provider.
+            resendsMessage:
+              continuationRun !== undefined &&
+              restartPromptSource(
+                continuationRun,
+                asRecoveryBegan.runs,
+                asRecoveryBegan.providerTurns,
+                asRecoveryBegan.attempts,
+              ) !== undefined,
             cutRuns: runs.length,
             queuedRuns: queuedRuns.length,
             threadInstance: projection.thread.providerInstanceId,
