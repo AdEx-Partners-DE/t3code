@@ -18,6 +18,7 @@ import {
   unavailable,
 } from "../../threadAccess.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
+import * as ThreadChecklistService from "../../../orchestration-v2/ThreadChecklist.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
 import { ThreadToolkit } from "./tools.ts";
@@ -176,6 +177,32 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
       };
+    }),
+  ),
+  t3_thread_checklist: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const {
+        projection: { thread },
+      } = yield* readThread(input.threadId);
+      const checklists = yield* ThreadChecklistService.ThreadChecklist;
+      const checklist = yield* checklists.read(thread.id).pipe(Effect.mapError(unavailable));
+      return { checklist };
+    }),
+  ),
+  t3_thread_checklist_set: writesThread((input) =>
+    Effect.gen(function* () {
+      const {
+        projection: { thread },
+      } = yield* readThread(input.threadId);
+      const checklists = yield* ThreadChecklistService.ThreadChecklist;
+      const checklist = yield* checklists
+        .write({
+          threadId: thread.id,
+          trigger: "manual",
+          setItem: { text: input.text, status: input.status },
+        })
+        .pipe(Effect.mapError(unavailable));
+      return { checklist };
     }),
   ),
   t3_thread_configure: writesThread((input) =>

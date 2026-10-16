@@ -23,6 +23,8 @@ export type T3McpToolSummaryAction =
   | "thread-interrupt"
   | "workflow-stop"
   | "thread-configuration"
+  | "thread-checklist"
+  | "thread-checklist-set"
   | "thread-configure"
   | "thread-fork"
   | "thread-merge"
@@ -293,6 +295,11 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "thread-configuration",
   ),
   t3_thread_configure: tool(["Set", "Setting", "Set", "thread model"], "thread-configure"),
+  t3_thread_checklist: tool(["Read", "Reading", "Read", "thread checklist"], "thread-checklist"),
+  t3_thread_checklist_set: tool(
+    ["Update", "Updating", "Updated", "thread checklist"],
+    "thread-checklist-set",
+  ),
   t3_thread_fork: tool(["Fork", "Forking", "Requested a fork of", "this thread"], "thread-fork"),
   t3_thread_merge_back: tool(
     ["Merge", "Merging", "Requested a merge of", "thread context"],

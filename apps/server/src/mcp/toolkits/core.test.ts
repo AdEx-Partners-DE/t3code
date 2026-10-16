@@ -39,6 +39,7 @@ import * as ThreadLaunchService from "../../orchestration-v2/ThreadLaunchService
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
+import * as ThreadChecklist from "../../orchestration-v2/ThreadChecklist.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as GitWorkflow from "../../git/GitWorkflowService.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
@@ -87,6 +88,7 @@ const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadR
 
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+  Layer.provide(Layer.mock(ThreadChecklist.ThreadChecklist)({})),
   Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
 );
 
@@ -882,4 +884,90 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
       ),
     ),
   ),
+);
+
+it.effect(
+  "agents read a thread's checklist and set a point through the shared checklist service",
+  () => {
+    const writes: Array<unknown> = [];
+    const checklist = {
+      threadId: ThreadId.make("other-project-thread"),
+      generatedAt: "2026-10-16T16:00:00.000Z",
+      basedOnRunId: null,
+      items: [{ text: "Deploy prüfen", status: "open" as const }],
+    };
+    return Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const call = (name: string, args: Record<string, unknown>) =>
+        server
+          .callTool({ name, arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope("auto")),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+
+      const read = yield* call("t3_thread_checklist", { threadId: "other-project-thread" });
+      expect(read.isError).toBe(false);
+      expect(read.structuredContent).toMatchObject({ checklist: { items: checklist.items } });
+
+      const set = yield* call("t3_thread_checklist_set", {
+        threadId: "other-project-thread",
+        text: "Deploy prüfen",
+        status: "done",
+      });
+      expect(set.isError).toBe(false);
+      expect(writes).toEqual([
+        {
+          threadId: "other-project-thread",
+          trigger: "manual",
+          setItem: { text: "Deploy prüfen", status: "done" },
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        McpHttpServer.layerThreadToolkit.pipe(
+          Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+          Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+          Layer.provide(
+            Layer.mock(ThreadChecklist.ThreadChecklist)({
+              read: () => Effect.succeed(checklist as never),
+              write: (input) =>
+                Effect.sync(() => {
+                  writes.push(input);
+                  return {
+                    ...checklist,
+                    items: [
+                      { text: "Deploy prüfen", status: "done" as const, setByUser: true as const },
+                    ],
+                  } as never;
+                }),
+            }),
+          ),
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(NodeCrypto.layer),
+          Layer.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadShell: () =>
+                Effect.succeed({
+                  id: ThreadId.make("other-project-thread"),
+                  projectId: "other-project",
+                  deletedAt: null,
+                } as never),
+              getProjectThreadRecords: () =>
+                Effect.succeed({
+                  thread: {
+                    id: ThreadId.make("other-project-thread"),
+                    projectId: "other-project",
+                    modelSelection: { instanceId: "codex", model: "gpt-5" },
+                    runtimeMode: "auto",
+                    interactionMode: "default",
+                    deletedAt: null,
+                  },
+                } as never),
+            }),
+          ),
+        ),
+      ),
+    );
+  },
 );

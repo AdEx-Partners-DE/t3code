@@ -14,10 +14,12 @@ import {
   type ThreadChecklistItem,
   type ThreadId,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -254,3 +256,14 @@ export const make = Effect.gen(function* () {
     turnsBehind,
   };
 });
+
+/**
+ * One instance per server, so the client, agents and the portfolio run share the locks that keep
+ * a checklist from being rewritten twice at once.
+ */
+export class ThreadChecklist extends Context.Service<
+  ThreadChecklist,
+  Effect.Success<typeof make>
+>()("t3/orchestration-v2/ThreadChecklist") {}
+
+export const layer = Layer.effect(ThreadChecklist, make);

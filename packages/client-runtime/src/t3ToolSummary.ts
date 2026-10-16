@@ -216,6 +216,12 @@ export function summarizeT3ToolCalls(
     case "thread-configure":
       label = phrase("Set", "set", `thread model ${times}`);
       break;
+    case "thread-checklist":
+      label = phrase("Checked", "check", `thread checklist ${times}`);
+      break;
+    case "thread-checklist-set":
+      label = phrase("Updated", "update", `thread checklist ${times}`);
+      break;
     case "thread-fork":
       label = phrase("Requested", "request", quantity(selected.length, "thread fork"));
       break;

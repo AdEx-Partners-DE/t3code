@@ -18,12 +18,15 @@ import {
   RunId,
   NonNegativeInt,
   ProjectId,
+  ThreadChecklist,
+  ThreadChecklistItem,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
+import * as ThreadChecklistService from "../../../orchestration-v2/ThreadChecklist.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -254,6 +257,30 @@ const ThreadSearchTool = Tool.make("t3_thread_search", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
+const ThreadChecklistTool = Tool.make("t3_thread_checklist", {
+  ...commandTool,
+  description:
+    "Read a thread's checklist: the points the user still has open there, as the app's checklist panel shows them. Omit threadId for this thread. attention is something the user has to do, decide or know; open is work you can carry on by yourself; backlog is parked; done is finished. checklist is null while the thread has none yet. Read it before ending a turn on long work, so open points are not left behind.",
+  parameters: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
+  success: Schema.Struct({ checklist: Schema.NullOr(ThreadChecklist) }),
+  dependencies: [...commandTool.dependencies, ThreadChecklistService.ThreadChecklist],
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+
+const ThreadChecklistSetTool = Tool.make("t3_thread_checklist_set", {
+  ...commandTool,
+  description:
+    "Set the status of one point on a thread's checklist, matched by its exact text from t3_thread_checklist. Omit threadId for this thread. Mark a point done only when the work is finished and shown to be; use attention for something only the user can do. The status stays as set when the checklist is rewritten, like one the user set in the panel, until the user gives it back.",
+  parameters: Schema.Struct({
+    threadId: Schema.optional(ThreadId),
+    text: ThreadChecklistItem.fields.text,
+    status: ThreadChecklistItem.fields.status,
+  }),
+  success: Schema.Struct({ checklist: ThreadChecklist }),
+  dependencies: [...commandTool.dependencies, ThreadChecklistService.ThreadChecklist],
+}).annotate(Tool.Destructive, false);
+
 const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   ...commandTool,
   description:
@@ -279,6 +306,8 @@ export const ThreadToolkit = Toolkit.make(
   ThreadTransfersTool,
   ThreadConfigurationTool,
   ThreadConfigureTool,
+  ThreadChecklistTool,
+  ThreadChecklistSetTool,
   PendingRequestListTool,
   PendingRequestReadTool,
   PendingRequestRespondTool,
