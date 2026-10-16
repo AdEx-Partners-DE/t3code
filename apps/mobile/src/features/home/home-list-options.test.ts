@@ -122,6 +122,29 @@ describe("home list options across layout changes", () => {
     expect(saved).toEqual([]);
 
     await act(() => latest.setSelectedProjectKey(null));
-    expect(saved).toEqual([{ threadListFilters: { environmentId, projectKey: null } }]);
+    expect(saved).toEqual([
+      { threadListFilters: { environmentId, projectKey: null, projectSortOrder: "updated_at" } },
+    ]);
+  });
+
+  it("restores the saved project sort on launch and saves a new choice", async () => {
+    await showLayout("compact", {
+      environmentId: null,
+      projectKey: null,
+      projectSortOrder: "created_at",
+    });
+    expect(latest.options.projectSortOrder).toBe("created_at");
+    expect(saved).toEqual([]);
+
+    await act(() => latest.setProjectSortOrder("updated_at"));
+    expect(saved).toEqual([
+      {
+        threadListFilters: {
+          environmentId: null,
+          projectKey: null,
+          projectSortOrder: "updated_at",
+        },
+      },
+    ]);
   });
 });

@@ -34,9 +34,10 @@ function defaultHomeListOptions(filters?: ThreadListFilters): HomeListOptions {
     selectedEnvironmentId: filters?.environmentId ?? null,
     selectedProjectKey: filters?.projectKey ?? null,
     projectSortOrder:
-      DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
+      filters?.projectSortOrder ??
+      (DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
         ? "updated_at"
-        : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
+        : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER),
   };
 }
 
@@ -59,16 +60,22 @@ export function HomeListOptionsProvider({
   const [options, setOptions] = useState(() => defaultHomeListOptions(savedFilters));
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const saved = useRef(savedFilters);
-  const { selectedEnvironmentId: environmentId, selectedProjectKey: projectKey } = options;
+  const {
+    selectedEnvironmentId: environmentId,
+    selectedProjectKey: projectKey,
+    projectSortOrder,
+  } = options;
   useEffect(() => {
     if (
       (saved.current?.environmentId ?? null) === environmentId &&
-      (saved.current?.projectKey ?? null) === projectKey
+      (saved.current?.projectKey ?? null) === projectKey &&
+      (saved.current?.projectSortOrder ?? defaultHomeListOptions().projectSortOrder) ===
+        projectSortOrder
     )
       return;
-    saved.current = { environmentId, projectKey };
+    saved.current = { environmentId, projectKey, projectSortOrder };
     savePreferences({ threadListFilters: saved.current });
-  }, [environmentId, projectKey, savePreferences]);
+  }, [environmentId, projectKey, projectSortOrder, savePreferences]);
   const value = useMemo(
     () => ({ options, setOptions, projectGroupingMode }),
     [options, projectGroupingMode],
