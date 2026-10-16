@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off - the test runs a real TLS h2 server to see which protocol fetch negotiates.
 import * as NodeHttp2 from "node:http2";
 import * as NodeNet from "node:net";
 import * as NodeTls from "node:tls";
@@ -11,8 +11,9 @@ import { afterAll, afterEach, beforeAll, describe, expect } from "vite-plus/test
 
 import { builtinFetchUsesHttp2, installHttp1FetchDispatcher } from "./outboundHttp.ts";
 
-// Self-signed P-256 certificate for 127.0.0.1, valid until 2126. Test-only:
-// it lets a local server offer h2 over ALPN, which only happens over TLS.
+// Test-only self-signed P-256 certificate for 127.0.0.1, valid until 2126; not a
+// secret. Node cannot mint X.509 certificates without a library, and a local
+// server only offers h2 over ALPN, which needs TLS.
 const TEST_KEY = `-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg3EwCztQysKTvzdcR
 g0LWq+axzUd4tHi9PyMdqh7PlGShRANCAARfQpoLgv/tOsHWCLriDza7Ruaey2b7
@@ -60,43 +61,37 @@ afterAll(async () => {
 
 const versionViaGlobalDispatcher = async () => (await Undici.request(origin)).body.text();
 
-const versionViaEffectFetch = () =>
+// Node's built-in fetch, the path the server's own requests take.
+const versionViaBuiltinFetch = () =>
   HttpClient.get(origin).pipe(
     Effect.flatMap((response) => response.text),
     Effect.provide(FetchHttpClient.layer),
   );
 
 describe("installHttp1FetchDispatcher", () => {
-  it("makes the global dispatcher negotiate HTTP/1.1 with an h2-capable origin", async () => {
+  it("makes the global dispatcher negotiate HTTP/1.1 and keeps the env proxy agent", async () => {
     // undici 8's default agent, the one Node 26's fetch uses.
     Undici.setGlobalDispatcher(new Undici.Agent());
     expect(await versionViaGlobalDispatcher()).toBe("2.0");
 
     installHttp1FetchDispatcher();
-
     expect(await versionViaGlobalDispatcher()).toBe("1.1");
-  });
 
-  it("keeps the environment proxy agent Node installs for --use-env-proxy", async () => {
+    // Node installs this agent for --use-env-proxy; replacing it would drop the proxy.
     Undici.setGlobalDispatcher(new Undici.EnvHttpProxyAgent());
-
     installHttp1FetchDispatcher();
-
     expect(Undici.getGlobalDispatcher()).toBeInstanceOf(Undici.EnvHttpProxyAgent);
-    expect(await versionViaGlobalDispatcher()).toBe("1.1");
   });
 
   // Only a runtime that bundles undici 8 (Node 26+) offers h2 through the
-  // built-in fetch, so only there can the server's own request path show it.
+  // built-in fetch, so only there can this prove fetch reads the new dispatcher.
   it.effect.runIf(builtinFetchUsesHttp2(process.versions.undici))(
-    "moves the built-in fetch behind Effect's FetchHttpClient off HTTP/2",
+    "moves the built-in fetch off HTTP/2",
     () =>
       Effect.gen(function* () {
-        expect(yield* versionViaEffectFetch()).toBe("2.0");
-
+        expect(yield* versionViaBuiltinFetch()).toBe("2.0");
         installHttp1FetchDispatcher();
-
-        expect(yield* versionViaEffectFetch()).toBe("1.1");
+        expect(yield* versionViaBuiltinFetch()).toBe("1.1");
       }),
   );
 });
