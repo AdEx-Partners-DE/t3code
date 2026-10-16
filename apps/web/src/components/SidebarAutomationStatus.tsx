@@ -60,7 +60,10 @@ export function SidebarAutomationStatus({
       ? [
           tasksPaused && held.length > 0
             ? `${held.length} ${held.length === 1 ? "automation" : "automations"} paused${oldestDue === undefined ? "" : `, a run has been due since ${relativeLabel(oldestDue)}`}${running > 0 ? ` · ${running} on` : ""}`
-            : `${enabledCount} ${enabledCount === 1 ? "automation" : "automations"} on`,
+            : tasksPaused && enabledCount === 0
+              ? // Nothing is on, but the pause still holds any task switched on later.
+                "automations paused"
+              : `${enabledCount} ${enabledCount === 1 ? "automation" : "automations"} on`,
         ]
       : []),
     ...(queuesPaused ? ["queues paused"] : []),
