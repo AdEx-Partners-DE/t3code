@@ -68,6 +68,7 @@ import {
   FolderPlusIcon,
   MessageSquareDashedIcon,
   LinkIcon,
+  ListChecksIcon,
   MessageSquareIcon,
   MonitorIcon,
   MoonIcon,
@@ -107,6 +108,7 @@ import {
   copyPromptLink,
   promptLinkRepositoryOf,
 } from "./promptLinks/copyPromptLink";
+import { openPortfolioChecklists } from "../portfolioChecklistBus";
 import {
   useClientSettings,
   usePrimarySettings,
@@ -2300,6 +2302,16 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  actionItems.push({
+    kind: "action",
+    value: "action:open-portfolio-checklists",
+    searchTerms: ["checklists", "checklist", "open points", "all threads", "to do"],
+    title: "Checklists for all threads",
+    icon: <ListChecksIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      openPortfolioChecklists();
+    },
+  });
   actionItems.push(...pauseItems);
 
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
