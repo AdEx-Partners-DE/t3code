@@ -1846,6 +1846,16 @@ function OpenCommandPaletteDialog(props: {
       await updatePrimarySettings({ threadQueuesPaused: !queuesPaused });
     },
   });
+  pauseItems.push({
+    kind: "action",
+    value: "action:open-thread-model-override",
+    searchTerms: ["model for all open threads", "model rule", "switch model", "put back"],
+    title: "Model for all open threads…",
+    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/settings/general" });
+    },
+  });
 
   if (projects.length > 0) {
     const activeProjectTitle =

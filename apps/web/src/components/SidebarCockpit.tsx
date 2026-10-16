@@ -16,12 +16,14 @@ import {
 
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { randomUUID } from "../lib/utils";
+import { useEnvironment } from "../state/environments";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import type { OpenThreadFilter, OpenThreadSummary } from "./Sidebar.logic";
 import { accountBalanceHint } from "./usage/accountBalanceHint";
 import { buildUsageBurn } from "./usage/usageBurn";
 import { buildUsageLimitTrend } from "./usage/usageLimitTrend";
+import { type StandingOverride, standingOverrideLine } from "./usage/standingOverrideLine";
 
 const COCKPIT_EXPANDED_KEY = "t3code:sidebar:cockpit-expanded";
 const BURN_HOURS = 24;
@@ -148,6 +150,9 @@ export function SidebarCockpit({
           )}
           {environmentId === null ? null : (
             <CockpitChecklists environmentId={environmentId} onOpen={onOpenChecklists} />
+          )}
+          {environmentId === null ? null : (
+            <CockpitStandingOverride environmentId={environmentId} />
           )}
           {environmentId === null ? null : (
             <CockpitAccountBalance environmentId={environmentId} nowMs={nowMs} />
@@ -435,6 +440,66 @@ function CockpitBurn({
 }
 
 /**
+ * The standing model override, read once connected (a read before that fails and nothing would
+ * retry it), again after each reconnect, and when the window regains focus: it has no push, and it
+ * can change in the settings, another browser, or the phone. A call without a model reads it and
+ * changes nothing.
+ */
+function useStandingModelOverride(environmentId: EnvironmentId): StandingOverride | null {
+  const allowed = useAtomValue(
+    serverEnvironment.overrideOpenThreadModels.permissionAtom(environmentId),
+  );
+  const connected = useEnvironment(environmentId)?.connection.phase === "connected";
+  const readOverride = useAtomCommand(serverEnvironment.overrideOpenThreadModels);
+  const [standing, setStanding] = useState<StandingOverride | null>(null);
+  useEffect(() => {
+    if (!allowed || !connected) return;
+    let current = true;
+    const read = () =>
+      void readOverride({ environmentId, input: { commandId: CommandId.make(randomUUID()) } }).then(
+        (result) => {
+          if (current && result._tag === "Success") setStanding(result.value.standing);
+        },
+      );
+    read();
+    window.addEventListener("focus", read);
+    return () => {
+      current = false;
+      window.removeEventListener("focus", read);
+    };
+  }, [allowed, connected, readOverride, environmentId]);
+  return standing;
+}
+
+/** While a standing model override is in force; a click opens the setting that puts it back. */
+function CockpitStandingOverride({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const providers =
+    useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  const standing = useStandingModelOverride(environmentId);
+  const navigate = useNavigate();
+  const line =
+    standing === null
+      ? null
+      : standingOverrideLine(
+          standing,
+          (instanceId) =>
+            providers.find((provider) => provider.instanceId === instanceId)?.displayName ??
+            instanceId,
+        );
+  if (line === null) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void navigate({ to: "/settings/general" })}
+      className="cursor-pointer rounded-sm text-left hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+      data-testid="sidebar-cockpit-standing-override"
+    >
+      {line}. <span className="underline underline-offset-2">Change</span>
+    </button>
+  );
+}
+
+/**
  * Shown only when the account a standing model override sends work to runs out of its week
  * before the reset while another account of the same provider would leave allowance unused. The
  * switch at the limit acts only at 100%; a click opens the setting where the override is changed.
@@ -453,32 +518,18 @@ function CockpitAccountBalance({
   const input = useMemo(() => ({ since: new Date(sinceMs).toISOString() }), [sinceMs]);
   const result = useAtomValue(serverEnvironment.usageLimitHistory({ environmentId, input }));
   const history = Option.getOrNull(AsyncResult.value(result));
-  // A call without a model reads the standing override and changes nothing.
-  const allowed = useAtomValue(
-    serverEnvironment.overrideOpenThreadModels.permissionAtom(environmentId),
-  );
-  const readOverride = useAtomCommand(serverEnvironment.overrideOpenThreadModels);
-  const [overrideInstanceIds, setOverrideInstanceIds] = useState<ReadonlyArray<string>>([]);
-  useEffect(() => {
-    if (!allowed) return;
-    let current = true;
-    void readOverride({ environmentId, input: { commandId: CommandId.make(randomUUID()) } }).then(
-      (read) => {
-        if (!current || read._tag !== "Success") return;
-        const { tasks, adhoc } = read.value.standing;
-        setOverrideInstanceIds(
-          [tasks, adhoc].flatMap((part) =>
+  const standing = useStandingModelOverride(environmentId);
+  const overrideInstanceIds = useMemo(
+    () =>
+      standing === null
+        ? []
+        : [standing.tasks, standing.adhoc].flatMap((part) =>
             part?.model === undefined || part.keepOwnAccount === true
               ? []
               : [part.model.instanceId],
           ),
-        );
-      },
-    );
-    return () => {
-      current = false;
-    };
-  }, [allowed, readOverride, environmentId]);
+    [standing],
+  );
   const hint = useMemo(() => {
     if (history === null || overrideInstanceIds.length === 0) return null;
     const accounts = buildUsageLimitTrend({ history, providers, sinceMs, nowMs });
