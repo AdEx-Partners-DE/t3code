@@ -66,7 +66,7 @@ const OrchestratorMcpSchedule = Schema.Union([
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Trigger object: {type:'interval', everyMs}, {type:'fixed_time', timeOfDay, weekdays?}, or {type:'webhook'} to run on each request to a generated URL. Never stringify it unless the provider requires the compatibility form.",
+    "Trigger object: {type:'interval', everyMs}, {type:'fixed_time', timeOfDay, weekdays?}, {type:'webhook'} to run on each request to a generated URL, or {type:'idle', maxRuns, minPauseMs} to run when the bound thread has finished and nothing waits on the user. Never stringify it unless the provider requires the compatibility form.",
 });
 
 /**
