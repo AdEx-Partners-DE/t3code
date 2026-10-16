@@ -187,8 +187,12 @@ export function restartContinuationRun(
   )
     return;
   if (settled) return hasOpenAwaitedWork(projection, providerThread) ? run : undefined;
+  // A run cut before its provider turn began never reached the provider; its
+  // continuation sends the original message again (see restartPromptSource).
   if (
     liveTurnRequired &&
+    restartPromptSource(run, projection.runs, projection.providerTurns, projection.attempts) ===
+      undefined &&
     !projection.providerTurns.some(
       (turn) =>
         turn.providerThreadId === providerThread.id &&

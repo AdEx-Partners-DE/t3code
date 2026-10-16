@@ -201,13 +201,25 @@ export function restartContinuationNote(
 export const isWorktreeContinuationRun = (run: Pick<OrchestrationV2Run, "userMessageId">) =>
   /^message:mcp:[^:]+:worktree-continuation:/.test(run.userMessageId);
 
-/** A handoff or replacement prompt that never reached the provider. */
+/**
+ * A handoff, replacement prompt, or started message that never reached the
+ * provider. A run is marked running before its turn starts, so a restart in
+ * between leaves a started run with no provider turn.
+ */
 export function restartPromptSource(
   source: OrchestrationV2Run,
   runs: ReadonlyArray<OrchestrationV2Run>,
   providerTurns: ReadonlyArray<Pick<ProviderTurnState, "runAttemptId">>,
   attempts: ReadonlyArray<PromptAttempt>,
 ): OrchestrationV2Run | undefined {
+  // A continuation's own message is "continue" or a copy, possibly with the note.
+  if (
+    source.restartContinuationOfRunId === undefined &&
+    source.startedAt != null &&
+    source.activeAttemptId !== null &&
+    !providerTurns.some((turn) => turn.runAttemptId === source.activeAttemptId)
+  )
+    return source;
   const visited = new Set<string>();
   let current: OrchestrationV2Run | undefined = source;
   while (current !== undefined && !visited.has(current.id)) {

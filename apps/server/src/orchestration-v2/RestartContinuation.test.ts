@@ -905,6 +905,55 @@ it.effect(
     }),
 );
 
+it.effect("sends a started message again when the restart came before its provider turn", () =>
+  Effect.gen(function* () {
+    // A run is marked running before the adapter starts its turn.
+    const live = makeProjection();
+    const started = {
+      ...live,
+      runs: [{ ...live.runs[0]!, startedAt: testNow }],
+      providerTurns: [],
+    } as unknown as OrchestrationV2ThreadProjection;
+    assert.equal(restartContinuationRun(started, testNow)?.id, runId);
+    // Never started, or the provider thread has no saved native thread: no continuation.
+    for (const invalid of [
+      { ...started, runs: [{ ...started.runs[0]!, startedAt: null }] },
+      {
+        ...started,
+        providerThreads: [{ ...started.providerThreads[0]!, nativeThreadRef: null }],
+      },
+    ])
+      assert.isUndefined(
+        restartContinuationRun(invalid as OrchestrationV2ThreadProjection, testNow),
+      );
+    const message = {
+      id: MessageId.make("message:user"),
+      text: "Background subagent finished: review the result.",
+      attachments: [{ type: "image", id: "attachment:screenshot" }],
+    };
+    const cut = {
+      ...cutMidTurn({ startedAt: testNow }),
+      providerTurns: [],
+      messages: [message],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const [dispatch] = yield* continuationDispatches(cut);
+    assert.equal(dispatch?.text, message.text);
+    assert.deepEqual(
+      dispatch?.attachments.map((attachment) => attachment.id),
+      ["attachment:screenshot"],
+    );
+    assert.isUndefined(dispatch?.notification);
+    // Once a provider turn began, the turn resumes natively instead.
+    assert.deepEqual(
+      yield* continuationTexts({
+        ...cut,
+        providerTurns: cutMidTurn().providerTurns,
+      } as OrchestrationV2ThreadProjection),
+      ["Continue where you left off."],
+    );
+  }),
+);
+
 it.effect.each(["interval", "fixed_time", "webhook"] as const)(
   "keeps %s task attribution through repeated restart continuations",
   (trigger) =>

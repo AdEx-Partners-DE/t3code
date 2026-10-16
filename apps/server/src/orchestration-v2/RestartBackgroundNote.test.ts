@@ -15,6 +15,7 @@ import {
   pendingRestartCancelledBackgroundWork,
   restartCancelledBackgroundWorkNote,
   restartContinuationNote,
+  restartPromptSource,
   mergeRestartCancelledBackgroundWork,
 } from "./RestartBackgroundNote.ts";
 
@@ -63,6 +64,21 @@ it("prompts a continuation whose steering restart never started a provider turn"
     userMessageId: MessageId.make("message:mcp:session:worktree-continuation:request"),
   };
   assert.isTrue(isRestartNoteContinuation(continuation, [handoff, continuation], [], []));
+});
+
+it("resends a started message whose provider turn never began", () => {
+  const startedAt = DateTime.makeUnsafe("2026-10-16T09:00:00.000Z");
+  const source = run(1, claudeThread, { status: "cancelled", startedAt });
+  assert.equal(restartPromptSource(source, [source], [], [])?.id, source.id);
+  assert.isUndefined(restartPromptSource(source, [source], [turnFor(source)], []));
+  assert.isUndefined(restartPromptSource({ ...source, startedAt: null }, [source], [], []));
+  // A continuation's own message is not the user's; it is never resent.
+  const continuation = run(2, claudeThread, {
+    status: "cancelled",
+    startedAt,
+    restartContinuationOfRunId: RunId.make("run:0"),
+  });
+  assert.isUndefined(restartPromptSource(continuation, [continuation], [], []));
 });
 
 it("keeps the note for the provider thread that lost the work across a provider switch", () => {
