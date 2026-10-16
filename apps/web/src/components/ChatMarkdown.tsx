@@ -5,6 +5,7 @@ import {
   resolvePathLinkTarget,
 } from "@t3tools/shared/fileLinks";
 import {
+  bracketSpacedFileLinkDestinations,
   isWindowsDrivePathHref,
   normalizeMarkdownLinkDestination,
   extractInlineCodeSpans,
@@ -3432,13 +3433,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
 } satisfies Components;
 
 function ChatMarkdown({
-  text,
+  text: rawText,
   className,
   lineBreaks = false,
   parseRawHtml = true,
   extraRemarkPlugins = EMPTY_REMARK_PLUGINS,
   ...props
 }: ChatMarkdownProps) {
+  const text = useMemo(() => bracketSpacedFileLinkDestinations(rawText), [rawText]);
   const {
     componentState,
     handleCopy,

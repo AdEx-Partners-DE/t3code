@@ -420,3 +420,46 @@ export function resolveMarkdownFileLinkTarget(
 export function isWindowsDrivePathHref(href: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(safeDecodeURIComponent(href));
 }
+
+const SPACED_LINK_PATTERN = /(!?\[[^\]\n]*\]\()([^()<>"'\n]* [^()<>"'\n]*)\)/g;
+function looksLikeLocalPath(destination: string): boolean {
+  if (/^[A-Za-z]:[\\/]/.test(destination)) return true;
+  // `https:`, `mailto:` and other schemes; a drive letter is one character and matched above.
+  if (/^[A-Za-z][A-Za-z0-9+.-]+:/.test(destination)) return false;
+  return /[\\/]/.test(destination) || /\.[A-Za-z0-9]{1,8}(?::\d+)*$/.test(destination);
+}
+
+function bracketSpacedDestinationsInLine(line: string): string {
+  // Inline code keeps its text: only the parts between backtick spans are rewritten.
+  return line
+    .split(/(`+[^`]*`+)/)
+    .map((part) =>
+      part.startsWith("`")
+        ? part
+        : part.replace(SPACED_LINK_PATTERN, (match, opener: string, destination: string) =>
+            looksLikeLocalPath(destination.trim()) ? `${opener}<${destination.trim()}>)` : match,
+          ),
+    )
+    .join("");
+}
+
+/**
+ * Agents write local file links like `[x](C:/My Projects/a.md)`. CommonMark refuses a bare
+ * destination with spaces, so the link renders as plain text. Wrapping such a destination in
+ * `<...>` is the valid spelling of the same link. Web links, titles and code stay untouched.
+ */
+export function bracketSpacedFileLinkDestinations(markdown: string): string {
+  if (!markdown.includes("](")) return markdown;
+  let fence: string | null = null;
+  return markdown
+    .split("\n")
+    .map((line) => {
+      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+      if (marker && (fence === null || marker.startsWith(fence))) {
+        fence = fence === null ? marker : null;
+        return line;
+      }
+      return fence === null && line.includes("](") ? bracketSpacedDestinationsInLine(line) : line;
+    })
+    .join("\n");
+}

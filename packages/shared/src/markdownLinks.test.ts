@@ -9,6 +9,7 @@ import {
 } from "./markdownLinks.ts";
 
 import {
+  bracketSpacedFileLinkDestinations,
   inlineCodeFilePathCandidate,
   isMarkdownFileLinkLabel,
   parseMarkdownFileLink,
@@ -343,5 +344,51 @@ describe("resolveMarkdownFileLinkTarget", () => {
     expect(resolveMarkdownFileLinkTarget("file:///c%3A/Users/x/shot.png")).toBe(
       "c:/Users/x/shot.png",
     );
+  });
+});
+
+describe("bracketSpacedFileLinkDestinations", () => {
+  it.each([
+    [
+      "[AGENTS.md](C:/Users/me/Main Projects/repo/AGENTS.md)",
+      "[AGENTS.md](<C:/Users/me/Main Projects/repo/AGENTS.md>)",
+    ],
+    [
+      "[shot](C:\\Users\\me\\Screenshots 1\\a.png)",
+      "[shot](<C:\\Users\\me\\Screenshots 1\\a.png>)",
+    ],
+    [
+      "see [message](path/to a spaced repo/file) here",
+      "see [message](<path/to a spaced repo/file>) here",
+    ],
+    ["![img](./My Folder/a b.png)", "![img](<./My Folder/a b.png>)"],
+    ["[notes](My Notes.md:12)", "[notes](<My Notes.md:12>)"],
+  ])("brackets %s", (input, expected) => {
+    expect(bracketSpacedFileLinkDestinations(input)).toBe(expected);
+  });
+
+  it.each([
+    ["[site](https://example.com/a b)"],
+    ["[mail](mailto:me@example.com subject)"],
+    ['[a](src/a.ts "a title")'],
+    ["[a](<C:/My Projects/a.md>)"],
+    ["[a](src/a.ts)"],
+    ["[just words](not a path)"],
+    ["`[a](C:/My Projects/a.md)`"],
+  ])("leaves %s alone", (input) => {
+    expect(bracketSpacedFileLinkDestinations(input)).toBe(input);
+  });
+
+  it("leaves fenced code alone and resumes after the fence", () => {
+    const input = "```md\n[a](C:/My Projects/a.md)\n```\n[b](C:/My Projects/b.md)";
+    expect(bracketSpacedFileLinkDestinations(input)).toBe(
+      "```md\n[a](C:/My Projects/a.md)\n```\n[b](<C:/My Projects/b.md>)",
+    );
+  });
+
+  it("returns links the parser now reads as one file link", () => {
+    expect(
+      extractMarkdownLinkHrefs(bracketSpacedFileLinkDestinations("[a](C:/My Projects/a.md)")),
+    ).toEqual(["C:/My Projects/a.md"]);
   });
 });
