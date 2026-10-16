@@ -130,7 +130,6 @@ const providerInstance = {
   },
   displayName: "Codex test",
   enabled: true,
-  // No supportedRuntimeModes: every runtime mode runs as stored.
   snapshot: { getSnapshot: Effect.succeed({}) } as unknown as ProviderInstance["snapshot"],
   orchestrationAdapter,
   textGeneration: {} as ProviderInstance["textGeneration"],
@@ -165,8 +164,6 @@ const layerTestProviderInstanceRegistry = Layer.succeed(
   },
 );
 
-/** Seed a project row the way a committed `project.created` event folds into it. */
-/** A watched pull request as the host reports it: open, mergeable, with a failing lint check. */
 const watchedPullRequestDetail = (input: {
   readonly projectId: ProjectId;
   readonly number: number;
@@ -249,7 +246,6 @@ const seedProject = (input: {
     }),
   );
 
-/** Move a seeded project the way a committed `project.meta-updated` event does. */
 const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: string) =>
   Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
     projects.apply({
@@ -533,10 +529,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
     }),
   );
 
-  /**
-   * A thread with one ready checkpoint and no queued turn start. Every provider
-   * rollback on it fails, so each rollback effect retries until it gives up.
-   */
   const seedFailingRollbackThread = (name: string) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -555,7 +547,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         runtimeMode: "full-access",
         interactionMode: "default",
         branch: null,
-        // Its own path, so other rollback tests keep an isolated worktree.
         worktreePath: `/tmp/t3-${name}`,
       });
       yield* orchestrator.dispatch({
@@ -597,7 +588,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
           },
         ],
       });
-      // These tests cover rollback only, so drop the first message's start.
       yield* outbox.cancelUnsettled({
         threadId,
         effectTypes: ["provider-turn.start"],
@@ -626,7 +616,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
 
       const rollbackCommandId = CommandId.make("runtime-rollback-failure-rollback");
       yield* rollback(rollbackCommandId);
-      // Retries back off on the clock; advance it until the worker gives up.
       for (let attempt = 0; attempt < 5; attempt++) {
         yield* worker.drain();
         yield* TestClock.adjust("30 seconds");
@@ -657,14 +646,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
 
       const olderCommandId = CommandId.make("runtime-rollback-superseded-older");
       yield* rollback(olderCommandId);
-      // Spend every attempt but the last.
       for (let attempt = 0; attempt < 4; attempt++) {
         yield* worker.drain();
         yield* TestClock.adjust("30 seconds");
       }
       const newerCommandId = CommandId.make("runtime-rollback-superseded-newer");
       yield* rollback(newerCommandId);
-      // The older rollback's last attempt fails after the newer one started.
       yield* worker.drain();
 
       const [olderEffect] = yield* outbox.listByCommandId(olderCommandId);
@@ -1931,8 +1918,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       });
       assert.equal((yield* orchestrator.getThreadProjection(threadId)).thread.activeOrderKey, "a0");
 
-      // Automatic settlement (#8600): a stale snapshot loses to any change
-      // made after it, and a fresh one settles like a user settle would.
       const preAutoProjection = yield* orchestrator.getThreadProjection(threadId);
       const staleAutoSettle = yield* orchestrator
         .dispatch({
@@ -1960,7 +1945,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         threadId,
         reason: "user",
       });
-      // An explicit un-settle outranks the sweep even with a fresh snapshot.
       const postUnsettleProjection = yield* orchestrator.getThreadProjection(threadId);
       const overriddenAutoSettle = yield* orchestrator
         .dispatch({
@@ -2342,7 +2326,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         (thread) => thread?.pullRequests?.[0]?.watch,
       );
 
-      // Watching an unlinked pull request links it in the same command.
       yield* orchestrator.dispatch({
         type: "thread.pull-request.watch",
         commandId: CommandId.make("pr-watch-start"),
@@ -2359,7 +2342,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.isDefined(started);
       if (started === undefined) return;
 
-      // A legacy client re-linking the same pull request keeps its watch.
       yield* orchestrator.dispatch({
         type: "thread.metadata.update",
         commandId: CommandId.make("pr-watch-legacy-relink"),
@@ -2388,7 +2370,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         ...key,
         watching: false,
       });
-      // A wake read before the stop must neither wake the agent nor bring the watch back.
       const late = yield* orchestrator
         .dispatch({
           type: "thread.pull-request-watch.sync",
@@ -2731,8 +2712,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             (thread) => thread?.pullRequests?.[0]?.watch !== undefined,
           );
 
-        // However long the host stays rate limited, the watch waits instead of giving up, and
-        // both threads share one read a pass.
         for (let pass = 0; pass < 20; pass += 1) yield* reactor.sweep;
         assert.equal(reads, 20);
         for (const threadId of threadIds) {
@@ -2747,11 +2726,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           assert.deepEqual(yield* summaries(threadId), ["#9: checks passed"]);
         }
 
-        // Nothing in flight and nothing moved, so the next pass spends no request.
         yield* reactor.sweep;
         assert.equal(reads, 21);
 
-        // A new watch on the quiet pull request takes its first look on the next pass.
         const late = ThreadId.make("runtime-pull-request-watch-shared-late");
         yield* watchFrom(late);
         yield* reactor.sweep;
@@ -2762,7 +2739,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         }
         threadIds.push(late);
 
-        // The quiet reread finds the pull request closed, ends both watches, and says so.
         host = "closed";
         yield* TestClock.adjust("10 minutes");
         yield* reactor.sweep;
@@ -2846,7 +2822,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       );
       const sweep = reactor.sweep.pipe(Effect.provide(Logger.layer([capture])));
 
-      // The first read learns the head. A push 6 hours later, then 2 quiet hours.
       yield* sweep;
       yield* TestClock.adjust("6 hours");
       headSha = "bbbbbbb";
@@ -2854,7 +2829,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* TestClock.adjust("2 hours");
       yield* sweep;
       yield* watching(false, "stop");
-      // The end is reported once.
       yield* sweep;
       yield* sweep;
 
@@ -2916,8 +2890,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         remarks: "0",
       };
       type CheckStatus = "pending" | "success" | "failure";
-      // What the host says now, and what a read answers: a read right after a cache fill can
-      // still answer from before a change until the cache is invalidated.
       let checks: { lint: CheckStatus; test: CheckStatus } = { lint: "pending", test: "pending" };
       let cachedChecks: typeof checks | null = null;
       let comments: Array<PullRequestComment> = [];
@@ -2989,18 +2961,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         ({ messages }) => messages.flatMap((message) => message.notification?.summary ?? []),
       );
 
-      // The first look reads everything.
       yield* reactor.sweep;
       assert.deepEqual(reads(), { detail: 1, activity: 1 });
 
-      // While checks run, the cheap detail is read every pass: check counts by state cannot
-      // tell which check finished, so a failure can arrive with the fingerprint unchanged.
       checks = { lint: "failure", test: "pending" };
       yield* reactor.sweep;
       assert.deepEqual(reads(), { detail: 2, activity: 1 });
       assert.deepEqual(yield* summaries, ["#11: checks failed"]);
 
-      // When the fingerprint moves, a cached answer from before the move is not trusted.
       yield* TestClock.adjust("1 millis");
       cachedChecks = checks;
       checks = { lint: "failure", test: "success" };
@@ -3008,11 +2976,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* reactor.sweep;
       assert.deepEqual(reads(), { detail: 3, activity: 1 });
 
-      // Nothing in flight and nothing moved, so the passes read nothing.
       for (let pass = 0; pass < 5; pass += 1) yield* reactor.sweep;
       assert.deepEqual(reads(), { detail: 3, activity: 1 });
 
-      // A new comment moves the remarks, which take the activity read too.
       yield* TestClock.adjust("1 millis");
       comments = [
         {
@@ -3031,14 +2997,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.deepEqual(reads(), { detail: 4, activity: 2 });
       assert.deepEqual(yield* summaries, ["#11: checks failed", "#11: new comments"]);
 
-      // While the host is rate limited, a pass reads nothing and the watch stays on.
       fingerprint = "rate-limited";
       yield* reactor.sweep;
       assert.deepEqual(reads(), { detail: 4, activity: 2 });
       assert.isDefined((yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch);
 
-      // Edits inside review threads leave no trace in the fingerprint, so the activity is read
-      // again after half an hour regardless.
       fingerprint = { status: "OPEN settled", remarks: "1" };
       yield* TestClock.adjust("30 minutes");
       yield* reactor.sweep;
@@ -3186,7 +3149,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                 if (!recovering && mode === "missing comments") {
                   return Effect.succeed({ comments: [], nextCursor: null });
                 }
-                // Overlapping pages must not report the same reply twice.
                 return Effect.succeed({ comments: [eleventh, twelfth], nextCursor: null });
               },
             }),
@@ -3204,12 +3166,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           messages.map((message) => message.notification?.summary),
           ["#7: checks failed"],
         );
-        // Keep the two notifications ordered independently of their random message IDs.
         yield* TestClock.adjust("1 millis");
         recovering = true;
       }
       yield* reactor.sweep;
-      // A thread whose count has not moved is not paged again.
       const pagesBefore = pagesRead;
       yield* reactor.sweep;
       assert.equal(pagesRead, pagesBefore);
@@ -3332,7 +3292,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const admitted = yield* orchestrator.getThreadProjection(threadId);
         assert.lengthOf(admitted.runs, 2);
         assert.equal(admitted.runs[1]?.restartContinuationOfRunId, original.id);
-        // The timeline shows a work log row; the prompt stays in its detail.
         const continuationItems = admitted.turnItems.filter(
           (item) => item.runId === admitted.runs[1]?.id,
         );
@@ -3343,7 +3302,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           ),
           ["T3 Code restarted and resumed this turn", "Continue where you left off."],
         );
-        // A differently identified stale delivery still must not create another run.
         yield* orchestrator.dispatch({
           ...command,
           commandId: CommandId.make("restart-stale-race"),
@@ -3464,7 +3422,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     ["completed", "shell", false],
     ["waiting", "shell", false],
     ["cancelled", "shell", false],
-    // A settled run lost work it was waiting on, so nothing else wakes it.
     ["failed", "monitor", false],
     ["completed", "monitor", true],
     ["waiting", "monitor", true],
@@ -3744,7 +3701,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         });
       yield* queueMessage("settle-automatic-notification", true);
 
-      // Simulate a restart: the active run ends and recovery holds the queue.
       const holdQueueAfterRestart = (commandId: string) =>
         Effect.gen(function* () {
           const projection = yield* orchestrator.getThreadProjection(threadId);
@@ -3781,7 +3737,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.isNotNull(settled.thread.settledAt);
       assert.isTrue(settled.runs.every((run) => run.status === "cancelled"));
 
-      // A held message the user typed still blocks settling.
       yield* orchestrator.dispatch({
         type: "thread.unsettle",
         commandId: CommandId.make("settle-automatic-unsettle"),
@@ -4385,8 +4340,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* dispatch("prompt", false);
       yield* dispatch("queued", false);
       yield* dispatch("early-wake", true);
-      // The early wake now runs ahead of the older queued prompt, as a
-      // delegated result does when it jumps the queue.
       yield* orchestrator.dispatch({
         type: "queued-run.reorder",
         commandId: CommandId.make("runtime-layer-wake-work-start-reorder"),
@@ -4395,7 +4348,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         beforeRunId: null,
       });
       yield* dispatch("late-wake", true);
-      // A queued wake has no clock yet: what runs before it is still unknown.
       assert.isUndefined((yield* runFor("early-wake")).workStartedAt);
 
       const startedRunIds = yield* Queue.unbounded<RunId>();
@@ -4411,7 +4363,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* Effect.yieldNow;
 
       const now = yield* DateTime.now;
-      // Runs start and settle the way the provider would report them.
       const settle = (key: string, startedAt: DateTime.Utc) =>
         Effect.gen(function* () {
           const run = yield* runFor(key);
@@ -4441,8 +4392,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(yield* Queue.take(startedRunIds), (yield* runFor("queued")).id);
       assert.isUndefined((yield* runFor("queued")).workStartedAt);
 
-      // The queued prompt starts long after it was requested; the wake after it
-      // counts from that start, not from the request.
       const queuedStartedAt = DateTime.add(now, { minutes: 10 });
       yield* settle("queued", queuedStartedAt);
       assert.equal(yield* Queue.take(startedRunIds), (yield* runFor("late-wake")).id);
@@ -4797,7 +4746,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const queued = before.runs.filter((run) => run.status === "queued");
         assert.equal(queued.length, 2);
         yield* recovery.reconcile(trigger);
-        // A second boot must preserve the hold, even when only queued work remains.
         yield* recovery.reconcile("startup");
         const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
         assert.isTrue((yield* maintenance.rebuild).valid);
@@ -4822,7 +4770,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           );
           assert.equal(held.nodes.find((row) => row.id === run.rootNodeId)?.status, "pending");
         }
-        // Editing and reordering are allowed without releasing the hold.
         const first = queued[0]!;
         const second = queued[1]!;
         yield* orchestrator.dispatch({
@@ -5325,7 +5272,6 @@ it.layer(layerTest)("snooze queued runs", (it) => {
                 }
               : {}),
         });
-        // Recovery holds the queue while the thread's active run ends.
         const beforeRecovery = yield* orchestrator.getThreadProjection(threadId);
         yield* eventSink.commitCommand({
           commandId: CommandId.make(`recovery:${threadId}`),
@@ -5561,11 +5507,8 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       const visited = yield* orchestrator.getThreadProjection(threadId);
       assert.isNotNull(visited.thread.lastVisitedAt);
       assert.equal(DateTime.formatIso(visited.thread.lastVisitedAt!), visitedAt);
-      // Visiting records read state, not activity: updatedAt must not move.
       assert.deepEqual(visited.thread.updatedAt, createdUpdatedAt);
 
-      // Monotonic: an older watermark (a replay or a stale device) cannot
-      // rewind the marker.
       yield* orchestrator.dispatch({
         type: "thread.visit",
         commandId: CommandId.make("runtime-layer-visited-thread-visit-stale"),
@@ -5581,7 +5524,6 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       assert.equal(DateTime.formatIso(thread!.lastVisitedAt!), visitedAt);
       assert.deepEqual(thread!.updatedAt, createdUpdatedAt);
 
-      // No completed run yet → nothing to mark unread against.
       const markUnread = yield* orchestrator
         .dispatch({
           type: "thread.mark-unread",
@@ -5591,8 +5533,6 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
         .pipe(Effect.flip);
       assert.instanceOf(markUnread, Orchestrator.OrchestratorDispatchError);
 
-      // A read receipt must not decode any transcript, including inherited or
-      // unreadable historical rows. It only advances the thread's watermark.
       const sql = yield* SqlClient.SqlClient;
       yield* sql`INSERT INTO orchestration_v2_projection_turn_items (
         turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json
@@ -6244,8 +6184,6 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         )!;
         if (scenario === "cancel-resume-keep-snooze") {
           assert.equal(DateTime.toEpochMillis(armedShell.snoozedUntil!), Date.parse(resetAt));
-          // Failed runtime timestamps advance with metadata. Acknowledging the
-          // same failed run must not turn cancellation into an early wake.
           assert.equal(
             DateTime.toEpochMillis(armedShell.snoozedAt!),
             DateTime.toEpochMillis(armedShell.updatedAt),
@@ -6268,7 +6206,6 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         let current = yield* orchestrator.getThreadProjection(threadId);
         assert.isTrue(current.thread.limitRecovery!.autoResume);
         assert.isTrue(current.thread.limitRecovery!.snooze);
-        // This is also the payload an older auto-resume-only client sends.
         yield* TestClock.adjust("10 seconds");
         yield* orchestrator.dispatch({
           type: "thread.metadata.update",
@@ -6635,9 +6572,6 @@ it.layer(layerQueueResumeDisabledInstanceTest)(
           const activeRun = before.runs.find((run) => run.status !== "queued")!;
           const queuedRun = before.runs.find((run) => run.status === "queued")!;
           const now = yield* DateTime.now;
-          // A raw event ends the active run without going through dispatch,
-          // so nothing has yet tried to advance the queue onto the disabled
-          // instance.
           yield* events.write({
             events: [
               {

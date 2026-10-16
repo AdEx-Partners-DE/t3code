@@ -119,7 +119,6 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 
-/** JS day-of-week (0 = Sunday) rendered Monday-first, matching how people read a week. */
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const WEEKDAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
@@ -169,7 +168,6 @@ const EMPTY_DRAFT: DraftState = {
   maxDeliveryAgeMinutes: "",
 };
 
-/** Labelled field: a caption sitting above its control. */
 function Field({
   label,
   hint,
@@ -233,9 +231,9 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
 }
 
 /**
- * Human label for a run timestamp. `formatRelativeTime` only handles the
- * past, and `nextRunAt` is a future instant — render "in 5m" style labels
- * for upcoming runs instead of a misleading "just now".
+ * `formatRelativeTime` only handles the past, and `nextRunAt` is a future
+ * instant — render "in 5m" style labels for upcoming runs instead of a
+ * misleading "just now".
  */
 /**
  * Where a task posts, how often it has run and who made it: what tells an
@@ -976,10 +974,7 @@ function WebhookEndpointField({
     const confirmed =
       (await requestConfirmDialog("Rotate this webhook URL?\nThe current URL stops working.", {
         variant: "destructive",
-      })) ??
-      // No themed dialog host is mounted; fall back to the native prompt
-      // rather than rotating unasked.
-      window.confirm("Rotate this webhook URL? The current URL stops working.");
+      })) ?? window.confirm("Rotate this webhook URL? The current URL stops working.");
     if (!confirmed) return;
     setRotating(true);
     const result = await rotate({ environmentId, input: { id: task.id } });
@@ -1007,7 +1002,6 @@ function WebhookEndpointField({
           size="sm"
           variant="outline"
           type="button"
-          // A bare path is not a URL a sender can call.
           disabled={!copyable}
           onClick={() => copyToClipboard(url, undefined)}
         >
@@ -1030,11 +1024,6 @@ function WebhookEndpointField({
   );
 }
 
-/**
- * Whether T3 Connect forwards requests live or holds them while the
- * environment is offline. The setting is per environment and only readable
- * for this machine's own environment, so other environments show nothing.
- */
 function WebhookDeliveryMode({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const cloudLink = usePrimaryCloudLinkState();
   if (cloudLink.target?.environmentId !== environmentId || cloudLink.data === null) return null;
@@ -1096,8 +1085,6 @@ function ScheduledTaskEditorDialog({
     draft.editingId !== null &&
     tasksQuery.data !== null &&
     !tasksQuery.data.tasks.some((entry) => entry.id === draft.editingId);
-  // The live row, so a rotated URL shows up without reopening the dialog.
-  // Once the list has loaded, a missing task is gone; don't keep showing its URL.
   const liveTask = tasksQuery.data
     ? (tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId) ?? null)
     : task;
@@ -1172,8 +1159,6 @@ function ScheduledTaskEditorDialog({
     [providers, settings, selectedProject?.id],
   );
 
-  // The real model picker is keyed by a `${instanceId}:${model}` string, which
-  // is exactly how the draft stores its selection.
   const firstInstance = instanceEntries[0];
   const draftSelection = draft.modelKey ? splitModelKey(draft.modelKey) : null;
   const activeSelection =
@@ -1259,8 +1244,6 @@ function ScheduledTaskEditorDialog({
       reportFailure("Checkout path is required", "Enter the path of the checkout to run in.");
       return;
     }
-    // Keep the original selection object (with provider options) when the
-    // picker still points at the same instance+model.
     const modelSelection =
       draft.baseModelSelection !== null &&
       draft.baseModelSelection.instanceId === selection.instanceId &&

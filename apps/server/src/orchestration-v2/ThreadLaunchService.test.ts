@@ -384,7 +384,6 @@ it.effect.each(
       assert.isDefined(thread);
       assert.equal(result.threadId, thread!.id);
       const projection = yield* threads.getThreadProjection(thread!.id);
-      // Encoding the persisted projection exercises both message and turn-item wire schemas.
       const wire = yield* encodeThreadProjection(projection);
       assert.equal(wire.messages[0]?.text, task.prompt);
       assert.equal(wire.messages[0]?.scheduledTaskId, task.id);
@@ -1156,7 +1155,6 @@ it.effect("falls back when the source control writer is unavailable", () =>
 
 it.effect("runs a Scratch thread launched at the root in its own folder", () =>
   Effect.gen(function* () {
-    // Only `projectId` stands in for the Scratch project here.
     const claimed: Array<{ readonly threadId: ThreadId; readonly text: string }> = [];
     const harness = makeHarness({
       managedFolders: Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
@@ -1184,7 +1182,6 @@ it.effect("runs a Scratch thread launched at the root in its own folder", () =>
       assert.equal(harness.runSetup.mock.calls[0]?.[0]?.worktreePath, "/scratch/folder-1");
       assert.equal(harness.createWorktree.mock.calls.length, 0);
 
-      // A retry replays the first attempt and claims no second folder.
       const retried = yield* launches.launch(input);
       assert.isTrue(retried.resumed);
       assert.lengthOf(claimed, 1);
@@ -1648,7 +1645,6 @@ it.effect("retries a failed workspace preparation on the same run", () => {
     );
     assert.equal(harness.createWorktree.mock.calls.length, 1);
 
-    // The run left preparation, so a second retry has nothing to do.
     const rejected = yield* launches
       .retryPreparation({ ...retry, commandId: CommandId.make("command:launch:retry:2") })
       .pipe(Effect.flip);
@@ -1709,7 +1705,6 @@ it.effect.each(["fails", "is interrupted"] as const)(
         if (ending === "fails") {
           yield* Deferred.succeed(allowFetch, undefined);
         } else {
-          // An agent stop does not ask to hold the queue.
           yield* threads.dispatch({
             type: "run.interrupt",
             commandId: CommandId.make("command:launch:queued-setup-interrupt"),
@@ -1718,7 +1713,6 @@ it.effect.each(["fails", "is interrupted"] as const)(
           });
         }
 
-        // Without its worktree the follow-up would start in the project checkout.
         yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
           Stream.filter(
             (stored) =>
@@ -1731,7 +1725,6 @@ it.effect.each(["fails", "is interrupted"] as const)(
         assert.equal(projection.thread.worktreePath, null);
 
         if (ending === "fails") {
-          // A successful retry lets the held message follow the first turn again.
           yield* launches.retryPreparation({
             commandId: CommandId.make("command:launch:queued-setup-retry"),
             threadId: launched.threadId,
@@ -1776,7 +1769,6 @@ it.effect.each(["failed", "interrupted"] as const)(
       );
       if (ending === "interrupted") {
         yield* Deferred.await(fetchEntered);
-        // An agent stop does not ask to hold the queue.
         yield* threads.dispatch({
           type: "run.interrupt",
           commandId: CommandId.make("command:launch:late-queued-follow-up:interrupt"),
@@ -1791,8 +1783,6 @@ it.effect.each(["failed", "interrupted"] as const)(
         Stream.runHead,
       );
 
-      // Queued while setup ran, delivered only after it failed: it must not start
-      // in the project checkout.
       const queued = yield* threads.sendToThread({
         projectId,
         commandId: CommandId.make(`command:launch:late-queued-follow-up-${ending}:send`),
@@ -1859,12 +1849,10 @@ it.effect("a retry reuses a recorded worktree without undoing its branch rename"
     );
     const retried = yield* threads.getThreadProjection(launched.threadId);
     assert.equal(retried.runs[0]?.status, "starting");
-    // The retry neither checks out again nor puts back the temporary branch.
     assert.equal(harness.createWorktree.mock.calls.length, 1);
     assert.equal(harness.renameBranch.mock.calls.length, 1);
     assert.equal(retried.thread.branch, "generated-branch");
     assert.equal(retried.thread.worktreePath, "/repo-worktrees/feature");
-    // Clients see the retry's setup, not the failed one it replaced.
     const snapshot = yield* tracker.get(launched.threadId);
     assert.equal(snapshot?.phase, "done");
     assert.deepEqual(
@@ -1876,7 +1864,6 @@ it.effect("a retry reuses a recorded worktree without undoing its branch rename"
 
 it.effect("removes a worktree that failed before the thread recorded it", () => {
   const harness = makeHarness({
-    // A checkout that dies after claiming its directory.
     createWorktree: (_input, options) =>
       (options?.progress?.onWorktreeClaimed?.("/repo-worktrees/partial") ?? Effect.void).pipe(
         Effect.andThen(Effect.fail(new Error("checkout failed") as never)),
@@ -1899,7 +1886,6 @@ it.effect("removes a worktree that failed before the thread recorded it", () => 
         .pipe(Effect.map((projection) => projection.runs[0]?.status === "failed")),
     );
     const projection = yield* threads.getThreadProjection(launched.threadId);
-    // Unrecorded, so a retry would create a second checkout beside it.
     assert.equal(projection.thread.worktreePath, null);
     assert.deepEqual(
       harness.removeWorktree.mock.calls.map(([input]) => input.path),
@@ -2201,10 +2187,6 @@ it.effect("bounds concurrent first launches to one thread per command", () =>
         thread: "unused",
         message: "Race me",
       });
-      // The command receipt is reserved atomically with the winning create, so
-      // a loser either replays the winner's stored events or surfaces a
-      // transient replay conflict that the next attempt resolves — the race
-      // can never persist a second thread.
       const results = yield* Effect.all(
         [launches.launch(rest).pipe(Effect.exit), launches.launch(rest).pipe(Effect.exit)],
         { concurrency: "unbounded" },
@@ -2495,7 +2477,6 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
       Effect.flip,
     );
     assert.equal(failed._tag, "ThreadLaunchError");
-    // The observer failed, but the real V2 message and its bytes were accepted.
     const accepted = yield* threads.getThreadProjection(input.threadId);
     const stored = accepted.messages.find(
       (message) => message.id === input.initialMessage.messageId,
@@ -2548,7 +2529,6 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
     assert.equal(missingThread._tag, "OrchestratorProjectionError");
     assert.equal((yield* claimedFiles).length, 1);
 
-    // Both ordinary command intake (RPC) and send intake (MCP) use the same store.
     const dispatch = ThreadMessageIntake.dispatchCommand({
       type: "message.dispatch",
       commandId: CommandId.make("intake-dispatch"),
@@ -2819,21 +2799,18 @@ it.effect.each([
 
 it.effect.each([
   { name: "a base ref that resolves", baseRef: "main", commits: ["main", "HEAD"] },
-  // Provisioning fetches it; the ref may exist nowhere else yet.
   {
     name: "a base ref only origin has",
     baseRef: "remote-only",
     startFromOrigin: true,
     commits: ["HEAD"],
   },
-  // `git worktree add` starts from a remote-tracking branch of that name.
   {
     name: "a base ref a remote branch carries",
     baseRef: "remote-only",
     commits: ["HEAD"],
     remoteBranch: true,
   },
-  // Provisioning runs such a repository without a worktree.
   { name: "a repository with no commits yet", baseRef: "main", commits: [] },
   { name: "the previous checkout", baseRef: "-", commits: ["@{-1}", "HEAD"] },
   { name: "a commit search", baseRef: ":/fix", commits: ["HEAD"] },

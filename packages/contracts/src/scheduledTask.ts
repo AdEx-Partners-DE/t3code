@@ -68,7 +68,6 @@ const ScheduledTaskWebhookSignatureFields = {
   }),
 };
 
-/** HMAC-SHA256 over the raw request body. The secret is never part of the read model. */
 export const ScheduledTaskWebhookSignature = Schema.Struct(
   ScheduledTaskWebhookSignatureFields,
 ).annotate({ description: "Optional HMAC-SHA256 signature check over the raw request body." });
@@ -89,7 +88,6 @@ const ScheduledTaskWebhookSchedule = Schema.Struct({
     description: "Run when the task's webhook URL receives a request.",
   }),
   signature: Schema.NullOr(ScheduledTaskWebhookSignature),
-  // Optional so rows saved before this setting existed still decode.
   maxDeliveryAgeMinutes: Schema.optional(Schema.NullOr(WebhookMaxDeliveryAgeMinutes)),
 }).annotate({
   description:
@@ -205,7 +203,6 @@ export const ScheduledTaskSchedule = Schema.Union([
 });
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
 
-/** Mutation model: newly created or updated interval schedules run at most once per minute. */
 export const ScheduledTaskUpsertSchedule = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("interval").annotate({
@@ -231,11 +228,8 @@ export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Typ
 export const ScheduledTaskRunStatus = Schema.Literals(["never", "running", "succeeded", "failed"]);
 export type ScheduledTaskRunStatus = typeof ScheduledTaskRunStatus.Type;
 
-/** Where a webhook task receives requests. Present only on webhook tasks. */
 export const ScheduledTaskWebhookEndpoint = Schema.Struct({
-  /** Environment-relative path including the secret token; works on any origin that reaches the environment. */
   path: TrimmedNonEmptyString,
-  /** Public T3 Connect URL, or null when the environment is not linked to T3 Connect. */
   url: Schema.NullOr(TrimmedNonEmptyString),
   hasSecret: Schema.Boolean,
 });
@@ -297,7 +291,6 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
 });
 export type ScheduledTaskUpsertInput = typeof ScheduledTaskUpsertInput.Type;
 
-/** Partial update that flips only the enabled flag — never overwrites other fields. */
 export const ScheduledTaskSetEnabledInput = Schema.Struct({
   id: ScheduledTaskId,
   enabled: Schema.Boolean,
@@ -342,9 +335,7 @@ export const ScheduledTaskWebhookDeliverySummary = Schema.Struct({
   contentType: Schema.NullOr(Schema.String),
   bodyBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   outcome: ScheduledTaskWebhookDeliveryOutcome,
-  /** True when a configured signature matched; false when none was configured. */
   signatureVerified: Schema.Boolean,
-  /** Template placeholders that had no value in this request and rendered empty. */
   missingFields: Schema.Array(Schema.String),
   error: Schema.NullOr(Schema.String),
 });
@@ -354,7 +345,6 @@ export const ScheduledTaskWebhookDelivery = Schema.Struct({
   ...ScheduledTaskWebhookDeliverySummary.fields,
   query: Schema.String,
   headers: Schema.Record(Schema.String, Schema.String),
-  /** Body as UTF-8 text, cut at the log limit; see bodyTruncated. */
   body: Schema.String,
   bodyTruncated: Schema.Boolean,
   renderedPrompt: Schema.NullOr(Schema.String),

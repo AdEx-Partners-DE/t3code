@@ -196,7 +196,6 @@ it.effect.each([
 
 it("continues a live turn whose session the adapter never marked running", () => {
   const projection = makeProjection();
-  // Codex, Claude, Cursor and ACP sessions stay "ready" for their whole life.
   const withSessionStatus = (status: string) =>
     ({
       ...projection,
@@ -560,8 +559,6 @@ it.effect("prepares no continuation for background work another provider thread 
   Effect.gen(function* () {
     const base = makeProjection();
     const claudeThreadId = ProviderThreadId.make("provider-thread:claude");
-    // A Claude turn left a background subagent open, then the thread switched
-    // to Codex and its turn settled. Recovery would cancel Claude's work.
     const projection = {
       ...base,
       runs: [{ ...base.runs[0]!, status: "completed" }],
@@ -600,7 +597,6 @@ it.effect("prepares no continuation for background work another provider thread 
     );
     yield* recovery.prepareForShutdown;
     assert.lengthOf(writes, 0);
-    // The same work on the settled run's own provider thread does wake it.
     const ownWork = {
       ...projection,
       turnItems: [{ ...projection.turnItems[0]!, providerThreadId }],
@@ -733,8 +729,6 @@ it.effect.each([
         );
         if (trigger === "shutdown") yield* recovery.prepareForShutdown;
         yield* recovery.reconcile(trigger);
-        // Shutdown records the wake before it cancels the work; a startup
-        // after a kill records it with the cancellation.
         const recorded = [...writes.flatMap((write) => write.effects), ...commits[0]!.effects];
         assert.deepEqual(
           recorded.map((effect) => effect.request),
@@ -1243,8 +1237,6 @@ it.effect("delivers a queued handoff prompt once and respects cancellation befor
 
 it.effect("continues a resumed queued run that ran after an earlier continuation", () =>
   Effect.gen(function* () {
-    // The continuation (ordinal 3) ran ahead of the held queue, then the user
-    // resumed the queued run (ordinal 1 here) and the server restarted again.
     const finishedContinuation = {
       id: RunId.make("run:earlier-continuation"),
       ordinal: 3,
@@ -1348,7 +1340,6 @@ it.effect(
             restartContinuationOfRunId: original.id,
           },
         ],
-        // The original turn settled; the continuation's attempt never started one.
         providerTurns: [
           {
             ...base.providerTurns[0]!,

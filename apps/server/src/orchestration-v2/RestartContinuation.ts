@@ -92,8 +92,8 @@ export function restartContinuationBlocked(
 }
 
 /**
- * Open awaited work (see `isAwaitedWork`) on a provider thread. App-owned
- * delegations are not counted: their own threads continue and report back.
+ * App-owned delegations are not counted: their own threads continue and report
+ * back.
  */
 function hasOpenAwaitedWork(
   projection: Pick<ProjectionRuntimeRecoveryState, "runs" | "turnItems">,
@@ -120,10 +120,8 @@ function hasOpenAwaitedWork(
 }
 
 /**
- * The run a restart continues: an unfinished root turn, or a settled one
- * waiting on awaited work that the restart cancels. A settled run needs a
- * live session, so stale records from an older crash never wake it. Other
- * leftover work is cleaned up and reported on the next user turn.
+ * A settled run needs a live session, so stale records from an older crash
+ * never wake it.
  */
 export function restartContinuationRun(
   projection: Pick<
@@ -139,7 +137,6 @@ export function restartContinuationRun(
   >,
   now: DateTime.Utc,
 ): OrchestrationV2Run | undefined {
-  // Queued runs never started; recovery holds them behind the cut run.
   const run = projection.runs.reduce<OrchestrationV2Run | undefined>(
     (latest, candidate) =>
       candidate.status !== "queued" && (!latest || runRanAfter(candidate, latest))
@@ -252,8 +249,6 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       )
     )
       return;
-    // A user submission after reconciliation takes precedence over an automatic
-    // prompt. Queued runs never started and stay held behind this one.
     if (
       projection.runs.some(
         (run) =>
@@ -295,7 +290,6 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
         turnItemTypes: ["run_interrupt_request"],
       },
     );
-    // The user asked this run to stop before the restart cut it.
     if (
       sourceRecords.turnItems.some(
         (item) => item.runId === source.id && item.type === "run_interrupt_request",

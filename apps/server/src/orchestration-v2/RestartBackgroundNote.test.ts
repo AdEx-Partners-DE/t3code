@@ -94,17 +94,13 @@ it("keeps the note for the provider thread that lost the work across a provider 
       attempts: [{ id: target.activeAttemptId!, runId: target.id }],
     });
 
-  // Codex never lost the work, so it neither receives nor consumes the note.
   assert.deepEqual(pending(onCodex, [root, onCodex]), []);
   assert.deepEqual(pending(backOnClaude, [root, onCodex, backOnClaude]), lost);
-  // Once Claude was told, later Claude turns are not.
   const later = run(4, claudeThread);
   assert.deepEqual(pending(later, [root, onCodex, backOnClaude, later]), []);
 });
 
 it("delivers a resumed queued run's note even after a higher-ordinal run", () => {
-  // Run 3 ran ahead of held run 2; run 2 then resumed, lost background work in
-  // a second restart, and its continuation was superseded by a new message.
   const ranFirst = run(3, claudeThread, {
     completedAt: DateTime.makeUnsafe("2026-10-03T10:00:00.000Z"),
   });
@@ -159,7 +155,6 @@ it("keeps separate cancelled tasks that share a kind and label", () => {
   const second = { kind: "shell" as const, label: "sleep 20", id: "item-2" };
   const merged = mergeRestartCancelledBackgroundWork([first], [second, first]);
   assert.deepEqual(merged, [first, second]);
-  // Rows recorded before ids existed still collapse by kind + label.
   const legacy = { kind: "shell" as const, label: "sleep 20" };
   assert.lengthOf(mergeRestartCancelledBackgroundWork([legacy], [legacy]), 1);
 });
@@ -190,9 +185,7 @@ it("does not repeat the note when a steer restarts the run on a new attempt", ()
       attempts: runAttemptIds.map((id) => ({ id, runId: steered.id })),
     });
 
-  // The first attempt reached the provider with the note; its replacement must not repeat it.
   assert.deepEqual(pending([firstAttempt, RunAttemptId.make("attempt:2b")], true), []);
-  // A first attempt that never reached the provider did not deliver it.
   assert.deepEqual(pending([firstAttempt, RunAttemptId.make("attempt:2b")], false), lost);
 });
 
@@ -200,7 +193,6 @@ it("counts a prompted mid-turn or chained continuation as delivering the note", 
   const cut = run(1, claudeThread, { status: "cancelled", restartCancelledBackgroundWork: lost });
   const cutTurn = { ...turnFor(cut), status: "cancelled" as const };
   const continuation = run(2, claudeThread, { restartContinuationOfRunId: cut.id });
-  // A turn cut mid-way that lost work is prompted with the note, not resumed natively.
   assert.isTrue(isRestartNoteContinuation(continuation, [cut, continuation], [cutTurn], []));
   assert.isFalse(
     isRestartNoteContinuation(
@@ -220,10 +212,8 @@ it("counts a prompted mid-turn or chained continuation as delivering the note", 
       attempts: [{ id: later.activeAttemptId!, runId: later.id }],
     });
   assert.deepEqual(pending(true), []);
-  // A continuation that never reached the provider delivered nothing.
   assert.deepEqual(pending(false), lost);
 
-  // Its own continuation carries the original note forward.
   const unstarted = { ...continuation, status: "cancelled" as const };
   const chained = run(3, claudeThread, { restartContinuationOfRunId: unstarted.id });
   assert.deepEqual(restartContinuationNote(unstarted, [cut, unstarted], [cutTurn], []), {
@@ -231,8 +221,6 @@ it("counts a prompted mid-turn or chained continuation as delivering the note", 
     settled: false,
   });
   assert.isTrue(isRestartNoteContinuation(chained, [cut, unstarted, chained], [cutTurn], []));
-  // Claude announces running before accepting the prompt. A second restart
-  // can cancel that turn without delivering anything to the provider.
   for (const status of ["running", "cancelled"] as const) {
     const turns = [cutTurn, { ...turnFor(unstarted), status }];
     assert.deepEqual(restartContinuationNote(unstarted, [cut, unstarted], turns, []), {
@@ -251,7 +239,6 @@ it("counts a prompted mid-turn or chained continuation as delivering the note", 
     );
   }
 
-  // A steer replaced the attempt after its completed turn delivered the note.
   const steered = { ...unstarted, activeAttemptId: RunAttemptId.make("attempt:replacement") };
   const attempts = [{ id: unstarted.activeAttemptId!, runId: steered.id }];
   const turns = [
