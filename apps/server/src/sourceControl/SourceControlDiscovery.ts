@@ -145,10 +145,13 @@ export const make = Effect.gen(function* () {
   // process start. Clients scan on every connect, so a reconnecting phone
   // respawned five missing CLIs every few minutes. The scan takes seconds and
   // runs detached: a client that leaves early stops waiting, but the scan
-  // finishes and is kept, since an interrupted one would not be.
+  // finishes and is kept, since an interrupted one would not be. Installed CLIs
+  // rarely change and Settings → Source Control rescans on demand, so an hour:
+  // with ten minutes a phone reconnecting every few minutes still rescanned
+  // about every expiry (390 failed starts a day in the fork's server).
   const [cachedScan, invalidate] = yield* Effect.cachedInvalidateWithTTL(
     scan,
-    Duration.minutes(10),
+    Duration.minutes(60),
   );
   const discover = Effect.forkDetach(cachedScan).pipe(Effect.flatMap(Fiber.join));
 
