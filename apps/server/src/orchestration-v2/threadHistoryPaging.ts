@@ -359,6 +359,29 @@ function isLocalProjectedRow(
  * the matching result still has the request available for live attempt/run
  * reducers.
  */
+function pendingRequestIdsOf(
+  projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests">,
+): ReadonlySet<string> {
+  return new Set(
+    projection.runtimeRequests
+      .filter((request) => request.status === "pending")
+      .map((request) => String(request.id)),
+  );
+}
+
+// Clients build the answer panel of an open question or approval from its row,
+// and a run that kept working pushes that row out of the newest turns.
+function isRetainedDependency(
+  item: OrchestrationV2TurnItem,
+  pendingRequestIds: ReadonlySet<string>,
+): boolean {
+  return (
+    item.type === "run_interrupt_request" ||
+    ((item.type === "user_input_request" || item.type === "approval_request") &&
+      pendingRequestIds.has(String(item.requestId)))
+  );
+}
+
 function retainedInterruptRequestTurnItems(
   projection: OrchestrationV2ThreadProjection,
   visible: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
@@ -370,9 +393,10 @@ function retainedInterruptRequestTurnItems(
     }
   }
 
+  const pendingRequestIds = pendingRequestIdsOf(projection);
   const retained: OrchestrationV2TurnItem[] = [];
   for (const item of projection.turnItems) {
-    if (item.type !== "run_interrupt_request") {
+    if (!isRetainedDependency(item, pendingRequestIds)) {
       continue;
     }
     if (visibleLocalIds.has(String(item.id))) {
@@ -516,8 +540,9 @@ export function buildBoundedThreadProjection(input: {
 
   const dependencyReserve = (() => {
     let reserve = 0;
+    const pendingRequestIds = pendingRequestIdsOf(controlProjection);
     for (const item of controlProjection.turnItems) {
-      if (item.type === "run_interrupt_request") {
+      if (isRetainedDependency(item, pendingRequestIds)) {
         reserve += bytesOfJson(item);
       }
     }
