@@ -154,7 +154,11 @@ export function PortfolioChecklistDialog({
           <DialogDescription>
             What the checklists of your open threads say, together.{" "}
             {rows.filter((row) => row.checklist !== null).length} of {rows.length} threads have a
-            checklist{toUpdate.length > 0 ? `, ${toUpdate.length} are missing or behind` : ""}.
+            checklist
+            {toUpdate.length > 0
+              ? `, ${toUpdate.length} ${toUpdate.length === 1 ? "is" : "are"} missing or behind`
+              : ""}
+            .
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
