@@ -1064,7 +1064,12 @@ export default function ChatView(props: ChatViewProps) {
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
   const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
-  const routeThreadRef = scopeThreadRef(environmentId, threadId);
+  // Memoized by hand: the fork's ChatView does not compile with the React Compiler, and hooks
+  // below compare this ref by identity.
+  const routeThreadRef = useMemo(
+    () => scopeThreadRef(environmentId, threadId),
+    [environmentId, threadId],
+  );
   const routeThreadKey = scopedThreadKey(routeThreadRef);
   const currentRouteThreadKeyRef = useRef<string | null>(routeThreadKey);
   useLayoutEffect(() => {
@@ -2860,12 +2865,25 @@ export default function ChatView(props: ChatViewProps) {
     attachmentPreviewHandoffByMessageId,
   );
   const serverAttachmentUrls = useAssetUrls(environmentId, serverAttachmentResources);
-  const serverAttachmentUrlById = new Map(
-    serverAttachmentResources.flatMap((resource, index) => {
-      const url = serverAttachmentUrls[index];
-      return url ? [[resource.attachmentId, url] as const] : [];
-    }),
-  );
+  const serverAttachmentUrlEntries = serverAttachmentResources.flatMap((resource, index) => {
+    const url = serverAttachmentUrls[index];
+    return url ? [[resource.attachmentId, url] as const] : [];
+  });
+  // Keyed by content so the Map keeps its identity between renders (see timelineAttachmentUrlById).
+  const serverAttachmentUrlKey = serverAttachmentUrlEntries
+    .map(([attachmentId, url]) => `${attachmentId} ${url}`)
+    .join("\n");
+  const [heldServerAttachmentUrls, setHeldServerAttachmentUrls] = useState(() => ({
+    key: serverAttachmentUrlKey,
+    byId: new Map(serverAttachmentUrlEntries),
+  }));
+  if (heldServerAttachmentUrls.key !== serverAttachmentUrlKey) {
+    setHeldServerAttachmentUrls({
+      key: serverAttachmentUrlKey,
+      byId: new Map(serverAttachmentUrlEntries),
+    });
+  }
+  const serverAttachmentUrlById = heldServerAttachmentUrls.byId;
   useEffect(() => {
     if (typeof Image === "undefined" || serverVisibleTurnItems.length === 0) {
       return;
@@ -2959,7 +2977,10 @@ export default function ChatView(props: ChatViewProps) {
     serverAttachmentUrlById,
     serverVisibleTurnItems,
   ]);
-  const timelineAttachmentUrlById = (() => {
+  // Memoized by hand, like the timeline inputs below: useIncrementalTimelineEntries compares its
+  // input by identity, and the fork's ChatView does not compile with the React Compiler, so a
+  // fresh Map per render made it reset its state forever (React error #301).
+  const timelineAttachmentUrlById = useMemo(() => {
     const urls = new Map(serverAttachmentUrlById);
     for (const row of serverVisibleTurnItems) {
       if (row.item.type !== "user_message") continue;
@@ -2974,14 +2995,18 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
     return urls;
-  })();
-  const anchoredTimelineMessages = feedbackSubmissions.flatMap((submission) =>
-    submission.status === "interrupted"
-      ? []
-      : [
-          { ...codexFeedbackMessage(submission), runId: null },
-          { ...codexFeedbackMessage(submission, "assistant"), runId: null },
-        ],
+  }, [attachmentPreviewHandoffByMessageId, serverAttachmentUrlById, serverVisibleTurnItems]);
+  const anchoredTimelineMessages = useMemo(
+    () =>
+      feedbackSubmissions.flatMap((submission) =>
+        submission.status === "interrupted"
+          ? []
+          : [
+              { ...codexFeedbackMessage(submission), runId: null },
+              { ...codexFeedbackMessage(submission, "assistant"), runId: null },
+            ],
+      ),
+    [feedbackSubmissions],
   );
   const serverTimelineEntries = useIncrementalTimelineEntries(activeThreadKey, {
     visibleTurnItems: serverVisibleTurnItems,

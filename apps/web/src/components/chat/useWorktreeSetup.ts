@@ -85,13 +85,16 @@ export function useWorktreeSetup(input: {
   const latestSnapshot = snapshotQuery.data;
   // A newer snapshot replaces the held one; a late older one for the same
   // thread does not. Switching routes drops it.
+  // Compared by key, not identity: a caller that builds the ref on each render (ChatView when the
+  // React Compiler bails out on it) would otherwise reset this state forever (React error #301).
+  const routeKey = `${routeThreadRef.environmentId}:${routeThreadRef.threadId}`;
   const [heldFor, setHeldFor] = useState<{
-    readonly routeThreadRef: ScopedThreadRef;
+    readonly routeKey: string;
     readonly latestSnapshot: WorktreeSetupSnapshot | null | undefined;
-  }>({ routeThreadRef, latestSnapshot: null });
-  if (heldFor.routeThreadRef !== routeThreadRef || heldFor.latestSnapshot !== latestSnapshot) {
-    const routeChanged = heldFor.routeThreadRef !== routeThreadRef;
-    setHeldFor({ routeThreadRef, latestSnapshot });
+  }>({ routeKey, latestSnapshot: null });
+  if (heldFor.routeKey !== routeKey || heldFor.latestSnapshot !== latestSnapshot) {
+    const routeChanged = heldFor.routeKey !== routeKey;
+    setHeldFor({ routeKey, latestSnapshot });
     if (routeChanged) {
       setHeldSnapshot(null);
     } else if (latestSnapshot) {
