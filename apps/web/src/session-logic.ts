@@ -1011,16 +1011,6 @@ export function deriveTimelineEntriesFromVisibleTurnItemsWithState(
   };
 }
 
-export function inferCheckpointTurnCountByRunId(
-  summaries: ReadonlyArray<ThreadCheckpointSummary>,
-): Record<string, number> {
-  return Object.fromEntries(
-    summaries.flatMap((summary) =>
-      summary.runId === null ? [] : [[summary.runId, summary.checkpointTurnCount] as const],
-    ),
-  );
-}
-
 /**
  * Run ordinals the server refuses to roll back to: the run belongs to a provider
  * thread other than the active one (the thread changed account or model since).

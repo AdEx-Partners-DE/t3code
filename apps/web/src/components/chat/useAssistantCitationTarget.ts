@@ -43,6 +43,14 @@ export function useAssistantCitationTarget({
     done: boolean;
   } | null>(null);
 
+  // A target belongs to one request, so returning to an earlier key never reuses it.
+  if (ready !== null && ready.key !== request?.key) {
+    setReady(null);
+  }
+  if (!request && finishedKey !== null) {
+    setFinishedKey(null);
+  }
+
   useEffect(() => {
     if (navigationRef.current && navigationRef.current.target.key !== request?.key) {
       navigationRef.current.target.activationRef.current.dismissed = true;
@@ -50,8 +58,6 @@ export function useAssistantCitationTarget({
     }
     if (!request) {
       navigationRef.current = null;
-      setReady(null);
-      setFinishedKey(null);
       return;
     }
     if (navigationRef.current?.target.key !== request.key) {
@@ -71,7 +77,6 @@ export function useAssistantCitationTarget({
         requestedPages: new Set(),
         done: false,
       };
-      setReady(null);
       onManualNavigation();
     }
     if (!viewport || historyLoading) return;

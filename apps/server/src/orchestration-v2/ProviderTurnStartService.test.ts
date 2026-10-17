@@ -27,12 +27,15 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
+import * as ServerConfig from "../config.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -46,7 +49,31 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
-it("does not commit running state when inherited background routing cannot be read", async () => {
+const managedWorktreesDir = "/tmp/provider-turn-start-worktrees";
+// fs.realpath applies `..` and `.` before following symlinks.
+const normalize = (target: string) => {
+  const parts: Array<string> = [];
+  for (const part of target.split("/")) {
+    if (part === "..") parts.pop();
+    else if (part !== "" && part !== ".") parts.push(part);
+  }
+  return `/${parts.join("/")}`;
+};
+const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
+  Layer.mergeAll(
+    Path.layer,
+    Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as ServerConfig.ServerConfig["Service"]),
+    ServerSettings.layerTest(),
+  );
+
+/** Starts a run on a thread whose worktree folder is missing, with routing reads failing after. */
+function startWithMissingWorktree(
+  worktreePath: string,
+  realPaths: Record<string, string> = {
+    [managedWorktreesDir]: managedWorktreesDir,
+    [`${managedWorktreesDir}/project`]: `${managedWorktreesDir}/project`,
+  },
+) {
   const threadId = ThreadId.make("thread_provider_turn_start_projection_failure");
   const runId = RunId.make("run_provider_turn_start_projection_failure");
   const attemptId = RunAttemptId.make("attempt_provider_turn_start_projection_failure");
@@ -66,7 +93,7 @@ it("does not commit running state when inherited background routing cannot be re
       id: threadId,
       projectId: ProjectId.make("project_provider_turn_start_projection_failure"),
       branch: "feature/restore",
-      worktreePath: "/tmp/missing-provider-turn-start-worktree",
+      worktreePath,
     },
     runs: [
       {
@@ -102,8 +129,22 @@ it("does not commit running state when inherited background routing cannot be re
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
-        Path.layer,
-        FileSystem.layerNoop({ exists: () => Effect.succeed(false) }),
+        Layer.succeed(FileSystem.FileSystem, {
+          exists: () => Effect.succeed(false),
+          // Paths that exist on the fake disk, mapped to where their symlinks lead.
+          realPath: (target: string) =>
+            normalize(target) in realPaths
+              ? Effect.succeed(realPaths[normalize(target)])
+              : Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "realPath",
+                    pathOrDescriptor: target,
+                  }),
+                ),
+        } as never),
+        layerWorktreeLocation(),
         Layer.mock(GitWorkflow.GitWorkflowService)({
           pruneWorktrees,
           createWorktree,
@@ -151,22 +192,91 @@ it("does not commit running state when inherited background routing cannot be re
     ),
   );
 
-  await Effect.gen(function* () {
-    const error = yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
+  const start = Effect.gen(function* () {
+    return yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
       .start({ threadId, runId })
       .pipe(Effect.flip);
-
-    expect(error._tag).toBe("ProviderTurnStartError");
-    expect(projectionReadCount).toBe(3);
-    expect(pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-turn-start-project" });
-    expect(createWorktree).toHaveBeenCalledWith({
-      cwd: "/tmp/provider-turn-start-project",
-      refName: "feature/restore",
-      path: "/tmp/missing-provider-turn-start-worktree",
-    });
-    expect(writeIfRunCurrent).not.toHaveBeenCalled();
-    expect(startRootRun).not.toHaveBeenCalled();
   }).pipe(Effect.provide(layer), Effect.runPromise);
+  return {
+    start,
+    pruneWorktrees,
+    createWorktree,
+    writeIfRunCurrent,
+    startRootRun,
+    projectionReads: () => projectionReadCount,
+  };
+}
+
+it("does not commit running state when inherited background routing cannot be read", async () => {
+  const worktreePath = `${managedWorktreesDir}/project/feature-restore`;
+  const harness = startWithMissingWorktree(worktreePath);
+  const error = await harness.start;
+
+  expect(error._tag).toBe("ProviderTurnStartError");
+  expect(harness.projectionReads()).toBe(3);
+  expect(harness.pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-turn-start-project" });
+  expect(harness.createWorktree).toHaveBeenCalledWith({
+    cwd: "/tmp/provider-turn-start-project",
+    refName: "feature/restore",
+    path: worktreePath,
+  });
+  expect(harness.writeIfRunCurrent).not.toHaveBeenCalled();
+  expect(harness.startRootRun).not.toHaveBeenCalled();
+});
+
+it.each([
+  {
+    label: "<managed>/<repo>/<branch>",
+    worktreePath: `${managedWorktreesDir}/project/feature-restore`,
+    recreated: true,
+  },
+  {
+    label: "the real path of a symlinked managed folder",
+    worktreePath: "/real-worktrees/project/feature-restore",
+    realPaths: { [managedWorktreesDir]: "/real-worktrees", "/real-worktrees": "/real-worktrees" },
+    recreated: true,
+  },
+  {
+    label: "a path outside the managed folder",
+    worktreePath: "/tmp/provider-turn-start-project/.git/hooks",
+    recreated: false,
+  },
+  {
+    label: "a symlink inside the managed folder that leads out",
+    worktreePath: `${managedWorktreesDir}/project/hooks`,
+    realPaths: {
+      [managedWorktreesDir]: managedWorktreesDir,
+      [`${managedWorktreesDir}/project`]: "/tmp/provider-turn-start-project/.git",
+    },
+    recreated: false,
+  },
+  {
+    label: "a folder nested below a worktree",
+    worktreePath: `${managedWorktreesDir}/project/feature-restore/link/hooks`,
+    recreated: false,
+  },
+  {
+    label: "'..' out of the managed folder",
+    worktreePath: `${managedWorktreesDir}/project/../../outside`,
+    recreated: false,
+  },
+  {
+    // Left raw on purpose: git follows `link` before applying `..`.
+    label: "'..' after a symlink inside the managed folder",
+    worktreePath: `${managedWorktreesDir}/project/x/link/../../hooks`,
+    realPaths: {
+      [managedWorktreesDir]: managedWorktreesDir,
+      [`${managedWorktreesDir}/project`]: `${managedWorktreesDir}/project`,
+      [`${managedWorktreesDir}/project/x`]: `${managedWorktreesDir}/project/x`,
+      [`${managedWorktreesDir}/project/x/link`]: "/tmp/provider-turn-start-project/.git/refs/heads",
+    },
+    recreated: false,
+  },
+  { label: "a relative path", worktreePath: "project/feature-restore", recreated: false },
+])("recreates a missing worktree only at the managed location: $label", async (input) => {
+  const harness = startWithMissingWorktree(input.worktreePath, input.realPaths);
+  await harness.start;
+  expect(harness.createWorktree).toHaveBeenCalledTimes(input.recreated ? 1 : 0);
 });
 
 it("recreates a deleted worktree on a new branch from the project's current branch when the thread's own branch is gone too", async () => {
@@ -189,7 +299,7 @@ it("recreates a deleted worktree on a new branch from the project's current bran
       id: threadId,
       projectId: ProjectId.make("project_provider_turn_start_missing_branch"),
       branch: "t3/deleted-feature",
-      worktreePath: "/tmp/missing-provider-turn-start-worktree-missing-branch",
+      worktreePath: "/tmp/worktrees/project/missing-provider-turn-start-worktree-missing-branch",
     },
     runs: [
       {
@@ -227,7 +337,12 @@ it("recreates a deleted worktree on a new branch from the project's current bran
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
         Path.layer,
-        FileSystem.layerNoop({ exists: () => Effect.succeed(false) }),
+        FileSystem.layerNoop({
+          exists: () => Effect.succeed(false),
+          realPath: (target: string) => Effect.succeed(target),
+        }),
+        // Only worktrees in the managed folder are recreated.
+        layerWorktreeLocation("/tmp/worktrees"),
         Layer.mock(GitWorkflow.GitWorkflowService)({
           pruneWorktrees,
           createWorktree,
@@ -297,7 +412,7 @@ it("recreates a deleted worktree on a new branch from the project's current bran
       refName: "main",
       newRefName: "t3/deleted-feature",
       baseRefName: "main",
-      path: "/tmp/missing-provider-turn-start-worktree-missing-branch",
+      path: "/tmp/worktrees/project/missing-provider-turn-start-worktree-missing-branch",
     });
     expect(writeIfRunCurrent).not.toHaveBeenCalled();
     expect(startRootRun).not.toHaveBeenCalled();
@@ -325,7 +440,7 @@ function makeRecreateFailureHarness() {
       id: threadId,
       projectId: ProjectId.make("project_provider_turn_start_recreate_failure"),
       branch: "t3/deleted-feature",
-      worktreePath: "/tmp/missing-provider-turn-start-worktree-recreate-failure",
+      worktreePath: "/tmp/worktrees/project/missing-provider-turn-start-worktree-recreate-failure",
     },
     runs: [
       {
@@ -383,7 +498,12 @@ function makeRecreateFailureHarness() {
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
         Path.layer,
-        FileSystem.layerNoop({ exists: () => Effect.succeed(false) }),
+        FileSystem.layerNoop({
+          exists: () => Effect.succeed(false),
+          realPath: (target: string) => Effect.succeed(target),
+        }),
+        // Only worktrees in the managed folder are recreated.
+        layerWorktreeLocation("/tmp/worktrees"),
         Layer.mock(GitWorkflow.GitWorkflowService)({
           pruneWorktrees,
           createWorktree,
@@ -449,7 +569,7 @@ it("settles the run with the recreate failure, not raw git output or the generic
     expect(harness.createWorktree).toHaveBeenCalledOnce();
     expect(harness.writeIfRunCurrent).toHaveBeenCalledOnce();
     expect(harness.writtenFailureMessage()).toBe(
-      "Could not recreate the worktree for branch 't3/deleted-feature' at /tmp/missing-provider-turn-start-worktree-recreate-failure.",
+      "Could not recreate the worktree for branch 't3/deleted-feature' at /tmp/worktrees/project/missing-provider-turn-start-worktree-recreate-failure.",
     );
     expect(harness.writtenFailureMessage()).not.toContain("Restore the folder");
     expect(harness.writtenFailureMessage()).not.toContain("fatal:");
@@ -475,6 +595,7 @@ it("keeps a worktree-recreate failure retryable on a non-final attempt instead o
 function makeLocalCommandHarness(input: {
   readonly text: string;
   readonly worktreePath?: string;
+  readonly worktreesDir?: string;
   readonly fileSystem?: FileSystem.FileSystem;
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
@@ -825,7 +946,7 @@ function makeLocalCommandHarness(input: {
         }),
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
-        Path.layer,
+        layerWorktreeLocation(input.worktreesDir),
         input.fileSystem === undefined
           ? FileSystem.layerNoop({ exists: () => Effect.succeed(true) })
           : Layer.succeed(FileSystem.FileSystem, input.fileSystem),
@@ -903,13 +1024,14 @@ effectIt.effect.each(["cleanup-first", "startup-first"])(
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-start-" });
-      const worktreePath = path.join(workspaceRoot, "worktree");
-      yield* fileSystem.makeDirectory(worktreePath);
+      const worktreePath = path.join(workspaceRoot, "project", "worktree");
+      yield* fileSystem.makeDirectory(worktreePath, { recursive: true });
       const release = yield* Deferred.make<void>();
       const openEntered = yield* Deferred.make<void>();
       const harness = makeLocalCommandHarness({
         text: "Continue",
         worktreePath,
+        worktreesDir: workspaceRoot,
         fileSystem,
         failReadsAfterRunning: true,
       });

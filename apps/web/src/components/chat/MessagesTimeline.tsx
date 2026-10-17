@@ -1,6 +1,6 @@
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
-import { MarkdownFindContext, useFindRevealRef } from "./markdownFindContext";
+import { MarkdownFindContext, findRevealRef } from "./markdownFindContext";
 import { useChatCanvas } from "./ChatCanvasContext";
 import { WorkLogBlock, WorkLogButton, WorkLogDetails, WorkLogList, WorkLogRow } from "./WorkLog";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
@@ -292,7 +292,7 @@ import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { Collapsible, CollapsibleTrigger, CollapsiblePanel } from "../ui/collapsible";
 import {
   isV2LifecycleItem,
-  SubagentAvatar,
+  EnvironmentSubagentAvatar,
   SubagentElapsed,
   SubagentNotificationLink,
   V2LifecycleRow,
@@ -3130,7 +3130,6 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
         resourceSummary={row.resourceSummary}
         createdAt={row.createdAt}
         timestampFormat={ctx.timestampFormat}
-        providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
         onOpenThread={ctx.onOpenThread}
       />
@@ -3379,12 +3378,11 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
         >
           <span className="flex shrink-0 items-center -space-x-1.5" aria-hidden>
             {agents.slice(0, 3).map(({ item, status }) => (
-              <SubagentAvatar
+              <EnvironmentSubagentAvatar
                 key={item.id}
+                environmentId={ctx.activeThreadEnvironmentId}
+                providerInstanceId={item.providerInstanceId}
                 driver={item.driver}
-                provider={ctx.providerStatuses.find(
-                  (provider) => provider.instanceId === item.providerInstanceId,
-                )}
                 status={agents.length === 1 ? status : undefined}
               />
             ))}
@@ -3427,7 +3425,6 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
                   item={item}
                   createdAt={row.createdAt}
                   timestampFormat={ctx.timestampFormat}
-                  providerStatuses={ctx.providerStatuses}
                   runs={ctx.runs}
                   onOpenThread={ctx.onOpenThread}
                 />
@@ -4715,7 +4712,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
 }) {
   const [expanded, setExpanded] = useState(false);
   const revealForFind = useCallback(() => setExpanded(true), []);
-  const findRevealRef = useFindRevealRef(revealForFind);
+  const revealRef = useMemo(() => findRevealRef(revealForFind), [revealForFind]);
   const hasVisibleBody = props.text.trim().length > 0;
   const canCollapse = hasVisibleBody && shouldCollapseUserMessage(props.text);
   const isCollapsed = canCollapse && !expanded;
@@ -4725,7 +4722,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
     <div>
       {hasVisibleBody ? (
         <div
-          ref={findRevealRef}
+          ref={revealRef}
           className={cn("relative", isCollapsed && "max-h-44 overflow-hidden")}
           data-user-message-body="true"
           data-thread-find-text="true"
@@ -5362,7 +5359,6 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: WorkEntryRowP
       outcome={item.outcome}
       createdAt={props.workEntry.createdAt}
       timestampFormat={ctx.timestampFormat}
-      providerStatuses={ctx.providerStatuses}
       onOpenThread={ctx.onOpenThread}
       fallback={<WorkEntryLogRow {...props} />}
     />
