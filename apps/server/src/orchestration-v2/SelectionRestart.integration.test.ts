@@ -1033,6 +1033,120 @@ it.live("detaches the old provider session after an active provider handoff", ()
   ),
 );
 
+it.live("a queued run moved off a pooled session opens the target under its own key", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cwd = yield* checkpointWorkspace("selection-queued-pooled-handoff");
+      const threadId = ThreadId.make("thread:selection-queued-pooled-handoff");
+      const state = yield* Ref.make<RestartAdapterState>({
+        activeTurn: null,
+        opened: [],
+        started: [],
+        closedSessionCount: 0,
+        failedReplacementOpen: true,
+      });
+      const targetStartCount = yield* Ref.make(0);
+      const targetSessionIds: Array<ProviderSessionId> = [];
+      const target = makeCompletingHandoffAdapter(targetStartCount);
+      const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
+        makeRestartAdapter(state, pooledCapabilities),
+        {
+          ...target,
+          openSession: (input) => {
+            targetSessionIds.push(input.providerSessionId);
+            return target.openSession(input);
+          },
+        },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:queued-pooled-handoff:create"),
+          threadId,
+          projectId: ProjectId.make("project:queued-pooled-handoff"),
+          title: "Queued pooled handoff",
+          modelSelection: initialSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: cwd,
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:queued-pooled-handoff:first"),
+          threadId,
+          messageId: MessageId.make("message:queued-pooled-handoff:first"),
+          text: "first",
+          attachments: [],
+          modelSelection: initialSelection,
+          dispatchMode: { type: "start_immediately" },
+        });
+        let activeRunId: RunId | null = null;
+        for (let index = 0; index < 1_000 && activeRunId === null; index += 1) {
+          const current = yield* orchestrator.getThreadProjection(threadId);
+          if (current.providerTurns.some((turn) => turn.status === "running")) {
+            activeRunId = current.runs[0]?.id ?? null;
+          } else {
+            yield* Effect.sleep("5 millis");
+          }
+        }
+        if (activeRunId === null) {
+          return yield* Effect.die("first run never started");
+        }
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("command:queued-pooled-handoff:second"),
+          threadId,
+          messageId: MessageId.make("message:queued-pooled-handoff:second"),
+          text: "second",
+          attachments: [],
+          modelSelection: initialSelection,
+          dispatchMode: { type: "queue_after_active" },
+        });
+        // The queued run keeps the pooled provider thread it was queued on.
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: CommandId.make("command:queued-pooled-handoff:move"),
+          threadId,
+          modelSelection: handoffSelection,
+          includeQueuedRuns: true,
+        });
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make("command:queued-pooled-handoff:interrupt"),
+          threadId,
+          runId: activeRunId,
+        });
+        for (let index = 0; index < 1_000; index += 1) {
+          if ((yield* Ref.get(targetStartCount)) > 0) return;
+          yield* Effect.sleep("5 millis");
+        }
+        return yield* Effect.die("queued handoff run never started");
+      }).pipe(
+        Effect.provide(
+          ProviderReplayHarness.layerWithRegistry(
+            { name: "selection-queued-pooled-handoff" },
+            layerRegistry,
+          ),
+        ),
+      );
+
+      assert.isAbove(targetSessionIds.length, 0);
+      for (const sessionId of targetSessionIds) {
+        assert.notInclude(sessionId, `provider-instance:${providerInstanceId}:shared`);
+      }
+    }),
+  ),
+);
+
 it.live.each(["active", "idle", "selection-command", "pooled", "separate-home"] as const)(
   "preserves native history only for compatible account switches (%s)",
   (mode) =>
