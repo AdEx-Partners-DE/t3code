@@ -437,6 +437,58 @@ it.effect("rescans a favicon only after 15 minutes", () =>
   }),
 );
 
+it.effect("rescans a workspace root that no longer exists only after 15 minutes", () =>
+  Effect.gen(function* () {
+    const faviconScans = yield* Ref.make(0);
+    const layerMetadata = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: (workspaceRoot) => Effect.succeed(identity(workspaceRoot)),
+      }),
+      Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
+        resolvePath: (workspaceRoot) =>
+          Ref.update(faviconScans, (count) => count + 1).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new ProjectFaviconResolver.ProjectFaviconResolutionError({
+                  operation: "normalize-workspace",
+                  workspaceRoot,
+                  cause: new WorkspacePaths.WorkspaceRootNotExistsError({
+                    workspaceRoot,
+                    normalizedWorkspaceRoot: workspaceRoot,
+                  }),
+                }),
+              ),
+            ),
+          ),
+      }),
+    );
+    const scansReach = Effect.fn("scansReach")(function* (count: number) {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(faviconScans)) >= count) return;
+        yield* Effect.yieldNow;
+      }
+    });
+
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectEnrichment.ProjectEnrichmentService;
+      yield* service.getAvailable("/gone");
+      yield* scansReach(1);
+
+      for (let minute = 1; minute < 15; minute += 1) {
+        yield* TestClock.adjust("1 minute");
+        yield* service.getAvailable("/gone");
+        yield* scansReach(2);
+      }
+      assert.equal(yield* Ref.get(faviconScans), 1);
+
+      yield* TestClock.adjust("1 minute");
+      yield* service.getAvailable("/gone");
+      yield* scansReach(2);
+      assert.equal(yield* Ref.get(faviconScans), 2);
+    }).pipe(Effect.provide(layer(layerMetadata)));
+  }),
+);
+
 it.effect(
   "follows repository identity changes within a minute without rescanning the favicon",
   () =>

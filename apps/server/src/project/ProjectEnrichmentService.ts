@@ -25,6 +25,10 @@ const DEFAULT_SUCCESS_TTL = Duration.minutes(1);
 const DEFAULT_FAVICON_TTL = Duration.minutes(15);
 const DEFAULT_FAILURE_TTL = Duration.seconds(5);
 
+const isMissingWorkspaceRootExit = <A>(
+  result: Exit.Exit<A, ProjectFaviconResolver.ProjectFaviconResolutionError>,
+) => Option.exists(Exit.findErrorOption(result), ProjectFaviconResolver.isMissingWorkspaceRoot);
+
 export interface ProjectEnrichment {
   readonly repositoryIdentity: RepositoryIdentity | null;
   readonly faviconPath: string | null;
@@ -112,7 +116,10 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
       capacity: cacheCapacity,
       timeToLive: Exit.match({
         onFailure: () => failureTtl,
-        onSuccess: (result) => (Exit.isSuccess(result) ? faviconTtl : failureTtl),
+        // A moved or deleted checkout stays gone for a while; retrying it every
+        // few seconds only fills the log for as long as the project points there.
+        onSuccess: (result) =>
+          Exit.isSuccess(result) || isMissingWorkspaceRootExit(result) ? faviconTtl : failureTtl,
       }),
     },
   );
@@ -183,11 +190,7 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     workspaceRoot: string,
   ) {
     const faviconPath = yield* Cache.get(faviconCache, workspaceRoot);
-    const isMissingWorkspaceRoot = Option.exists(
-      Exit.findErrorOption(faviconPath),
-      ProjectFaviconResolver.isMissingWorkspaceRoot,
-    );
-    if (isMissingWorkspaceRoot) {
+    if (isMissingWorkspaceRootExit(faviconPath)) {
       return;
     }
     yield* logFailure(workspaceRoot, "faviconPath", faviconPath);
