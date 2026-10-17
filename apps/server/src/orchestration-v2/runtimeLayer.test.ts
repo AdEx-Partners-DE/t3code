@@ -1381,6 +1381,43 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
       );
       assert.lengthOf(dismissedProjection.messages, 0);
 
+      // A reply typed into the composer answers a question no live run waits on;
+      // a message the user did not type leaves it open.
+      const typed = yield* seedQuestion("runtime-typed-answer-question");
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "agent",
+        creationSource: "server",
+        commandId: CommandId.make("runtime-typed-answer-agent-message"),
+        threadId: typed.threadId,
+        messageId: MessageId.make("runtime-typed-answer-agent-message"),
+        text: "Not an answer.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(typed.threadId)).runtimeRequests[0]?.status,
+        "pending",
+      );
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-typed-answer-message"),
+        threadId: typed.threadId,
+        messageId: MessageId.make("runtime-typed-answer-message"),
+        text: "Yes, continue.",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+      });
+      const typedProjection = yield* orchestrator.getThreadProjection(typed.threadId);
+      assert.equal(typedProjection.runtimeRequests[0]?.status, "resolved");
+      assert.equal(typedProjection.runtimeRequests[0]?.decision, "cancel");
+      assert.equal(
+        typedProjection.turnItems.find((item) => item.id === typed.itemId)?.status,
+        "cancelled",
+      );
+
       const settled = yield* seedQuestion("runtime-settle-question");
       yield* orchestrator.dispatch({
         type: "thread.settle",

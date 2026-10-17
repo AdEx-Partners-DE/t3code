@@ -7730,6 +7730,50 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     });
 
+  // A question answered by message stays pending until the answer panel sends
+  // its reply. When the user types a reply in the composer instead, the question
+  // outlives its run: the sidebar keeps saying "Input" and a pending request
+  // blocks the usage-limit resume. A new message from the user after that run
+  // settled is the answer.
+  const dismissQuestionsOfSettledRuns = (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) =>
+    Effect.gen(function* () {
+      const { runtimeRequests } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runtimeRequests"])
+        .pipe(mapDispatchError(command));
+      const questions = runtimeRequests.filter(
+        (request) =>
+          request.status === "pending" &&
+          request.kind === "user_input" &&
+          request.responseCapability.type === "message",
+      );
+      if (questions.length === 0) return;
+      const { nodes, runs } = yield* projectionStore
+        .getThreadRecords(command.threadId, ["nodes", "runs"])
+        .pipe(mapDispatchError(command));
+      for (const question of questions) {
+        const runId = nodes.find((node) => node.id === question.nodeId)?.runId;
+        const run = runs.find((candidate) => candidate.id === runId);
+        // A question still asked by a live run waits for the answer panel.
+        // Every terminal run status maps to a terminal task status.
+        if (run !== undefined && delegatedTaskTerminalStatus(run.status) === null) continue;
+        yield* dispatchRuntimeRequestRespond(
+          {
+            type: "runtime-request.respond",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            requestId: question.id,
+            decision: "cancel",
+          },
+          events,
+          effects,
+        );
+      }
+    });
+
   const dispatchQueuedMessagePromoteToSteer = (
     command: Extract<OrchestrationV2Command, { readonly type: "queued-message.promote-to-steer" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -11027,6 +11071,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         yield* dispatchMessage(command, events, effects);
         yield* recordSubagentFollowup(command, events).pipe(mapDispatchError(command));
+        if (command.createdBy === "user") {
+          yield* dismissQuestionsOfSettledRuns(command, events, effects);
+        }
         break;
       }
       case "notification.delivery.accept":
