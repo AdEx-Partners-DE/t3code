@@ -293,6 +293,21 @@ export function standingSelectionFor(input: {
 }
 
 /**
+ * What one alignment does. A thread already on the rule's model needs nothing,
+ * whoever put it there; recording it as keeping its own choice would name a
+ * difference that does not exist.
+ */
+export function standingAlignmentStep(input: {
+  readonly next: ModelSelection | null;
+  readonly current: ModelSelection;
+  readonly keepsOwnChoice: boolean;
+}): "none" | "kept-own-choice" | "align" {
+  if (input.next !== null && modelSelectionsEqual(input.next, input.current)) return "none";
+  if (input.keepsOwnChoice) return "kept-own-choice";
+  return input.next === null ? "none" : "align";
+}
+
+/**
  * Brings one thread in line with the standing override of its part before it
  * gets work that does not come from the user. `messageScope` is the part the
  * incoming message speaks for: "tasks" for a scheduled task's message. A thread
@@ -348,14 +363,24 @@ export const alignThreadWithStandingOverride = (
           Effect.orElseSucceed(() => []),
         )
       : [];
-    if (
-      userChoseOtherModel(saved[threadId]?.applied, thread.modelSelection) ||
-      userWroteSinceOverride({
-        applied: saved[threadId]?.applied,
-        messages: userMessages,
-        overrideSetAtMs,
-      })
-    ) {
+    const next = standingSelectionFor({
+      override,
+      thread,
+      providers: yield* registry.value.getProviders,
+    });
+    const step = standingAlignmentStep({
+      next,
+      current: thread.modelSelection,
+      keepsOwnChoice:
+        userChoseOtherModel(saved[threadId]?.applied, thread.modelSelection) ||
+        userWroteSinceOverride({
+          applied: saved[threadId]?.applied,
+          messages: userMessages,
+          overrideSetAtMs,
+        }),
+    });
+    if (step === "none" || next === null) return;
+    if (step === "kept-own-choice") {
       const current = `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`;
       // A task on a timer comes by every few minutes; the same choice is recorded once.
       const key = `${threadId}\0${current}`;
@@ -370,12 +395,6 @@ export const alignThreadWithStandingOverride = (
       }
       return;
     }
-    const next = standingSelectionFor({
-      override,
-      thread,
-      providers: yield* registry.value.getProviders,
-    });
-    if (next === null) return;
     yield* threads.dispatch({
       type: "thread.model-selection.set",
       // One id per alignment: a reused id would be dropped.

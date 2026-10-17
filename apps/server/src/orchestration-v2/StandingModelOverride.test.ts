@@ -5,6 +5,7 @@ import {
   alignsBeforeMessage,
   parseStandingOverrides,
   scopeCovers,
+  standingAlignmentStep,
   standingOverrideFromApplied,
   standingSelectionFor,
   userChoseOtherModel,
@@ -147,6 +148,31 @@ describe("userWroteSinceOverride", () => {
         overrideSetAtMs: setAt,
       }),
     ).toBe(false);
+  });
+});
+
+describe("standingAlignmentStep", () => {
+  type Selection = Parameters<typeof standingAlignmentStep>[0]["current"];
+  const astra = { instanceId: "codex_stark_cli", model: "gpt-6-astra" } as Selection;
+  const sol = { instanceId: "codex_stark_cli", model: "gpt-6.1-sol" } as Selection;
+
+  it("needs nothing for a thread already on the rule's model, chosen or not", () => {
+    expect(standingAlignmentStep({ next: astra, current: astra, keepsOwnChoice: true })).toBe(
+      "none",
+    );
+    expect(standingAlignmentStep({ next: astra, current: astra, keepsOwnChoice: false })).toBe(
+      "none",
+    );
+  });
+
+  it("keeps a differing choice of the user and aligns any other thread", () => {
+    expect(standingAlignmentStep({ next: astra, current: sol, keepsOwnChoice: true })).toBe(
+      "kept-own-choice",
+    );
+    expect(standingAlignmentStep({ next: astra, current: sol, keepsOwnChoice: false })).toBe(
+      "align",
+    );
+    expect(standingAlignmentStep({ next: null, current: sol, keepsOwnChoice: false })).toBe("none");
   });
 });
 
