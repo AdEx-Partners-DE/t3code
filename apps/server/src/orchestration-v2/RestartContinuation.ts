@@ -13,15 +13,18 @@ import * as Effect from "effect/Effect";
 import type { ProjectionRuntimeRecoveryState } from "./ProjectionStore.ts";
 
 import * as ServerSettings from "../serverSettings.ts";
-import { isNativeMaintenanceCommand } from "./Orchestrator.ts";
+import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import {
+  awaitingProviderThreadId,
   cancelledRosterTaskWork,
   cancelledTurnItemWork,
   isAwaitedWork,
   isRestartContinuationSource,
+  cancelledBeforeStart,
   isRestartNoteSource,
   isWorktreeContinuationRun,
+  neverStarted,
   restartCancelledBackgroundWorkNote,
   restartContinuationNote,
   restartPromptSource,
@@ -105,10 +108,11 @@ function hasOpenAwaitedWork(
     if (item.type === "subagent" && item.origin === "app_owned" && item.childThreadId !== null)
       return false;
     const work = cancelledTurnItemWork(item);
-    const providerThreadId =
-      item.providerThreadId ??
-      projection.runs.find((run) => run.id === item.runId)?.providerThreadId;
-    return work !== undefined && isAwaitedWork(work) && providerThreadId === providerThread.id;
+    return (
+      work !== undefined &&
+      isAwaitedWork(work) &&
+      awaitingProviderThreadId(item, projection.runs) === providerThread.id
+    );
   });
   return (
     openItem ||
@@ -139,7 +143,9 @@ export function restartContinuationRun(
 ): OrchestrationV2Run | undefined {
   const run = projection.runs.reduce<OrchestrationV2Run | undefined>(
     (latest, candidate) =>
-      candidate.status !== "queued" && (!latest || runRanAfter(candidate, latest))
+      candidate.status !== "queued" &&
+      !neverStarted(candidate) &&
+      (!latest || runRanAfter(candidate, latest))
         ? candidate
         : latest,
     undefined,
@@ -254,6 +260,7 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
         (run) =>
           run.id !== source.id &&
           run.status !== "queued" &&
+          !cancelledBeforeStart(run) &&
           (worktreeContinuation ? run.ordinal > source.ordinal : runRanAfter(run, source)),
       )
     )

@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  MessageId,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ThreadProjection,
   ProviderInstanceId,
@@ -21,6 +22,7 @@ const commandId = CommandId.make("command-policy-test");
 const threadId = ThreadId.make("command-policy-thread");
 const activeRunId = RunId.make("command-policy-active-run");
 const activeAttemptId = RunAttemptId.make("command-policy-active-attempt");
+const userMessageId = MessageId.make("command-policy-user-message");
 
 const baseCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
 
@@ -39,11 +41,20 @@ function dispatchProjection(
     runs:
       sessionCapabilities === undefined
         ? []
-        : [{ id: activeRunId, status: "running", providerThreadId, activeAttemptId }],
+        : [
+            {
+              id: activeRunId,
+              status: "running",
+              providerThreadId,
+              activeAttemptId,
+              userMessageId,
+            },
+          ],
     providerTurns:
       sessionCapabilities === undefined
         ? []
         : [{ runAttemptId: activeAttemptId, status: "running" }],
+    messages: [{ id: userMessageId, text: "first", attachments: [] }],
     providerThreads:
       sessionCapabilities === undefined ? [] : [{ id: providerThreadId, providerSessionId }],
     providerSessions:
@@ -186,6 +197,39 @@ it("targets the latest active run for explicit steer and restart intent", () => 
       "steer",
     ),
     { type: "start_immediately" },
+  );
+});
+
+it.each(["/compact", " /LOGOUT "])("queues a steer sent while %s runs", (text) => {
+  const projection = dispatchProjection(baseCapabilities);
+  const maintenance = {
+    ...projection,
+    messages: [{ id: userMessageId, text, attachments: [] }],
+  } as unknown as OrchestrationV2ThreadProjection;
+  for (const deliveryIntent of ["auto", "steer"] as const) {
+    assert.deepEqual(
+      CommandPolicy.resolveMessageDispatchIntent(
+        maintenance,
+        { type: "start_immediately" },
+        deliveryIntent,
+      ),
+      { type: "queue_after_active" },
+    );
+  }
+  assert.deepEqual(
+    CommandPolicy.resolveMessageDispatchIntent(maintenance, {
+      type: "steer_active",
+      targetRunId: activeRunId,
+    }),
+    { type: "queue_after_active" },
+  );
+  assert.deepEqual(
+    CommandPolicy.resolveMessageDispatchIntent(
+      maintenance,
+      { type: "start_immediately" },
+      "restart",
+    ),
+    { type: "restart_active", targetRunId: activeRunId },
   );
 });
 

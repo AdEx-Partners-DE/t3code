@@ -13,7 +13,7 @@ import {
   MessageCircleQuestionIcon,
   ShieldQuestionIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { getClientSettings, useClientSettings } from "../hooks/useSettings";
 import { useEnvironmentIds } from "../state/environments";
@@ -39,21 +39,22 @@ export function ThreadNotificationCoordinator() {
   const pending = useRef(
     new Map<string, { environmentId: EnvironmentId; notification: Notification }>(),
   );
-  const onNotification = useCallback(
-    (environmentId: EnvironmentId, tag: string, notification: Notification) => {
-      pending.current.get(tag)?.notification.close();
-      pending.current.set(tag, { environmentId, notification });
-      setNotificationBadge(pending.current.size);
-    },
-    [],
-  );
+  const onNotification = (
+    environmentId: EnvironmentId,
+    tag: string,
+    notification: Notification,
+  ) => {
+    pending.current.get(tag)?.notification.close();
+    pending.current.set(tag, { environmentId, notification });
+    setNotificationBadge(pending.current.size);
+  };
 
   useEffect(() => {
     const activeIds = new Set(environmentIds);
     const count = pending.current.size;
-    for (const [tag, { environmentId, notification }] of pending.current) {
-      if (activeIds.has(environmentId)) continue;
-      notification.close();
+    for (const [tag, entry] of pending.current) {
+      if (activeIds.has(entry.environmentId)) continue;
+      entry.notification.close();
       pending.current.delete(tag);
     }
     if (count !== pending.current.size) setNotificationBadge(pending.current.size);

@@ -752,6 +752,12 @@ type SortableThreadRowBag = Pick<
   "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
 >;
 
+const NO_DRAGGED_ORDER: readonly string[] = [];
+// useSortable memoizes on its `disabled` object, so a fresh one per render
+// re-renders every row and marker on each sidebar update.
+const SIDEBAR_SORTABLE_DRAG_DISABLED = { draggable: true } as const;
+const SIDEBAR_SORTABLE_DRAG_ENABLED = { draggable: false } as const;
+
 function SortableThreadRow(props: {
   id: string;
   disabled: boolean;
@@ -762,7 +768,10 @@ function SortableThreadRow(props: {
   const canOperateThread = useEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope);
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
-    disabled: { draggable: props.disabled || !canOperateThread },
+    disabled:
+      props.disabled || !canOperateThread
+        ? SIDEBAR_SORTABLE_DRAG_DISABLED
+        : SIDEBAR_SORTABLE_DRAG_ENABLED,
     animateLayoutChanges: animateSidebarLayoutChanges,
   });
   // dnd-kit memoizes each field but not the bag, so the memoized row would
@@ -791,7 +800,7 @@ function SortableSidebarMarker(props: {
 }) {
   const { setNodeRef, transform, transition } = useSortable({
     id: sidebarMarkerId(props.marker),
-    disabled: { draggable: true },
+    disabled: SIDEBAR_SORTABLE_DRAG_DISABLED,
     animateLayoutChanges: animateSidebarLayoutChanges,
   });
   return (
@@ -3532,6 +3541,11 @@ export default function Sidebar() {
     (args) => restrictBelowSidebarLabel(args, dragLabelOffsetRef.current),
     [],
   );
+  // A new array re-renders DndContext and with it every sortable row.
+  const dndModifiers = useMemo(
+    () => [restrictToVerticalAxis, restrictBelowPins, restrictToFirstScrollableAncestor],
+    [restrictBelowPins],
+  );
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
   const listAnimationEnabled = useClientSettings((s) => s.sidebarListAnimationEnabled);
   const attachListMotionRef = useCallback((node: HTMLUListElement | null) => {
@@ -3614,15 +3628,19 @@ export default function Sidebar() {
     },
     [contextDragThreads, pointerOutsideThreadList],
   );
-  const dndSensors = useSensors(
-    useSensor(SidebarPointerSensor, {
+  // useSensor memoizes on the options object; a fresh one each render rebuilds
+  // the sensors, and with them DndContext and every sortable row.
+  const pointerSensorOptions = useMemo(
+    () => ({
       distance: SIDEBAR_DRAG_DISTANCE,
       onAttach: attachDragSensor,
       onFinish: finishThreadDrag,
       onMove: moveThreadContextDrag,
       onDrop: dropThreadContextDrag,
     }),
+    [attachDragSensor, dropThreadContextDrag, finishThreadDrag, moveThreadContextDrag],
   );
+  const dndSensors = useSensors(useSensor(SidebarPointerSensor, pointerSensorOptions));
   const sectionByThreadKey = useMemo(() => {
     const map = new Map<string, SidebarSection>();
     const add = (list: readonly EnvironmentThreadShell[], section: SidebarSection) => {
@@ -3853,7 +3871,7 @@ export default function Sidebar() {
     },
     [sectionByThreadKey],
   );
-  const sidebarListItems = useMemo((): readonly SidebarListItem[] => {
+  const sidebarListItemsFresh = useMemo((): readonly SidebarListItem[] => {
     const rowsOf = (
       list: readonly EnvironmentThreadShell[],
       section: SidebarSection,
@@ -3902,6 +3920,23 @@ export default function Sidebar() {
     visibleWorkingThreads,
     workingThreads.length,
   ]);
+  // Thread shells update on every streamed event without moving rows. Keep the
+  // list's identity until its order changes, so the sorting strategy, the
+  // sortable context and every sortable row stay memoized meanwhile.
+  const sidebarListItemsKey = sidebarListItemsFresh
+    .map((item) => (item.kind === "thread" ? item.section + ":" + item.key : item.marker))
+    .join("\n");
+  const [sidebarListItemsState, setSidebarListItems] = useState(sidebarListItemsFresh);
+  const [sidebarListItemsKeyState, setSidebarListItemsKeyState] = useState(sidebarListItemsKey);
+  let sidebarListItems = sidebarListItemsState;
+  if (sidebarListItemsKeyState !== sidebarListItemsKey) {
+    setSidebarListItemsKeyState(sidebarListItemsKey);
+    setSidebarListItems(sidebarListItemsFresh);
+    // The rest of this render still runs before React applies the update, and
+    // threadByKey already lacks rows that just left, such as a thread settled
+    // into the collapsed Settled shelf.
+    sidebarListItems = sidebarListItemsFresh;
+  }
   useEffect(() => {
     if (
       dragState !== null &&
@@ -3950,7 +3985,9 @@ export default function Sidebar() {
   const sortableIds = useMemo(() => sidebarListItems.map(sidebarListItemId), [sidebarListItems]);
   const draggedSettledOrder = useMemo(() => {
     const thread = dragState === null ? undefined : threadByKey.get(dragState.activeKey);
-    if (dragState === null || thread === undefined) return [];
+    // Outside a drag this must keep one identity: the sorting strategy, and with
+    // it every sortable row, rebuilds when it changes.
+    if (dragState === null || thread === undefined) return NO_DRAGGED_ORDER;
     const key = (candidate: EnvironmentThreadShell) =>
       scopedThreadKey(scopeThreadRef(candidate.environmentId, candidate.id));
     return sortSettledThreads([
@@ -5502,11 +5539,7 @@ export default function Sidebar() {
                 sensors={dndSensors}
                 autoScroll={!isContextDrag}
                 collisionDetection={dndCollisionDetection}
-                modifiers={[
-                  restrictToVerticalAxis,
-                  restrictBelowPins,
-                  restrictToFirstScrollableAncestor,
-                ]}
+                modifiers={dndModifiers}
                 onDragStart={handleThreadDragStart}
                 onDragOver={handleThreadDragOver}
                 onDragEnd={handleThreadDragEnd}

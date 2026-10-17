@@ -27,7 +27,7 @@ import * as Stream from "effect/Stream";
 import { recordDecision } from "../decisionLog.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { isNativeMaintenanceCommand } from "./Orchestrator.ts";
+import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 /** A turn that ran longer than this did real work; its failure is not a start failure. */
