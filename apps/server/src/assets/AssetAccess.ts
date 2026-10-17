@@ -585,6 +585,8 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       break;
     }
     case "attachment": {
+      // Without the id a failed lookup in the trace cannot be traced to a file.
+      yield* Effect.annotateCurrentSpan({ "asset.attachment_id": input.resource.attachmentId });
       const config = yield* ServerConfig.ServerConfig;
       const attachmentPath = resolveAttachmentPathById({
         attachmentsDir: config.attachmentsDir,
