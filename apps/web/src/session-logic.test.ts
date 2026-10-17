@@ -28,6 +28,7 @@ import {
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveTimelineEntriesFromVisibleTurnItemsWithState,
   deriveRevertTurnCountByUserMessageId,
+  deriveUnreachableRevertTurnCounts,
   derivePhase,
   findLatestProposedPlan,
   isLatestRunSettled,
@@ -230,6 +231,60 @@ describe("V2 session presentation", () => {
       runId,
     );
     expect(plan?.planMarkdown).toBe("Plan");
+  });
+
+  it("offers no rollback to a run in a provider thread other than the active one", () => {
+    const oldThread = ProviderThreadId.make("provider-thread-codex");
+    const activeThread = ProviderThreadId.make("provider-thread-claude");
+    const unreachable = deriveUnreachableRevertTurnCounts({
+      runs: [
+        { ordinal: 1, providerThreadId: oldThread },
+        { ordinal: 2, providerThreadId: activeThread },
+        { ordinal: 3, providerThreadId: null },
+      ],
+      activeProviderThreadId: activeThread,
+    });
+    expect([...unreachable]).toEqual([1]);
+
+    const message = (id: string, runId: RunId): ChatMessage => ({
+      id: MessageId.make(id),
+      role: "user",
+      text: id,
+      runId,
+      inputIntent: "turn_start",
+      streaming: false,
+      createdAt: "2026-06-20T00:00:00.000Z",
+      updatedAt: "2026-06-20T00:00:00.000Z",
+    });
+    const checkpoint = (runId: RunId, checkpointTurnCount: number) => ({
+      runId,
+      checkpointTurnCount,
+      checkpointRef: `checkpoint-${checkpointTurnCount}` as never,
+      status: "ready" as const,
+      files: [],
+      assistantMessageId: null,
+      completedAt: "2026-06-20T00:00:03.000Z",
+    });
+    const second = message("message-second", RunId.make("run-2"));
+    const third = message("message-third", RunId.make("run-3"));
+    const targets = deriveRevertTurnCountByUserMessageId({
+      timelineEntries: [second, third].map((entry) => ({
+        id: entry.id,
+        kind: "message" as const,
+        createdAt: entry.createdAt,
+        message: entry,
+      })),
+      checkpoints: [checkpoint(RunId.make("run-2"), 2), checkpoint(RunId.make("run-3"), 3)],
+      unreachableTurnCounts: unreachable,
+    });
+    expect([...targets]).toEqual([[third.id, 2]]);
+
+    expect(
+      deriveUnreachableRevertTurnCounts({
+        runs: [{ ordinal: 1, providerThreadId: oldThread }],
+        activeProviderThreadId: null,
+      }).size,
+    ).toBe(0);
   });
 
   it("assigns run rollback to the turn-start message instead of a later steer", () => {

@@ -188,6 +188,7 @@ import {
   deriveActivePlanState,
   deriveActiveWorkStartedAt,
   deriveCanInterruptRunningThread,
+  deriveUnreachableRevertTurnCounts,
   findLatestProposedPlan,
   hasActionableProposedPlan,
   isLatestRunSettled,
@@ -2590,6 +2591,10 @@ export default function ChatView(props: ChatViewProps) {
     canOperateThread &&
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
+  const unreachableRevertTurnCounts = deriveUnreachableRevertTurnCounts({
+    runs: serverProjection?.runs ?? [],
+    activeProviderThreadId: serverProjection?.thread.activeProviderThreadId ?? null,
+  });
   const phase = derivePhase(activeRuntime);
   const serverThreadId = serverThread?.id;
   const serverThreadEnvironmentId = serverThread?.environmentId;
@@ -8303,6 +8308,7 @@ export default function ChatView(props: ChatViewProps) {
                 supportsConversationRollback={
                   !paintOnlyDisplayedTimeline && supportsConversationRollback
                 }
+                unreachableRevertTurnCounts={unreachableRevertTurnCounts}
                 onRevertToTurnCount={
                   paintOnlyDisplayedTimeline ? noopHeldRevert : onRevertTimelineTurnStable
                 }

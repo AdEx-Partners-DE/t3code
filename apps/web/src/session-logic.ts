@@ -1021,9 +1021,30 @@ export function inferCheckpointTurnCountByRunId(
   );
 }
 
+/**
+ * Run ordinals the server refuses to roll back to: the run belongs to a provider
+ * thread other than the active one (the thread changed account or model since).
+ */
+export function deriveUnreachableRevertTurnCounts(input: {
+  readonly runs: ReadonlyArray<
+    Pick<OrchestrationV2ThreadProjection["runs"][number], "ordinal" | "providerThreadId">
+  >;
+  readonly activeProviderThreadId: OrchestrationV2ThreadProjection["thread"]["activeProviderThreadId"];
+}): ReadonlySet<number> {
+  const unreachable = new Set<number>();
+  if (input.activeProviderThreadId === null) return unreachable;
+  for (const run of input.runs) {
+    if (run.providerThreadId !== null && run.providerThreadId !== input.activeProviderThreadId) {
+      unreachable.add(run.ordinal);
+    }
+  }
+  return unreachable;
+}
+
 export function deriveRevertTurnCountByUserMessageId(input: {
   readonly timelineEntries: ReadonlyArray<TimelineEntry>;
   readonly checkpoints: ReadonlyArray<ThreadCheckpointSummary>;
+  readonly unreachableTurnCounts?: ReadonlySet<number> | undefined;
 }): Map<ChatMessage["id"], number> {
   const readyCheckpointByRunId = new Map<RunId, ThreadCheckpointSummary>();
   for (const checkpoint of input.checkpoints) {
@@ -1040,7 +1061,9 @@ export function deriveRevertTurnCountByUserMessageId(input: {
     if (entry.message.runId === null) continue;
     const checkpoint = readyCheckpointByRunId.get(entry.message.runId);
     if (checkpoint === undefined) continue;
-    byUserMessageId.set(entry.message.id, Math.max(0, checkpoint.checkpointTurnCount - 1));
+    const turnCount = Math.max(0, checkpoint.checkpointTurnCount - 1);
+    if (input.unreachableTurnCounts?.has(turnCount)) continue;
+    byUserMessageId.set(entry.message.id, turnCount);
   }
   return byUserMessageId;
 }
