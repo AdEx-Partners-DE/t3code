@@ -108,6 +108,7 @@ import {
 import {
   listLimitSwitchTargets,
   suggestLimitSwitch,
+  type LimitSwitchTarget,
 } from "@t3tools/client-runtime/state/limit-switch-targets";
 import { providerHandoffBlocker } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolvePendingHandoff } from "@t3tools/client-runtime/handoff";
@@ -1065,12 +1066,7 @@ export default function ChatView(props: ChatViewProps) {
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
   const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
-  // Memoized by hand: the fork's ChatView does not compile with the React Compiler, and hooks
-  // below compare this ref by identity.
-  const routeThreadRef = useMemo(
-    () => scopeThreadRef(environmentId, threadId),
-    [environmentId, threadId],
-  );
+  const routeThreadRef = scopeThreadRef(environmentId, threadId);
   const routeThreadKey = scopedThreadKey(routeThreadRef);
   const currentRouteThreadKeyRef = useRef<string | null>(routeThreadKey);
   useLayoutEffect(() => {
@@ -1173,19 +1169,8 @@ export default function ChatView(props: ChatViewProps) {
   // How full the context was at the end of each run, for the time of its turn.
   // The projection arrays are rebuilt on every event, so the map is keyed by
   // its content: the timeline's rows must not re-render while nothing changed.
-  const runContextUsageKey = useMemo(
-    () =>
-      JSON.stringify([
-        ...contextUsageByRun(
-          serverProjection?.attempts ?? [],
-          serverProjection?.providerTurns ?? [],
-        ),
-      ]),
-    [serverProjection?.attempts, serverProjection?.providerTurns],
-  );
-  const runContextUsage = useMemo(
-    () => new Map(JSON.parse(runContextUsageKey) as ReadonlyArray<[string, RunContextUsage]>),
-    [runContextUsageKey],
+  const runContextUsage = new Map(
+    contextUsageByRun(serverProjection?.attempts ?? [], serverProjection?.providerTurns ?? []),
   );
   const serverVisibleTurnItems = useThreadVisibleTurnItems(routeThreadDetailRef);
   const serverThreadHistory = useThreadHistory(routeThreadDetailRef);
@@ -2291,13 +2276,10 @@ export default function ChatView(props: ChatViewProps) {
   // turn, so the composer does not keep naming an account it is not using.
   // The run's own selection is the reference: it arrives with the run, while
   // the thread's saved selection may update a moment later.
-  const latestRunSelection = useMemo(
-    () =>
-      isServerThread && serverProjection !== null
-        ? (latestExecutedRun(serverProjection.runs) ?? null)
-        : null,
-    [isServerThread, serverProjection],
-  );
+  const latestRunSelection =
+    isServerThread && serverProjection !== null
+      ? (latestExecutedRun(serverProjection.runs) ?? null)
+      : null;
   const followedRunRef = useRef<{ threadKey: string; runId: string | null } | null>(null);
   useEffect(() => {
     const runId = latestRunSelection?.id ?? null;
@@ -2982,10 +2964,7 @@ export default function ChatView(props: ChatViewProps) {
     serverAttachmentUrlById,
     serverVisibleTurnItems,
   ]);
-  // Memoized by hand, like the timeline inputs below: useIncrementalTimelineEntries compares its
-  // input by identity, and the fork's ChatView does not compile with the React Compiler, so a
-  // fresh Map per render made it reset its state forever (React error #301).
-  const timelineAttachmentUrlById = useMemo(() => {
+  const timelineAttachmentUrlById = (() => {
     const urls = new Map(serverAttachmentUrlById);
     for (const row of serverVisibleTurnItems) {
       if (row.item.type !== "user_message") continue;
@@ -3000,18 +2979,14 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
     return urls;
-  }, [attachmentPreviewHandoffByMessageId, serverAttachmentUrlById, serverVisibleTurnItems]);
-  const anchoredTimelineMessages = useMemo(
-    () =>
-      feedbackSubmissions.flatMap((submission) =>
-        submission.status === "interrupted"
-          ? []
-          : [
-              { ...codexFeedbackMessage(submission), runId: null },
-              { ...codexFeedbackMessage(submission, "assistant"), runId: null },
-            ],
-      ),
-    [feedbackSubmissions],
+  })();
+  const anchoredTimelineMessages = feedbackSubmissions.flatMap((submission) =>
+    submission.status === "interrupted"
+      ? []
+      : [
+          { ...codexFeedbackMessage(submission), runId: null },
+          { ...codexFeedbackMessage(submission, "assistant"), runId: null },
+        ],
   );
   const serverTimelineEntries = useIncrementalTimelineEntries(activeThreadKey, {
     visibleTurnItems: serverVisibleTurnItems,
@@ -4229,7 +4204,7 @@ export default function ChatView(props: ChatViewProps) {
     readonly userScrollGeneration: number;
   } | null>(null);
   const anchorScrollRestoreFrameRef = useRef<number | null>(null);
-  const cancelTimelineLiveFollowForUserNavigation = useCallback(() => {
+  const cancelTimelineLiveFollowForUserNavigation = () => {
     anchorUserScrollGenerationRef.current += 1;
     const wasProgrammaticScrollMode = timelineScrollModeRef.current !== "free-scrolling";
     timelineScrollModeRef.current = "free-scrolling";
@@ -4247,7 +4222,7 @@ export default function ChatView(props: ChatViewProps) {
     if (wasProgrammaticScrollMode) {
       cancelTimelineProgrammaticScroll(legendListRef.current);
     }
-  }, []);
+  };
   useEffect(() => {
     const previous = observedTimelineActivityRef.current;
     const dispatchedUserItem =
@@ -4335,7 +4310,7 @@ export default function ChatView(props: ChatViewProps) {
   const onComposerPageScrollReleaseStable = useStableCallback(onComposerPageScrollRelease);
   // Live-follow stays active after send/thread-open until an actual list scroll
   // gesture opts out.
-  const scrollToEnd = useCallback((animated = false) => {
+  const scrollToEnd = (animated = false) => {
     isAtEndRef.current = true;
     timelineScrollModeRef.current = "following-end";
     liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
@@ -4350,13 +4325,13 @@ export default function ChatView(props: ChatViewProps) {
     requestAnimationFrame(() => {
       void legendListRef.current?.scrollToEnd?.({ animated });
     });
-  }, []);
+  };
   const scrollContentOverflows = useEffectEvent(() => timelineRealContentOverflowsViewport());
   const cancelFollowForNavigation = useEffectEvent(() =>
     cancelTimelineLiveFollowForUserNavigation(),
   );
   const timelineAtLogicalEnd = useEffectEvent(() => isTimelineAtLogicalEnd());
-  const onTimelineScrollNodeMount = useCallback((scrollNode: HTMLElement) => {
+  const onTimelineScrollNodeMount = (scrollNode: HTMLElement) => {
     const handleManualNavigation = () => {
       cancelFollowForNavigation();
     };
@@ -4517,7 +4492,7 @@ export default function ChatView(props: ChatViewProps) {
       scrollNode.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  };
 
   const onTimelineAnchorReady = (messageId: MessageId, anchorIndex: number) => {
     if (pendingTimelineAnchorRef.current === messageId) {
@@ -5517,134 +5492,6 @@ export default function ChatView(props: ChatViewProps) {
     });
     return item ? [item] : [];
   });
-  const limitRecoveryBanner =
-    serverRuntime?.status === "failed" &&
-    serverRuntime.lastErrorClass === "usage_limit" &&
-    activeThreadShell?.latestRun
-      ? usageLimitRecoveryBannerItem({
-          runId: activeThreadShell.latestRun.runId,
-          resetAt: serverRuntime.usageLimitResetAt ?? null,
-          stoppedAt: activeThreadShell.latestRun.completedAt ?? activeThreadShell.updatedAt,
-          recovery: activeThreadShell.limitRecovery ?? null,
-          snoozedUntil: activeThreadShell.snoozedUntil,
-          onChange: async (limitRecovery) => {
-            const result = await updateThreadMetadata({
-              environmentId,
-              input: { threadId: activeThreadShell.id, limitRecovery },
-            });
-            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-          },
-          switchTargets: listLimitSwitchTargets({
-            providers: providerStatuses,
-            current: activeThreadShell.modelSelection,
-            nowMs: Date.now(),
-          }),
-          onSwitch: (target) => resumeThread(target.selection),
-        })
-      : null;
-  const [dismissedLimitSwitchBannerId, setDismissedLimitSwitchBannerId] = useState<string | null>(
-    null,
-  );
-  // The failed-turn banner already offers the same accounts, so this one waits for it to clear.
-  const limitSwitchSuggestion =
-    limitRecoveryBanner === null && activeThread && activeProviderInstanceId !== null
-      ? suggestLimitSwitch({
-          providers: providerStatuses,
-          current: { ...activeThread.modelSelection, instanceId: activeProviderInstanceId },
-          nowMs: Date.now(),
-        })
-      : null;
-  const limitSwitchBannerCandidate =
-    limitSwitchSuggestion === null
-      ? null
-      : limitSwitchBannerItem(
-          limitSwitchSuggestion,
-          (target) => {
-            onProviderModelSelect(target.selection.instanceId, target.selection.model);
-            toastManager.add({
-              type: "success",
-              title: `Switched to ${target.label}`,
-              description:
-                target.remainingPercent === null
-                  ? "Your next message uses this account."
-                  : `Your next message uses this account. ${Math.round(target.remainingPercent)}% of its tightest limit is left.`,
-            });
-          },
-          setDismissedLimitSwitchBannerId,
-        );
-  const limitSwitchBanner =
-    limitSwitchBannerCandidate?.id === dismissedLimitSwitchBannerId
-      ? null
-      : limitSwitchBannerCandidate;
-  const composerBannerItems = (() => {
-    const limitRecoveryItems = [limitRecoveryBanner, limitSwitchBanner].filter(
-      (item) => item !== null,
-    );
-    const backgroundWorkItems = [
-      childInputBannerItem,
-      goalBannerItem,
-      backgroundWorkBannerItem,
-    ].filter((item) => item !== null);
-    const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
-    const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
-    if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
-      return [
-        ...feedbackBannerItems,
-        ...limitRecoveryItems,
-        ...usageLimitsItems,
-        ...projectCloneItems,
-        ...systemComposerBannerItems,
-        ...backgroundWorkItems,
-      ];
-    }
-    return [
-      ...feedbackBannerItems,
-      ...limitRecoveryItems,
-      ...usageLimitsItems,
-      ...projectCloneItems,
-      ...systemComposerBannerItems,
-      ...backgroundWorkItems,
-      {
-        id: `branch-mismatch:${activeBranchMismatchKey}`,
-        variant: "info",
-        compact: true,
-        icon: <GitBranchIcon />,
-        title: (
-          <span className="flex min-w-0 items-baseline gap-1.5">
-            <span className="shrink-0 font-normal text-muted-foreground">Branch changed — was</span>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <code className="min-w-0 truncate font-medium text-foreground">
-                    {localCheckoutBranchMismatch.threadBranch}
-                  </code>
-                }
-              />
-              <TooltipPopup side="top">
-                This thread last ran on {localCheckoutBranchMismatch.threadBranch}. Sending will
-                continue on {localCheckoutBranchMismatch.currentBranch}.
-              </TooltipPopup>
-            </Tooltip>
-          </span>
-        ),
-        actions: (
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={!canWriteSourceControl || isRestoringThreadBranch}
-            onClick={handleRestoreThreadBranchStable}
-          >
-            {isRestoringThreadBranch ? "Restoring..." : "Restore branch"}
-          </Button>
-        ),
-        dismissLabel: "Dismiss branch change notice",
-        onDismiss: () => {
-          dismissBranchMismatchForSession(activeBranchMismatchKey);
-          setBranchMismatchDismissTick((tick) => tick + 1);
-        },
-      },
-    ];
-  })() as ComposerBannerStackItem[];
 
   // A launch context only overrides the drawer's cwd until the thread's own
   // location catches up, the drawer closes, or the thread changes.
@@ -7739,6 +7586,141 @@ export default function ChatView(props: ChatViewProps) {
     setStickyComposerModelSelection(nextModelSelection);
     if (options?.focusComposer !== false) scheduleComposerFocus();
   };
+
+  // Stable callbacks: the banner items are built during render, and these read refs through
+  // resumeThread and onProviderModelSelect, which keeps ChatView out of the React Compiler (0bq).
+  const switchFromLimitRecoveryBanner = useStableCallback((target: LimitSwitchTarget) =>
+    resumeThread(target.selection),
+  );
+  const switchFromLimitSwitchBanner = useStableCallback((target: LimitSwitchTarget) => {
+    onProviderModelSelect(target.selection.instanceId, target.selection.model);
+    toastManager.add({
+      type: "success",
+      title: `Switched to ${target.label}`,
+      description:
+        target.remainingPercent === null
+          ? "Your next message uses this account."
+          : `Your next message uses this account. ${Math.round(target.remainingPercent)}% of its tightest limit is left.`,
+    });
+  });
+  const limitRecoveryBanner =
+    serverRuntime?.status === "failed" &&
+    serverRuntime.lastErrorClass === "usage_limit" &&
+    activeThreadShell?.latestRun
+      ? usageLimitRecoveryBannerItem({
+          runId: activeThreadShell.latestRun.runId,
+          resetAt: serverRuntime.usageLimitResetAt ?? null,
+          stoppedAt: activeThreadShell.latestRun.completedAt ?? activeThreadShell.updatedAt,
+          recovery: activeThreadShell.limitRecovery ?? null,
+          snoozedUntil: activeThreadShell.snoozedUntil,
+          onChange: async (limitRecovery) => {
+            const result = await updateThreadMetadata({
+              environmentId,
+              input: { threadId: activeThreadShell.id, limitRecovery },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+          switchTargets: listLimitSwitchTargets({
+            providers: providerStatuses,
+            current: activeThreadShell.modelSelection,
+            nowMs: Date.parse(nowMinute),
+          }),
+          onSwitch: switchFromLimitRecoveryBanner,
+        })
+      : null;
+  const [dismissedLimitSwitchBannerId, setDismissedLimitSwitchBannerId] = useState<string | null>(
+    null,
+  );
+  // The failed-turn banner already offers the same accounts, so this one waits for it to clear.
+  const limitSwitchSuggestion =
+    limitRecoveryBanner === null && activeThread && activeProviderInstanceId !== null
+      ? suggestLimitSwitch({
+          providers: providerStatuses,
+          current: { ...activeThread.modelSelection, instanceId: activeProviderInstanceId },
+          nowMs: Date.parse(nowMinute),
+        })
+      : null;
+  const limitSwitchBannerCandidate =
+    limitSwitchSuggestion === null
+      ? null
+      : limitSwitchBannerItem(
+          limitSwitchSuggestion,
+          switchFromLimitSwitchBanner,
+          setDismissedLimitSwitchBannerId,
+        );
+  const limitSwitchBanner =
+    limitSwitchBannerCandidate?.id === dismissedLimitSwitchBannerId
+      ? null
+      : limitSwitchBannerCandidate;
+  const composerBannerItems = (() => {
+    const limitRecoveryItems = [limitRecoveryBanner, limitSwitchBanner].filter(
+      (item) => item !== null,
+    );
+    const backgroundWorkItems = [
+      childInputBannerItem,
+      goalBannerItem,
+      backgroundWorkBannerItem,
+    ].filter((item) => item !== null);
+    const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
+    const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
+    if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
+      return [
+        ...feedbackBannerItems,
+        ...limitRecoveryItems,
+        ...usageLimitsItems,
+        ...projectCloneItems,
+        ...systemComposerBannerItems,
+        ...backgroundWorkItems,
+      ];
+    }
+    return [
+      ...feedbackBannerItems,
+      ...limitRecoveryItems,
+      ...usageLimitsItems,
+      ...projectCloneItems,
+      ...systemComposerBannerItems,
+      ...backgroundWorkItems,
+      {
+        id: `branch-mismatch:${activeBranchMismatchKey}`,
+        variant: "info",
+        compact: true,
+        icon: <GitBranchIcon />,
+        title: (
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="shrink-0 font-normal text-muted-foreground">Branch changed — was</span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <code className="min-w-0 truncate font-medium text-foreground">
+                    {localCheckoutBranchMismatch.threadBranch}
+                  </code>
+                }
+              />
+              <TooltipPopup side="top">
+                This thread last ran on {localCheckoutBranchMismatch.threadBranch}. Sending will
+                continue on {localCheckoutBranchMismatch.currentBranch}.
+              </TooltipPopup>
+            </Tooltip>
+          </span>
+        ),
+        actions: (
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={!canWriteSourceControl || isRestoringThreadBranch}
+            onClick={handleRestoreThreadBranchStable}
+          >
+            {isRestoringThreadBranch ? "Restoring..." : "Restore branch"}
+          </Button>
+        ),
+        dismissLabel: "Dismiss branch change notice",
+        onDismiss: () => {
+          dismissBranchMismatchForSession(activeBranchMismatchKey);
+          setBranchMismatchDismissTick((tick) => tick + 1);
+        },
+      },
+    ];
+  })() as ComposerBannerStackItem[];
   const onProviderModelSelectStable = useStableCallback(onProviderModelSelect);
   const onEnvModeChange = (mode: DraftThreadEnvMode) => {
     if (multipleModelSelections !== null) return;
