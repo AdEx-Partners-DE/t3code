@@ -287,7 +287,7 @@ import {
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomUUID } from "~/lib/utils";
-import { threadModelSelectionChanged } from "../threadModelSelectionSeen";
+import { isSameSelection, sightThreadModelSelection } from "../threadModelSelectionSeen";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { requestNextWaitingThread } from "./threadNextWaitingBus";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -2314,7 +2314,18 @@ export default function ChatView(props: ChatViewProps) {
   const serverThreadModelSelection = isServerThread ? (activeThread?.modelSelection ?? null) : null;
   useEffect(() => {
     if (serverThreadModelSelection === null) return;
-    if (!threadModelSelectionChanged(routeThreadKey, serverThreadModelSelection)) return;
+    const sighting = sightThreadModelSelection(routeThreadKey, serverThreadModelSelection);
+    if (sighting === "same") return;
+    // A thread this browser never saw can still carry a pick saved before the
+    // thread was moved; nothing tells it apart from a stale one, so the
+    // thread's own selection wins.
+    if (sighting === "first") {
+      const draft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
+      const pick = draft?.activeProvider
+        ? draft.modelSelectionByProvider[draft.activeProvider]
+        : undefined;
+      if (pick === undefined || isSameSelection(pick, serverThreadModelSelection)) return;
+    }
     setComposerDraftModelSelection(composerDraftTarget, serverThreadModelSelection, {
       explicit: true,
       replaceOptions: true,
