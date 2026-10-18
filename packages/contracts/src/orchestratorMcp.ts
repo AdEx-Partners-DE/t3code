@@ -581,6 +581,8 @@ export type OrchestratorMcpListScheduledTasksInput =
 
 export const OrchestratorMcpListScheduledTasksResult = Schema.Struct({
   tasks: Schema.Array(OrchestratorMcpScheduledTask),
+  /** Set while a server update holds every task back; due tasks run by then. */
+  heldForUpdateUntil: Schema.optional(IsoDateTime),
 });
 export type OrchestratorMcpListScheduledTasksResult =
   typeof OrchestratorMcpListScheduledTasksResult.Type;

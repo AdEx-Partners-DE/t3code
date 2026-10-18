@@ -27,6 +27,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { DEFAULT_WEBHOOK_PROMPT } from "@t3tools/client-runtime/scheduled-task-webhook";
+import { deriveCockpitAlerts, formatWait } from "@t3tools/client-runtime/state/cockpit-alerts";
 import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MIN_SCHEDULED_TASK_INTERVAL_MS,
@@ -543,6 +544,29 @@ function ScheduledTaskEnvironmentList({
   );
 }
 
+/**
+ * While an update waits to go in, the server starts no task, but every switch still reads on
+ * and a due task looks overdue for no reason. Same source and words as the sidebar cockpit.
+ */
+function ScheduledTasksUpdateHoldRow({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  // Counted from the start of the minute, the wait reads up to a minute long: still "at the latest".
+  const nowMinute = useNowMinute();
+  const result = useAtomValue(serverEnvironment.threadChecklists({ environmentId, input: {} }));
+  const { updateHoldMs } = deriveCockpitAlerts(
+    Option.getOrNull(AsyncResult.value(result)),
+    Date.parse(`${nowMinute}:00.000Z`),
+  );
+  if (updateHoldMs === null) return null;
+  return (
+    <SettingsRow
+      data-testid="scheduled-tasks-update-hold"
+      role="status"
+      title="Tasks wait for an update"
+      description={`An update is waiting to go in: tasks start again in ${formatWait(updateHoldMs)} at the latest. Tasks that fall due meanwhile run then.`}
+    />
+  );
+}
+
 function ScheduledTaskEnvironmentSection({
   environment,
   showEnvironmentHeading,
@@ -637,6 +661,7 @@ function ScheduledTaskEnvironmentSection({
               </Button>
             }
           />
+          <ScheduledTasksUpdateHoldRow environmentId={environment.environmentId} />
           {tasks.length === 0 ? (
             <SettingsRow
               title="No scheduled tasks"

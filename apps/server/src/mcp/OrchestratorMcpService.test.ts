@@ -20,6 +20,8 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 
 import {
@@ -41,6 +43,8 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as ServerConfig from "../config.ts";
+import { UPDATE_HOLD_FILE_NAME } from "../scheduledTasks/updateHold.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -2139,6 +2143,36 @@ describe("OrchestratorMcpService provider resolution", () => {
         );
         assert.equal(listed.tasks[0]?.webhookUrl, undefined);
       }),
+    );
+
+    it.effect("says until when a server update holds every task back", () =>
+      Effect.gen(function* () {
+        const upserted = yield* Ref.make(0);
+        // Built once, so the listing and the marker below share one state directory.
+        const config = yield* ServerConfig.ServerConfig.pipe(
+          Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "mcp-update-hold-" })),
+        );
+        const list = OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.flatMap((mcp) => mcp.listScheduledTasks(supervisedClient, { projectId })),
+          Effect.provide(
+            service([task({})], null, upserted).pipe(
+              Layer.provideMerge(Layer.succeed(ServerConfig.ServerConfig, config)),
+            ),
+          ),
+        );
+        assert.isUndefined((yield* list).heldForUpdateUntil);
+
+        const { stateDir } = config;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* fileSystem.makeDirectory(stateDir, { recursive: true });
+        // The test clock stands at the epoch.
+        yield* fileSystem.writeFileString(
+          path.join(stateDir, UPDATE_HOLD_FILE_NAME),
+          JSON.stringify({ at: "1970-01-01T00:00:00.000Z", until: "1970-01-01T00:10:00.000Z" }),
+        );
+        assert.equal((yield* list).heldForUpdateUntil, "1970-01-01T00:10:00.000Z");
+      }).pipe(Effect.provide(NodeServices.layer)),
     );
 
     it.effect("checks a bound task against its thread's current modes", () =>

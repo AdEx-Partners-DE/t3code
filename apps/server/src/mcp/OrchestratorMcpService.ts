@@ -91,6 +91,7 @@ import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
+import { currentUpdateHold } from "../scheduledTasks/updateHold.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   clientRuntimeModeCeiling,
@@ -903,6 +904,8 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+  // The services the hold reads are taken here: tools run on the caller's fiber later.
+  const updateHold = currentUpdateHold.pipe(Effect.provide(yield* Effect.context<never>()));
   const projects = yield* ProjectService.ProjectService;
   const git = yield* GitWorkflow.GitWorkflowService;
   const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
@@ -1701,11 +1704,15 @@ const make = Effect.gen(function* () {
               failure("orchestration_error", `Could not list scheduled tasks: ${error.message}`),
             ),
           );
+        const heldUntil = yield* updateHold;
         return {
           tasks: yield* Effect.forEach(
             tasks.filter((task) => projectId === undefined || task.projectId === projectId),
             (task) => summarizeScheduledTask(scope, { parent, limits }, task),
           ),
+          ...(heldUntil === null
+            ? {}
+            : { heldForUpdateUntil: DateTime.formatIso(DateTime.makeUnsafe(heldUntil)) }),
         };
       }),
     updateScheduledTask: (scope, input) =>
