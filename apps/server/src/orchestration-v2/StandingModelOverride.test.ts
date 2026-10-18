@@ -5,6 +5,7 @@ import {
   alignsBeforeMessage,
   parseStandingOverrides,
   scopeCovers,
+  describeSelection,
   standingAlignmentStep,
   standingOverrideFromApplied,
   standingSelectionFor,
@@ -148,6 +149,22 @@ describe("userWroteSinceOverride", () => {
         overrideSetAtMs: setAt,
       }),
     ).toBe(false);
+  });
+});
+
+describe("describeSelection", () => {
+  it("names the thinking level, which can differ from the rule on the same model", () => {
+    type Selection = Parameters<typeof describeSelection>[0];
+    expect(
+      describeSelection({
+        instanceId: "codex_stark_cli",
+        model: "gpt-6-astra",
+        options: [{ id: "reasoningEffort", value: "max" }],
+      } as unknown as Selection),
+    ).toBe("codex_stark_cli/gpt-6-astra (max)");
+    expect(
+      describeSelection({ instanceId: "codex", model: "gpt-6-astra" } as unknown as Selection),
+    ).toBe("codex/gpt-6-astra");
   });
 });
 

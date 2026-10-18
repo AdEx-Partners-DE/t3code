@@ -293,6 +293,16 @@ export function standingSelectionFor(input: {
 }
 
 /**
+ * How the decision log names a selection. The thinking level is part of it: a thread on the
+ * rule's model but another level differs from the rule, and the log must show where.
+ */
+export function describeSelection(selection: ModelSelection): string {
+  const effort = selection.options?.find((option) => /effort/i.test(option.id))?.value;
+  const base = `${selection.instanceId}/${selection.model}`;
+  return effort === undefined ? base : `${base} (${String(effort)})`;
+}
+
+/**
  * What one alignment does. A thread already on the rule's model needs nothing,
  * whoever put it there; recording it as keeping its own choice would name a
  * difference that does not exist.
@@ -381,7 +391,7 @@ export const alignThreadWithStandingOverride = (
     });
     if (step === "none" || next === null) return;
     if (step === "kept-own-choice") {
-      const current = `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`;
+      const current = describeSelection(thread.modelSelection);
       // A task on a timer comes by every few minutes; the same choice is recorded once.
       const key = `${threadId}\0${current}`;
       if (!keptChoicesRecorded.has(key)) {
@@ -426,8 +436,8 @@ export const alignThreadWithStandingOverride = (
       outcome: "aligned",
       facts: {
         reason,
-        from: `${thread.modelSelection.instanceId}/${thread.modelSelection.model}`,
-        to: `${next.instanceId}/${next.model}`,
+        from: describeSelection(thread.modelSelection),
+        to: describeSelection(next),
         scope,
       },
     });
