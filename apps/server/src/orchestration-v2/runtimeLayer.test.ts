@@ -2503,6 +2503,115 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("a waiting pull request wake goes when its watch ends before it runs", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-wake-ended");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-wake-ended-create"),
+        threadId,
+        projectId: ProjectId.make("pr-wake-ended-project"),
+        title: "Wake ended",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      const key = { host: "github.com", repository: "pingdotgg/t3code" };
+      const url = (number: number) => `https://github.com/pingdotgg/t3code/pull/${number}`;
+      for (const number of [8, 9, 10]) {
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make(`pr-wake-ended-start-${number}`),
+          threadId,
+          ...key,
+          number,
+          watching: true,
+          link: { url: url(number), source: "agent" },
+        });
+      }
+      const watchOf = (number: number) =>
+        orchestrator
+          .getThreadShell(threadId)
+          .pipe(Effect.map((shell) => shell?.pullRequests?.find((link) => link.number === number)));
+      const wake = (number: number, name: string) =>
+        Effect.gen(function* () {
+          const watch = (yield* watchOf(number))?.watch;
+          assert.isDefined(watch);
+          if (watch === undefined) return;
+          yield* orchestrator.dispatch({
+            type: "thread.pull-request-watch.sync",
+            commandId: CommandId.make(`pr-wake-ended-${name}`),
+            threadId,
+            ...key,
+            number,
+            startedAt: watch.startedAt,
+            watch,
+            wake: {
+              messageId: MessageId.make(`message:pr-watch:ended-${name}`),
+              text: `Update on pull request #${number} (${url(number)}):\n- ${name}`,
+              notification: {
+                source: { kind: "monitor" },
+                outcome: "updated",
+                summary: `#${number}: ${name}`,
+              },
+            },
+          });
+        });
+      const endWatch = (number: number) =>
+        Effect.gen(function* () {
+          const watch = (yield* watchOf(number))?.watch;
+          assert.isDefined(watch);
+          if (watch === undefined) return;
+          yield* orchestrator.dispatch({
+            type: "thread.pull-request-watch.sync",
+            commandId: CommandId.make(`pr-wake-ended-end-${number}`),
+            threadId,
+            ...key,
+            number,
+            startedAt: watch.startedAt,
+            watch: null,
+          });
+        });
+      const waiting = orchestrator
+        .getThreadRecords(threadId, ["runs"])
+        .pipe(Effect.map((records) => records.runs.filter((run) => run.status === "queued")));
+
+      // The first wake may start at once; the second then waits.
+      yield* wake(8, "one");
+      yield* wake(8, "two");
+      assert.lengthOf(yield* waiting, 1);
+      // Another pull request's watch ending leaves it alone.
+      yield* endWatch(9);
+      assert.lengthOf(yield* waiting, 1);
+      // The agent's own unwatch drops it.
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-wake-ended-unwatch-8"),
+        threadId,
+        ...key,
+        number: 8,
+        watching: false,
+      });
+      assert.lengthOf(yield* waiting, 0);
+
+      yield* wake(10, "three");
+      yield* wake(10, "four");
+      const before = yield* waiting;
+      // A merge ends the watch without a wake of its own.
+      yield* endWatch(10);
+      assert.lengthOf(yield* waiting, 0);
+      const cancelled = (yield* orchestrator.getThreadRecords(threadId, ["runs"])).runs.filter(
+        (run) => before.some((queued) => queued.id === run.id),
+      );
+      assert.isTrue(cancelled.length > 0 && cancelled.every((run) => run.status === "cancelled"));
+    }),
+  );
+
   it.effect.each(["manual", "automatic"])("settling ends every pull request watch: %s", (mode) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
