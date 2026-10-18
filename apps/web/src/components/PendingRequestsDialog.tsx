@@ -161,6 +161,7 @@ function PendingRequestThreadRows({
         <div key={question.requestId} className="mt-2 flex items-start justify-between gap-3">
           <p className="min-w-0 flex-1 text-sm break-words text-muted-foreground">
             {question.questions[0]?.question ?? "The agent has a question."}
+            {question.questions.length > 1 ? ` (+${question.questions.length - 1} more)` : null}
           </p>
           <Button size="xs" variant="outline" onClick={openThread}>
             Answer

@@ -69,6 +69,7 @@ import {
   MessageSquareDashedIcon,
   LinkIcon,
   ListChecksIcon,
+  MessageCircleQuestionIcon,
   MessageSquareIcon,
   MonitorIcon,
   MoonIcon,
@@ -107,7 +108,7 @@ import {
   copyPromptLink,
   promptLinkRepositoryOf,
 } from "./promptLinks/copyPromptLink";
-import { openPortfolioChecklists } from "../portfolioChecklistBus";
+import { openPendingRequests, openPortfolioChecklists } from "../portfolioChecklistBus";
 import {
   useClientSettings,
   usePrimarySettings,
@@ -208,7 +209,11 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
-import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
+import {
+  orderItemsByPreferredIds,
+  resolveSidebarThreadStatus,
+  sortLogicalProjectsForSidebar,
+} from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import {
@@ -2187,6 +2192,23 @@ function OpenCommandPaletteDialog(props: {
       openPortfolioChecklists();
     },
   });
+  const waitingOnAnswer = threads.filter((thread) => {
+    if (thread.archivedAt !== null) return false;
+    const status = resolveSidebarThreadStatus(thread);
+    return status === "approval" || status === "input";
+  }).length;
+  if (waitingOnAnswer > 0) {
+    actionItems.push({
+      kind: "action",
+      value: "action:open-pending-requests",
+      searchTerms: ["answer", "questions", "input", "approval", "waiting", "pending"],
+      title: `Answer waiting questions (${waitingOnAnswer})`,
+      icon: <MessageCircleQuestionIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openPendingRequests();
+      },
+    });
+  }
   actionItems.push(...pauseItems);
 
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
