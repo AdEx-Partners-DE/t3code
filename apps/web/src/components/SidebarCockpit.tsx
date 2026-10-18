@@ -519,7 +519,7 @@ function CockpitStandingOverride({
       {line}.{" "}
       {off === null || off === 0
         ? null
-        : `${off} open ${off === 1 ? "thread runs" : "threads run"} on another model. `}
+        : `${off} open ${off === 1 ? "thread differs" : "threads differ"} from it. `}
       <span className="underline underline-offset-2">Change</span>
     </button>
   );
