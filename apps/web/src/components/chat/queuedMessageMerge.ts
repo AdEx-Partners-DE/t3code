@@ -23,3 +23,20 @@ export function mergeQueuedMessageTexts(queued: ReadonlyArray<MergeableQueuedMes
     .filter((text) => text.length > 0)
     .join("\n\n");
 }
+
+/**
+ * Removes the messages folded into the first one and returns those that stayed.
+ * A message that could not be removed runs its text a second time after the
+ * merged one, so the caller must say so instead of reporting a clean merge.
+ */
+export async function removeMergedQueuedRuns<RunId>(
+  runIds: ReadonlyArray<RunId>,
+  cancel: (runId: RunId) => Promise<{ readonly _tag: string }>,
+): Promise<ReadonlyArray<RunId>> {
+  const kept: RunId[] = [];
+  for (const runId of runIds) {
+    const result = await cancel(runId).catch(() => ({ _tag: "Failure" }));
+    if (result._tag !== "Success") kept.push(runId);
+  }
+  return kept;
+}

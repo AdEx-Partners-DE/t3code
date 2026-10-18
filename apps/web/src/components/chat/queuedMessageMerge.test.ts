@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { canMergeQueuedMessages, mergeQueuedMessageTexts } from "./queuedMessageMerge";
+import {
+  canMergeQueuedMessages,
+  mergeQueuedMessageTexts,
+  removeMergedQueuedRuns,
+} from "./queuedMessageMerge";
 
 const message = (text: string, attachments: ReadonlyArray<unknown> = []) => ({ text, attachments });
 
@@ -28,5 +32,23 @@ describe("mergeQueuedMessageTexts", () => {
     expect(mergeQueuedMessageTexts([message("First."), message("   "), message("Third.")])).toBe(
       "First.\n\nThird.",
     );
+  });
+});
+
+describe("removeMergedQueuedRuns", () => {
+  it("returns the messages that stayed in the queue, in order", async () => {
+    const tried: string[] = [];
+    const kept = await removeMergedQueuedRuns(["b", "c", "d"], async (runId) => {
+      tried.push(runId);
+      if (runId === "c") return { _tag: "Failure" };
+      if (runId === "d") throw new Error("connection lost");
+      return { _tag: "Success" };
+    });
+    expect(tried).toEqual(["b", "c", "d"]);
+    expect(kept).toEqual(["c", "d"]);
+  });
+
+  it("returns nothing when every removal succeeds", async () => {
+    expect(await removeMergedQueuedRuns(["b", "c"], async () => ({ _tag: "Success" }))).toEqual([]);
   });
 });

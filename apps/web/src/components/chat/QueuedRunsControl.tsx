@@ -28,7 +28,11 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { isImageAttachment, type ChatMessage } from "../../types";
 import { cn, randomUUID } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
-import { canMergeQueuedMessages, mergeQueuedMessageTexts } from "./queuedMessageMerge";
+import {
+  canMergeQueuedMessages,
+  mergeQueuedMessageTexts,
+  removeMergedQueuedRuns,
+} from "./queuedMessageMerge";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -271,17 +275,24 @@ export function QueuedRunsControl({
       setBusyRunId(null);
       return;
     }
-    for (const { run } of rest) {
-      await cancel({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, runId: run.id },
-      });
-    }
+    const kept = await removeMergedQueuedRuns(
+      rest.map(({ run }) => run.id),
+      (runId) =>
+        cancel({
+          environmentId: props.environmentId,
+          input: { threadId: props.threadId, runId },
+        }),
+    );
     setBusyRunId(null);
-    toastManager.add({
-      type: "success",
-      title: `Merged ${queued.length} queued messages into one`,
-    });
+    toastManager.add(
+      kept.length === 0
+        ? { type: "success", title: `Merged ${queued.length} queued messages into one` }
+        : {
+            type: "warning",
+            title: `Merged, but ${kept.length} of ${rest.length} messages could not be removed`,
+            description: "They are still in the queue and would run again. Remove them by hand.",
+          },
+    );
   };
 
   const remove = async (runId: RunId) => {
