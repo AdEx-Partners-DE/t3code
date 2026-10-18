@@ -2429,6 +2429,74 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("a pull request wake joins an earlier one that is still waiting", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-wake-join");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-wake-join-create"),
+        threadId,
+        projectId: ProjectId.make("pr-wake-join-project"),
+        title: "Wake join",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 8 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-wake-join-start"),
+        threadId,
+        ...key,
+        watching: true,
+        link: { url: "https://github.com/pingdotgg/t3code/pull/8", source: "agent" },
+      });
+      const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.isDefined(started);
+      if (started === undefined) return;
+      const wake = (name: string, outcome: "updated" | "failed") =>
+        orchestrator.dispatch({
+          type: "thread.pull-request-watch.sync",
+          commandId: CommandId.make(`pr-wake-join-${name}`),
+          threadId,
+          ...key,
+          startedAt: started.startedAt,
+          watch: started,
+          wake: {
+            messageId: MessageId.make(`message:pr-watch:${name}`),
+            text: `Update ${name}`,
+            notification: {
+              source: { kind: "monitor" },
+              outcome,
+              summary: `#8: ${name}`,
+            },
+          },
+        });
+      yield* wake("one", "updated");
+      yield* wake("two", "failed");
+      yield* wake("three", "updated");
+
+      const records = yield* orchestrator.getThreadRecords(threadId, ["runs", "messages"]);
+      const waiting = records.runs.filter((run) => run.status === "queued");
+      assert.lengthOf(waiting, 1);
+      const joined = records.messages.find((message) => message.id === waiting[0]?.userMessageId);
+      const startedRuns = records.runs.filter((run) => run.status !== "queued");
+      // The first wake either started at once or is the one the others joined.
+      const expectedText =
+        startedRuns.length === 1
+          ? "Update two\n\nUpdate three"
+          : "Update one\n\nUpdate two\n\nUpdate three";
+      assert.equal(joined?.text, expectedText);
+      assert.equal(joined?.notification?.outcome, "failed");
+      assert.lengthOf(records.runs, startedRuns.length + 1);
+    }),
+  );
+
   it.effect.each(["manual", "automatic"])("settling ends every pull request watch: %s", (mode) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

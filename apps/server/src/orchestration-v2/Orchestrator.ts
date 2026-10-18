@@ -39,6 +39,7 @@ import {
   type OrchestrationV2DelegatedCompletionDelivery,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
+  type OrchestrationV2Notification,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
@@ -2424,6 +2425,78 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  // Pull request updates arrive in bursts (bot comments and checks on several pull requests at
+  // once); each wake used to queue its own paid turn behind the one still waiting. A wake that
+  // finds an earlier one still waiting joins it instead; a wake already running is left alone.
+  const appendToWaitingPullRequestWake = (
+    command: Extract<
+      OrchestrationV2ServerCommand,
+      { readonly type: "thread.pull-request-watch.sync" }
+    >,
+    wake: NonNullable<
+      Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.pull-request-watch.sync" }
+      >["wake"]
+    >,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs", "messages", "turnItems"], {
+          turnItemTypes: ["user_message"],
+          messageRoles: ["user"],
+        })
+        .pipe(
+          Effect.mapError(() => new OrchestratorProjectionError({ threadId: command.threadId })),
+        );
+      const waitingRun = projection.runs.find(
+        (run) =>
+          run.status === "queued" && String(run.userMessageId).startsWith("message:pr-watch:"),
+      );
+      const waitingMessage =
+        waitingRun === undefined
+          ? undefined
+          : projection.messages.find((message) => message.id === waitingRun.userMessageId);
+      if (waitingRun === undefined || waitingMessage === undefined) return false;
+      const text = `${waitingMessage.text}\n\n${wake.text}`;
+      const earlier = waitingMessage.notification;
+      const notification: OrchestrationV2Notification =
+        earlier === undefined
+          ? wake.notification
+          : {
+              ...wake.notification,
+              outcome: earlier.outcome === "failed" ? "failed" : wake.notification.outcome,
+              summary: `${earlier.summary}; ${wake.notification.summary}`,
+            };
+      const now = yield* DateTime.now;
+      const emitEvent = emit(events, command);
+      const placement = {
+        threadId: command.threadId,
+        runId: waitingRun.id,
+        ...(waitingRun.rootNodeId === null ? {} : { nodeId: waitingRun.rootNodeId }),
+        providerInstanceId: waitingRun.providerInstanceId,
+        occurredAt: now,
+      };
+      yield* emitEvent({
+        type: "message.updated",
+        ...placement,
+        payload: { ...waitingMessage, text, notification, updatedAt: now },
+      });
+      const turnItem = projection.turnItems.find(
+        (candidate) =>
+          candidate.type === "user_message" && candidate.messageId === waitingMessage.id,
+      );
+      if (turnItem !== undefined && turnItem.type === "user_message") {
+        yield* emitEvent({
+          type: "turn-item.updated",
+          ...placement,
+          payload: { ...turnItem, text, updatedAt: now },
+        });
+      }
+      return true;
+    });
+
   // Checked under the thread lock: the watch or the thread can change while the host is read.
   // The watch is recorded first so the wake's own thread events carry it.
   const dispatchPullRequestWatchSync = Effect.fn("orchestrationV2.dispatch.pullRequestWatchSync")(
@@ -2461,6 +2534,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       yield* dispatchThreadMutation(command, events, effects);
       if (command.wake === undefined) return;
+      if (yield* appendToWaitingPullRequestWake(command, command.wake, events)) return;
       yield* dispatchMessage(
         {
           type: "message.dispatch",
