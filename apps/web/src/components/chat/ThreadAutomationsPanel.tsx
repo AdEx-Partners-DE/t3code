@@ -23,7 +23,7 @@ import {
 
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
-import { relativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
+import { ScheduledRelativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useThreadShell } from "../../state/entities";
@@ -251,15 +251,26 @@ export function ThreadAutomationsPanel(props: {
               </span>
               <p className="truncate text-2xs text-muted-foreground">
                 {scheduleLabel(task.schedule)}
-                {!task.enabled
-                  ? " · off"
-                  : isHeld(task)
-                    ? task.nextRunAt !== null && Date.parse(task.nextRunAt) <= Date.now()
-                      ? ` · paused with all tasks, due since ${relativeLabel(task.nextRunAt)}`
-                      : " · paused with all tasks"
-                    : task.nextRunAt !== null
-                      ? ` · next ${relativeLabel(task.nextRunAt)}`
-                      : ""}
+                {!task.enabled ? (
+                  " · off"
+                ) : isHeld(task) ? (
+                  task.nextRunAt !== null &&
+                  Date.parse(task.nextRunAt) <= Date.parse(`${nowMinute}:00.000Z`) ? (
+                    <>
+                      {" · paused with all tasks, due since "}
+                      <ScheduledRelativeLabel value={task.nextRunAt} />
+                    </>
+                  ) : (
+                    " · paused with all tasks"
+                  )
+                ) : task.nextRunAt !== null ? (
+                  <>
+                    {" · next "}
+                    <ScheduledRelativeLabel value={task.nextRunAt} />
+                  </>
+                ) : (
+                  ""
+                )}
               </p>
             </div>
             <Tooltip>
