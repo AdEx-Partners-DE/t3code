@@ -2467,7 +2467,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           : {
               ...wake.notification,
               outcome: earlier.outcome === "failed" ? "failed" : wake.notification.outcome,
-              summary: `${earlier.summary}; ${wake.notification.summary}`,
+              // Checks finishing in steps report the same summary again.
+              summary: earlier.summary.split("; ").includes(wake.notification.summary)
+                ? earlier.summary
+                : `${earlier.summary}; ${wake.notification.summary}`,
             };
       const now = yield* DateTime.now;
       const emitEvent = emit(events, command);

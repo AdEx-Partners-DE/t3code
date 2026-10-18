@@ -2459,7 +2459,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const started = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
       assert.isDefined(started);
       if (started === undefined) return;
-      const wake = (name: string, outcome: "updated" | "failed") =>
+      const wake = (name: string, outcome: "updated" | "failed", summary = `#8: ${name}`) =>
         orchestrator.dispatch({
           type: "thread.pull-request-watch.sync",
           commandId: CommandId.make(`pr-wake-join-${name}`),
@@ -2473,13 +2473,15 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             notification: {
               source: { kind: "monitor" },
               outcome,
-              summary: `#8: ${name}`,
+              summary,
             },
           },
         });
       yield* wake("one", "updated");
       yield* wake("two", "failed");
       yield* wake("three", "updated");
+      // Checks finishing in steps send the same summary again.
+      yield* wake("three-again", "updated", "#8: three");
 
       const records = yield* orchestrator.getThreadRecords(threadId, ["runs", "messages"]);
       const waiting = records.runs.filter((run) => run.status === "queued");
@@ -2489,10 +2491,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       // The first wake either started at once or is the one the others joined.
       const expectedText =
         startedRuns.length === 1
-          ? "Update two\n\nUpdate three"
-          : "Update one\n\nUpdate two\n\nUpdate three";
+          ? "Update two\n\nUpdate three\n\nUpdate three-again"
+          : "Update one\n\nUpdate two\n\nUpdate three\n\nUpdate three-again";
       assert.equal(joined?.text, expectedText);
       assert.equal(joined?.notification?.outcome, "failed");
+      assert.equal(
+        joined?.notification?.summary,
+        startedRuns.length === 1 ? "#8: two; #8: three" : "#8: one; #8: two; #8: three",
+      );
       assert.lengthOf(records.runs, startedRuns.length + 1);
     }),
   );
