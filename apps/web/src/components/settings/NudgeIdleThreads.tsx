@@ -48,29 +48,27 @@ export function NudgeIdleThreads() {
     );
     if (!confirmed) return;
     setPending(true);
-    try {
-      const result = await nudge({
-        environmentId: environment.environmentId,
-        input: { commandId: CommandId.make(randomUUID()), text: text.trim(), limit: limitNumber },
+    // The command settles into a result instead of throwing, so no `try` is needed.
+    const result = await nudge({
+      environmentId: environment.environmentId,
+      input: { commandId: CommandId.make(randomUUID()), text: text.trim(), limit: limitNumber },
+    });
+    setPending(false);
+    if (result._tag === "Success") {
+      const { sent, still } = result.value;
+      toastManager.add({
+        type: "success",
+        title:
+          still === 0
+            ? "No open thread stands still"
+            : `Sent to ${sent} of ${still} ${still === 1 ? "thread" : "threads"} standing still`,
       });
-      if (result._tag === "Success") {
-        const { sent, still } = result.value;
-        toastManager.add({
-          type: "success",
-          title:
-            still === 0
-              ? "No open thread stands still"
-              : `Sent to ${sent} of ${still} ${still === 1 ? "thread" : "threads"} standing still`,
-        });
-      } else if (!isAtomCommandInterrupted(result)) {
-        toastManager.add({
-          type: "error",
-          title: "Could not send to the open threads",
-          description: String(squashAtomCommandFailure(result)),
-        });
-      }
-    } finally {
-      setPending(false);
+    } else if (!isAtomCommandInterrupted(result)) {
+      toastManager.add({
+        type: "error",
+        title: "Could not send to the open threads",
+        description: String(squashAtomCommandFailure(result)),
+      });
     }
   };
 

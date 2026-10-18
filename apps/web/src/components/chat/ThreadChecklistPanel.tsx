@@ -251,25 +251,23 @@ export function ThreadChecklistPanel(props: {
   const run = async (quiet: boolean) => {
     if (busy) return;
     setBusy(true);
-    try {
-      const result = await refresh({
-        environmentId,
-        input: { threadId, trigger: quiet ? "auto" : "manual" },
-      });
-      if (result._tag === "Success") {
-        setFresh(result.value.checklist);
-      } else if (!quiet && !isAtomCommandInterrupted(result)) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not update the checklist",
-            description: String(squashAtomCommandFailure(result)),
-          }),
-        );
-      }
-    } finally {
-      setBusy(false);
+    // The command settles into a result instead of throwing, so no `try` is needed.
+    const result = await refresh({
+      environmentId,
+      input: { threadId, trigger: quiet ? "auto" : "manual" },
+    });
+    if (result._tag === "Success") {
+      setFresh(result.value.checklist);
+    } else if (!quiet && !isAtomCommandInterrupted(result)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not update the checklist",
+          description: String(squashAtomCommandFailure(result)),
+        }),
+      );
     }
+    setBusy(false);
   };
 
   const setStatus = async (item: ThreadChecklistItem, status: ThreadChecklistItem["status"]) => {
@@ -294,25 +292,23 @@ export function ThreadChecklistPanel(props: {
   const release = async (item: ThreadChecklistItem) => {
     if (busy) return;
     setBusy(true);
-    try {
-      const result = await refresh({
-        environmentId,
-        input: { threadId, trigger: "manual", releaseItem: { text: item.text } },
-      });
-      if (result._tag === "Success") {
-        setFresh(result.value.checklist);
-      } else if (!isAtomCommandInterrupted(result)) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not give the item back to the checklist",
-            description: String(squashAtomCommandFailure(result)),
-          }),
-        );
-      }
-    } finally {
-      setBusy(false);
+    // The command settles into a result instead of throwing, so no `try` is needed.
+    const result = await refresh({
+      environmentId,
+      input: { threadId, trigger: "manual", releaseItem: { text: item.text } },
+    });
+    if (result._tag === "Success") {
+      setFresh(result.value.checklist);
+    } else if (!isAtomCommandInterrupted(result)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not give the item back to the checklist",
+          description: String(squashAtomCommandFailure(result)),
+        }),
+      );
     }
+    setBusy(false);
   };
 
   // How far the checklist is behind is the server's count; ask again when a

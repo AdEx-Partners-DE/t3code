@@ -107,31 +107,27 @@ export function PortfolioChecklistDialog({
   const updateBatch = async () => {
     const batch = toUpdate.slice(0, REFRESH_BATCH);
     setProgress({ done: 0, total: batch.length });
-    try {
-      for (const [index, row] of batch.entries()) {
-        await refresh({ environmentId, input: { threadId: row.thread.id, trigger: "batch" } });
-        setProgress({ done: index + 1, total: batch.length });
-      }
-    } finally {
-      setProgress(null);
-      query.refresh();
+    // The commands settle into results instead of throwing, so no `try` is needed.
+    for (const [index, row] of batch.entries()) {
+      await refresh({ environmentId, input: { threadId: row.thread.id, trigger: "batch" } });
+      setProgress({ done: index + 1, total: batch.length });
     }
+    setProgress(null);
+    query.refresh();
   };
   const releaseItem = async (threadId: PortfolioThread["id"], text: string) => {
     setRewriting((current) => new Set(current).add(threadId));
-    try {
-      await refresh({
-        environmentId,
-        input: { threadId, trigger: "manual", releaseItem: { text } },
-      });
-    } finally {
-      setRewriting((current) => {
-        const next = new Set(current);
-        next.delete(threadId);
-        return next;
-      });
-      query.refresh();
-    }
+    // The command settles into a result instead of throwing, so no `try` is needed.
+    await refresh({
+      environmentId,
+      input: { threadId, trigger: "manual", releaseItem: { text } },
+    });
+    setRewriting((current) => {
+      const next = new Set(current);
+      next.delete(threadId);
+      return next;
+    });
+    query.refresh();
   };
   const openThread = (thread: PortfolioThread) => {
     onClose();

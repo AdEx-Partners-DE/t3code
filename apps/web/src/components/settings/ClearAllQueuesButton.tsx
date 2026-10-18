@@ -41,34 +41,32 @@ export function ClearAllQueuesButton() {
     );
     if (!confirmed) return;
     setPending(true);
-    try {
-      await Promise.all(
-        allowed.map(async (environment) => {
-          const result = await clear({
-            environmentId: environment.environmentId,
-            input: { commandId: CommandId.make(randomUUID()) },
+    // Each command settles into a result instead of throwing, so no `try` is needed.
+    await Promise.all(
+      allowed.map(async (environment) => {
+        const result = await clear({
+          environmentId: environment.environmentId,
+          input: { commandId: CommandId.make(randomUUID()) },
+        });
+        if (result._tag === "Success") {
+          const { threads } = result.value;
+          toastManager.add({
+            type: "success",
+            title:
+              threads === 0
+                ? `Nothing was queued on ${environment.label}`
+                : `Cleared the queue of ${threads} ${threads === 1 ? "thread" : "threads"} on ${environment.label}`,
           });
-          if (result._tag === "Success") {
-            const { threads } = result.value;
-            toastManager.add({
-              type: "success",
-              title:
-                threads === 0
-                  ? `Nothing was queued on ${environment.label}`
-                  : `Cleared the queue of ${threads} ${threads === 1 ? "thread" : "threads"} on ${environment.label}`,
-            });
-          } else if (!isAtomCommandInterrupted(result)) {
-            toastManager.add({
-              type: "error",
-              title: `Could not clear the queues on ${environment.label}`,
-              description: String(squashAtomCommandFailure(result)),
-            });
-          }
-        }),
-      );
-    } finally {
-      setPending(false);
-    }
+        } else if (!isAtomCommandInterrupted(result)) {
+          toastManager.add({
+            type: "error",
+            title: `Could not clear the queues on ${environment.label}`,
+            description: String(squashAtomCommandFailure(result)),
+          });
+        }
+      }),
+    );
+    setPending(false);
   };
   const restoreAll = async () => {
     const confirmed = await ensureLocalApi().dialogs.confirm(
@@ -76,44 +74,42 @@ export function ClearAllQueuesButton() {
     );
     if (!confirmed) return;
     setPending(true);
-    try {
-      await Promise.all(
-        allowed.map(async (environment) => {
-          const result = await restore({
-            environmentId: environment.environmentId,
-            input: {
-              commandId: CommandId.make(randomUUID()),
-              restore: { maxAgeMinutes: RESTORE_WINDOW_MINUTES },
-            },
+    // Each command settles into a result instead of throwing, so no `try` is needed.
+    await Promise.all(
+      allowed.map(async (environment) => {
+        const result = await restore({
+          environmentId: environment.environmentId,
+          input: {
+            commandId: CommandId.make(randomUUID()),
+            restore: { maxAgeMinutes: RESTORE_WINDOW_MINUTES },
+          },
+        });
+        if (result._tag === "Success") {
+          const { threads } = result.value;
+          const messages = result.value.messages ?? 0;
+          const heldBack = result.value.heldBack ?? 0;
+          toastManager.add({
+            type: "success",
+            title:
+              messages === 0 && heldBack === 0
+                ? `Nothing to restore on ${environment.label}`
+                : `Put back ${messages} ${messages === 1 ? "message" : "messages"} in ${threads} ${threads === 1 ? "thread" : "threads"} on ${environment.label}`,
+            ...(heldBack > 0
+              ? {
+                  description: `${heldBack} more ${heldBack === 1 ? "waits" : "wait"} in threads that stand still: they would start at once. Turn off "Pause all queues", then restore again.`,
+                }
+              : {}),
           });
-          if (result._tag === "Success") {
-            const { threads } = result.value;
-            const messages = result.value.messages ?? 0;
-            const heldBack = result.value.heldBack ?? 0;
-            toastManager.add({
-              type: "success",
-              title:
-                messages === 0 && heldBack === 0
-                  ? `Nothing to restore on ${environment.label}`
-                  : `Put back ${messages} ${messages === 1 ? "message" : "messages"} in ${threads} ${threads === 1 ? "thread" : "threads"} on ${environment.label}`,
-              ...(heldBack > 0
-                ? {
-                    description: `${heldBack} more ${heldBack === 1 ? "waits" : "wait"} in threads that stand still: they would start at once. Turn off "Pause all queues", then restore again.`,
-                  }
-                : {}),
-            });
-          } else if (!isAtomCommandInterrupted(result)) {
-            toastManager.add({
-              type: "error",
-              title: `Could not restore the queues on ${environment.label}`,
-              description: String(squashAtomCommandFailure(result)),
-            });
-          }
-        }),
-      );
-    } finally {
-      setPending(false);
-    }
+        } else if (!isAtomCommandInterrupted(result)) {
+          toastManager.add({
+            type: "error",
+            title: `Could not restore the queues on ${environment.label}`,
+            description: String(squashAtomCommandFailure(result)),
+          });
+        }
+      }),
+    );
+    setPending(false);
   };
   return (
     <div className="flex items-center gap-2">

@@ -101,14 +101,12 @@ function PendingRequestThreadRows({
     decision: ProviderApprovalDecision,
   ) => {
     setBusyRequestId(requestId);
-    try {
-      await respond({
-        environmentId: thread.environmentId,
-        input: { threadId: thread.id, requestId, decision },
-      });
-    } finally {
-      setBusyRequestId(null);
-    }
+    // The command settles into a result instead of throwing, so no `try` is needed.
+    await respond({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id, requestId, decision },
+    });
+    setBusyRequestId(null);
   };
   const approvals = requests?.approvals ?? [];
   const questions = requests?.userInputs ?? [];

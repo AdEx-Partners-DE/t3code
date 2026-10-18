@@ -188,41 +188,39 @@ function OpenThreadModelOverrideControls({
     );
     if (!confirmed) return;
     setPending(true);
-    try {
-      const commandId = CommandId.make(randomUUID());
-      if (action === "apply") {
-        report(
-          await apply({
-            environmentId,
-            input: {
-              commandId,
-              ...(chosen === null
-                ? {}
-                : { model: { instanceId: chosen.instanceId, model: chosen.model } }),
-              ...(effortValue === KEEP ? {} : { effort: effortValue }),
-              ...(keepOwnAccount && chosen !== null ? { keepOwnAccount: true } : {}),
-              scope,
-            },
-          }),
-          (threads) =>
-            threads === 0
-              ? `Every ${noun} already had this`
-              : `Set on ${threads} ${threads === 1 ? noun : SCOPE_NOUN_PLURAL[scope]}`,
-          "Could not set the model on the open threads",
-        );
-      } else {
-        report(
-          await restore({ environmentId, input: { commandId, restore: true, scope } }),
-          (threads) =>
-            threads === 0
-              ? "Nothing to put back"
-              : `Put back on ${threads} ${threads === 1 ? "thread" : "threads"}`,
-          "Could not restore the models",
-        );
-      }
-    } finally {
-      setPending(false);
+    // The commands settle into results instead of throwing, so no `try` is needed.
+    const commandId = CommandId.make(randomUUID());
+    if (action === "apply") {
+      report(
+        await apply({
+          environmentId,
+          input: {
+            commandId,
+            ...(chosen === null
+              ? {}
+              : { model: { instanceId: chosen.instanceId, model: chosen.model } }),
+            ...(effortValue === KEEP ? {} : { effort: effortValue }),
+            ...(keepOwnAccount && chosen !== null ? { keepOwnAccount: true } : {}),
+            scope,
+          },
+        }),
+        (threads) =>
+          threads === 0
+            ? `Every ${noun} already had this`
+            : `Set on ${threads} ${threads === 1 ? noun : SCOPE_NOUN_PLURAL[scope]}`,
+        "Could not set the model on the open threads",
+      );
+    } else {
+      report(
+        await restore({ environmentId, input: { commandId, restore: true, scope } }),
+        (threads) =>
+          threads === 0
+            ? "Nothing to put back"
+            : `Put back on ${threads} ${threads === 1 ? "thread" : "threads"}`,
+        "Could not restore the models",
+      );
     }
+    setPending(false);
   };
 
   const describe = (override: (typeof standing)["tasks"]) => {

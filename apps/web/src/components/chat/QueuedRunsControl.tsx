@@ -204,18 +204,16 @@ export function QueuedRunsControl({
   const sendNow = async (queuedRunId: RunId) => {
     if (activeRun !== null || steerInFlightRef.current) return;
     steerInFlightRef.current = true;
-    try {
-      const first = queued[0]?.run.id;
-      if (first !== undefined && first !== queuedRunId) await move(queuedRunId, first);
-      setBusyRunId(queuedRunId);
-      await resumeQueue({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, startNextDespitePause: true },
-      });
-    } finally {
-      steerInFlightRef.current = false;
-      setBusyRunId(null);
-    }
+    // The commands settle into results instead of throwing, so no `try` is needed.
+    const first = queued[0]?.run.id;
+    if (first !== undefined && first !== queuedRunId) await move(queuedRunId, first);
+    setBusyRunId(queuedRunId);
+    await resumeQueue({
+      environmentId: props.environmentId,
+      input: { threadId: props.threadId, startNextDespitePause: true },
+    });
+    steerInFlightRef.current = false;
+    setBusyRunId(null);
   };
 
   useImperativeHandle(ref, () => ({
@@ -260,29 +258,30 @@ export function QueuedRunsControl({
     );
     if (!confirmed) return;
     setBusyRunId(first.run.id);
-    try {
-      const edited = await editQueued({
-        environmentId: props.environmentId,
-        input: {
-          threadId: props.threadId,
-          runId: first.run.id,
-          text: mergeQueuedMessageTexts(queued),
-        },
-      });
-      if (edited._tag !== "Success") return;
-      for (const { run } of rest) {
-        await cancel({
-          environmentId: props.environmentId,
-          input: { threadId: props.threadId, runId: run.id },
-        });
-      }
-      toastManager.add({
-        type: "success",
-        title: `Merged ${queued.length} queued messages into one`,
-      });
-    } finally {
+    // The commands settle into results instead of throwing, so no `try` is needed.
+    const edited = await editQueued({
+      environmentId: props.environmentId,
+      input: {
+        threadId: props.threadId,
+        runId: first.run.id,
+        text: mergeQueuedMessageTexts(queued),
+      },
+    });
+    if (edited._tag !== "Success") {
       setBusyRunId(null);
+      return;
     }
+    for (const { run } of rest) {
+      await cancel({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId, runId: run.id },
+      });
+    }
+    setBusyRunId(null);
+    toastManager.add({
+      type: "success",
+      title: `Merged ${queued.length} queued messages into one`,
+    });
   };
 
   const remove = async (runId: RunId) => {
