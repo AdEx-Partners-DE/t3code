@@ -20,10 +20,15 @@ import { useEnvironment } from "../state/environments";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import type { OpenThreadFilter, OpenThreadSummary } from "./Sidebar.logic";
+import type { SidebarThreadSummary } from "../types";
 import { accountBalanceHint } from "./usage/accountBalanceHint";
 import { buildUsageBurn } from "./usage/usageBurn";
 import { buildUsageLimitTrend } from "./usage/usageLimitTrend";
-import { type StandingOverride, standingOverrideLine } from "./usage/standingOverrideLine";
+import {
+  type StandingOverride,
+  standingOverrideLine,
+  threadsOffModelRule,
+} from "./usage/standingOverrideLine";
 
 const COCKPIT_EXPANDED_KEY = "t3code:sidebar:cockpit-expanded";
 const BURN_HOURS = 24;
@@ -43,6 +48,7 @@ const balanceTimeFormat = new Intl.DateTimeFormat(undefined, {
  */
 export function SidebarCockpit({
   summary,
+  openThreadGroups,
   environmentId,
   nowMs,
   filter,
@@ -52,6 +58,8 @@ export function SidebarCockpit({
   onOpenChecklists,
 }: {
   readonly summary: OpenThreadSummary;
+  /** The open threads the summary counts; the model rule line counts those it would still move. */
+  readonly openThreadGroups: ReadonlyArray<ReadonlyArray<SidebarThreadSummary>>;
   /** The environment whose usage history feeds the burn chart; null hides the chart. */
   readonly environmentId: EnvironmentId | null;
   readonly nowMs: number;
@@ -152,7 +160,10 @@ export function SidebarCockpit({
             <CockpitChecklists environmentId={environmentId} onOpen={onOpenChecklists} />
           )}
           {environmentId === null ? null : (
-            <CockpitStandingOverride environmentId={environmentId} />
+            <CockpitStandingOverride
+              environmentId={environmentId}
+              openThreads={openThreadGroups.flat()}
+            />
           )}
           {environmentId === null ? null : (
             <CockpitAccountBalance environmentId={environmentId} nowMs={nowMs} />
@@ -472,7 +483,13 @@ function useStandingModelOverride(environmentId: EnvironmentId): StandingOverrid
 }
 
 /** While a standing model override is in force; a click opens the setting that puts it back. */
-function CockpitStandingOverride({ environmentId }: { readonly environmentId: EnvironmentId }) {
+function CockpitStandingOverride({
+  environmentId,
+  openThreads,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly openThreads: ReadonlyArray<SidebarThreadSummary>;
+}) {
   const providers =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
   const standing = useStandingModelOverride(environmentId);
@@ -486,7 +503,12 @@ function CockpitStandingOverride({ environmentId }: { readonly environmentId: En
             providers.find((provider) => provider.instanceId === instanceId)?.displayName ??
             instanceId,
         );
-  if (line === null) return null;
+  if (line === null || standing === null) return null;
+  const off = threadsOffModelRule(
+    standing,
+    openThreads.filter((thread) => thread.environmentId === environmentId),
+    providers,
+  );
   return (
     <button
       type="button"
@@ -494,7 +516,11 @@ function CockpitStandingOverride({ environmentId }: { readonly environmentId: En
       className="cursor-pointer rounded-sm text-left hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
       data-testid="sidebar-cockpit-standing-override"
     >
-      {line}. <span className="underline underline-offset-2">Change</span>
+      {line}.{" "}
+      {off === null || off === 0
+        ? null
+        : `${off} open ${off === 1 ? "thread runs" : "threads run"} on another model. `}
+      <span className="underline underline-offset-2">Change</span>
     </button>
   );
 }

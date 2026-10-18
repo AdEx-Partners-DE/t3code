@@ -5395,6 +5395,7 @@ export default function Sidebar() {
           {isSearchingThreads ? null : (
             <SidebarCockpit
               summary={openThreadSummary}
+              openThreadGroups={[allPinnedThreads, allActiveThreads, allWorkingThreads]}
               environmentId={serverConfigs.keys().next().value ?? null}
               nowMs={cockpitNowMs}
               filter={openThreadFilter}
