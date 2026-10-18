@@ -3376,6 +3376,35 @@ describe("parseAgentSessionTranscript", () => {
     expect(thread?.messages.map((message) => message.text)).toEqual([prompt]);
   });
 
+  it("titles a Codex thread after the first request, skipping notification-only messages", () => {
+    const notifications = [
+      '<subagent_notification>\n{"agent_path":"agent-1","status":"completed"}\n</subagent_notification>',
+      "<heartbeat>\n<automation_id>nightly-check</automation_id>\n</heartbeat>",
+      '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>',
+    ];
+    const thread = AgentSessionScanner.parseAgentSessionTranscript({
+      contents: [
+        encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
+        ...[...notifications, "Summarize the review"].map((message) =>
+          encodeTranscriptRecord({
+            type: "event_msg",
+            payload: { type: "user_message", message },
+          }),
+        ),
+      ].join("\n"),
+      source: "codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      fallbackSessionId: "fallback",
+      lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
+    });
+
+    expect(thread?.title).toBe("Summarize the review");
+    expect(thread?.messages.map((message) => message.text)).toEqual([
+      ...notifications,
+      "Summarize the review",
+    ]);
+  });
+
   it("keeps context markup quoted inside visible Codex user text", () => {
     const quoted =
       "Do not remove this example:\n<environment_context>\n<cwd>/tmp/example</cwd>\n</environment_context>";
