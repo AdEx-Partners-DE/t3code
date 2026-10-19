@@ -1043,11 +1043,24 @@ it.effect(
         status: "done",
       });
       expect(set.isError).toBe(false);
+
+      // The way back: the agent hands the point to the checklist again.
+      const released = yield* call("t3_thread_checklist_set", {
+        threadId: "other-project-thread",
+        text: "Deploy prüfen",
+        status: "auto",
+      });
+      expect(released.isError).toBe(false);
       expect(writes).toEqual([
         {
           threadId: "other-project-thread",
           trigger: "manual",
           setItem: { text: "Deploy prüfen", status: "done" },
+        },
+        {
+          threadId: "other-project-thread",
+          trigger: "manual",
+          releaseItem: { text: "Deploy prüfen" },
         },
       ]);
     }).pipe(

@@ -199,7 +199,9 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         .write({
           threadId: thread.id,
           trigger: "manual",
-          setItem: { text: input.text, status: input.status },
+          ...(input.status === "auto"
+            ? { releaseItem: { text: input.text } }
+            : { setItem: { text: input.text, status: input.status } }),
         })
         .pipe(Effect.mapError(unavailable));
       return { checklist };

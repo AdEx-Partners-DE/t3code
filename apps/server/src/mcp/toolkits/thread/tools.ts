@@ -271,11 +271,11 @@ const ThreadChecklistTool = Tool.make("t3_thread_checklist", {
 const ThreadChecklistSetTool = Tool.make("t3_thread_checklist_set", {
   ...commandTool,
   description:
-    "Set the status of one point on a thread's checklist, matched by its exact text from t3_thread_checklist. Omit threadId for this thread. Mark a point done only when the work is finished and shown to be; use attention for something only the user can do. The status stays as set when the checklist is rewritten, like one the user set in the panel, until the user gives it back.",
+    "Set the status of one point on a thread's checklist, matched by its exact text from t3_thread_checklist. Omit threadId for this thread. Mark a point done only when the work is finished and shown to be; use attention for something only the user can do. The status stays as set when the checklist is rewritten, like one the user set in the panel. Status auto gives a point back: the checklist rewrites and decides its status again, like Let the checklist decide in the panel.",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     text: ThreadChecklistItem.fields.text,
-    status: ThreadChecklistItem.fields.status,
+    status: Schema.Union([ThreadChecklistItem.fields.status, Schema.Literal("auto")]),
   }),
   success: Schema.Struct({ checklist: ThreadChecklist }),
   dependencies: [...commandTool.dependencies, ThreadChecklistService.ThreadChecklist],
