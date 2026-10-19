@@ -2024,8 +2024,8 @@ export const layerWithOptions = (
                 cause,
               });
               yield* Ref.set(entry.eventSubscribers, new Map());
-              // The session's lastError is shown to the user, so it carries the
-              // same redacted reason as the failed run; the full cause goes to the log.
+              // lastError is the thread banner, so it gets the same bounded
+              // message as a failed turn; the raw cause survives only in the log.
               yield* Effect.logWarning("orchestration-v2.provider-session-runtime-failed", {
                 providerSessionId: entry.runtime.providerSessionId,
                 cause,
@@ -2033,7 +2033,7 @@ export const layerWithOptions = (
               yield* releaseEntry({
                 providerSessionId: entry.runtime.providerSessionId,
                 reason: "runtime_error",
-                detail: makeProviderFailure({ cause: Cause.squash(cause) }).message,
+                detail: makeProviderFailure({ cause }).message,
               }).pipe(logReleaseFailure(entry.runtime.providerSessionId));
             }),
           ),
