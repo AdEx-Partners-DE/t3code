@@ -469,7 +469,7 @@ export interface TimelineDurationMessage {
 
 export type TimelineLatestRun = Pick<
   ThreadRunSummary,
-  "runId" | "status" | "startedAt" | "completedAt"
+  "runId" | "status" | "startedAt" | "completedAt" | "turnEnded"
 >;
 
 const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
@@ -1873,6 +1873,7 @@ export function deriveMessagesTimelineRows(input: {
   }
   if (
     input.isWorking &&
+    input.latestRun?.turnEnded !== true &&
     !setupOwnsWorkingSlot &&
     !hasActiveCompaction &&
     (!hasActivityRow || latestToolFailed)

@@ -234,6 +234,7 @@ export interface ThreadFeedLatestRun {
   readonly status: OrchestrationV2RunStatus;
   readonly startedAt: string | null;
   readonly completedAt: string | null;
+  readonly turnEnded?: boolean;
 }
 
 export interface AgentSpawnSummary {
@@ -1330,6 +1331,7 @@ export function deriveThreadFeedPresentation(
   if (
     isWorking &&
     activeWorkStartedAt !== null &&
+    latestRun?.turnEnded !== true &&
     !result.some(
       (row) =>
         (row.type === "work-toggle" && row.shimmer) ||
