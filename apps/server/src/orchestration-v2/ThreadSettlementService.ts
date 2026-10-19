@@ -357,7 +357,9 @@ export const make = Effect.gen(function* () {
     // sweep on a possibly stale cached answer.
     const candidates = threads.filter((thread) => isAutoSettlementCandidate(thread, nowMs));
 
-    const settleThread = Effect.fn("ThreadSettlementServiceV2.settleThread")(
+    // Untraced: every sweep decides each candidate in memory (about 0.01 ms),
+    // and a span per decision filled a tenth of a busy host's trace.
+    const settleThread = Effect.fnUntraced(
       function* (thread: (typeof candidates)[number], pullRequest: SettlementPullRequest | null) {
         const currentSettings = resolveProjectSettings(
           yield* settingsService.getSettings,
