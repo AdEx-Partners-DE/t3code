@@ -5617,11 +5617,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         branch: null,
         worktreePath: process.cwd(),
       });
+      // Automatic messages: one a person sends from a client releases a held queue.
       const send = (key: string, type: "start_immediately" | "queue_after_active") =>
         orchestrator.dispatch({
           type: "message.dispatch",
-          createdBy: "user",
-          creationSource: "web",
+          createdBy: "agent",
+          creationSource: "mcp",
           commandId: CommandId.make(`${threadId}:${key}`),
           threadId,
           messageId: MessageId.make(`${threadId}:${key}`),
@@ -5699,8 +5700,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       for (const [index, key] of ["active", "held", "follow-up"].entries()) {
         yield* orchestrator.dispatch({
           type: "message.dispatch",
-          createdBy: "user",
-          creationSource: "web",
+          createdBy: "agent",
+          creationSource: "mcp",
           commandId: CommandId.make(`${threadId}:${key}`),
           threadId,
           messageId: MessageId.make(`${threadId}:${key}`),

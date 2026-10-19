@@ -832,9 +832,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
         : null,
     [findActive, timelineEntries, latestRun, runningRunId, isWorking, runlessWorkActive],
   );
-  const activeFindRunId = activeFindMatch
-    ? findFoldRunIds?.get(activeFindMatch.entryId)
-    : undefined;
+  const activeFindRunId =
+    findActive && activeFindMatch ? findFoldRunIds?.get(activeFindMatch.entryId) : undefined;
   useEffect(() => {
     if (!activeFindRunId) return;
     setExpandedRunIds((previous) =>
@@ -935,6 +934,17 @@ const ConversationTimeline = memo(function ConversationTimeline({
     listLoaded: findListReady,
     historyLoading: citationHistoryLoading,
     loadEarlier,
+    getTurnFoldRunId: (entryId) =>
+      (
+        findFoldRunIds ??
+        timelineTurnFoldRunIdsByEntryId({
+          timelineEntries,
+          latestRun,
+          runningRunId,
+          isWorking,
+          runlessWorkActive,
+        })
+      ).get(entryId),
     onExpandTurn: expandCitedRun,
     onManualNavigation,
   });
