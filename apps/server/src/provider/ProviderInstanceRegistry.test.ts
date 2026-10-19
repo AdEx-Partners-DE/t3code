@@ -871,6 +871,110 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       }).pipe(Effect.provideService(HostProcess.Platform, "linux"), Effect.provide(layerTest)),
   );
 
+  it.effect.skipIf(windowsHost)("ages all cached Claude grants without another usage request", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeClaudeResetFixtures();
+      let requests = 0;
+      const client = HttpClient.make((request) =>
+        Effect.sync(() => {
+          if (!request.url.endsWith("/api/oauth/usage")) {
+            return HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }));
+          }
+          requests++;
+          return HttpClientResponse.fromWeb(
+            request,
+            Response.json({
+              cedar_ember: {
+                eligible: true,
+                next_grant_id: "grant_a",
+                grants: [
+                  {
+                    id: "grant_a",
+                    resets_left: 2,
+                    usable_now: true,
+                    ends_at: "1970-01-01T00:05:00Z",
+                  },
+                  {
+                    id: "grant_b",
+                    resets_left: 3,
+                    usable_now: true,
+                    ends_at: "1970-01-01T00:02:00Z",
+                  },
+                ],
+              },
+            }),
+          );
+        }),
+      );
+      const [instance] = yield* fixture.start(client);
+      yield* awaitClaudeReady(instance!);
+      expect((yield* instance!.snapshot.refresh).usageLimits?.resetCredits?.availableCount).toBe(5);
+      yield* TestClock.adjust("2 minutes");
+      expect((yield* instance!.snapshot.refresh).usageLimits?.resetCredits?.availableCount).toBe(2);
+      yield* TestClock.adjust("3 minutes");
+      expect((yield* instance!.snapshot.refresh).usageLimits?.resetCredits).toEqual({
+        availableCount: 0,
+      });
+      expect(requests).toBe(1);
+    }).pipe(Effect.provideService(HostProcess.Platform, "linux"), Effect.provide(layerTest)),
+  );
+
+  it.effect.skipIf(windowsHost)(
+    "keeps unconfirmed Claude claims and starts fresh after settled failures",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeClaudeResetFixtures();
+        const claims: Array<string> = [];
+        let count = 3;
+        let refuseClaim = false;
+        const client = HttpClient.make((request) =>
+          Effect.sync(() => {
+            if (request.url.endsWith("/api/oauth/usage")) {
+              return HttpClientResponse.fromWeb(request, Response.json(resetCreditResponse(count)));
+            }
+            if (request.url.endsWith("/reset_rate_limits")) {
+              claims.push(
+                request.body._tag === "Uint8Array"
+                  ? new TextDecoder().decode(request.body.body)
+                  : "",
+              );
+              if (refuseClaim) {
+                return HttpClientResponse.fromWeb(request, Response.json({}, { status: 429 }));
+              }
+              count = 0;
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json({ result: claims.length === 1 ? "unavailable" : "reset" }),
+              );
+            }
+            return HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }));
+          }),
+        );
+        const [instance] = yield* fixture.start(client);
+        yield* awaitClaudeReady(instance!);
+        expect((yield* instance!.consumeResetCredit!().pipe(Effect.result))._tag).toBe("Failure");
+        expect((yield* instance!.snapshot.refresh).usageLimits?.resetCredits).toEqual({
+          availableCount: 0,
+        });
+        yield* TestClock.adjust("1 second");
+        expect(yield* instance!.consumeResetCredit!()).toBe("reset");
+        expect(claims).toHaveLength(2);
+        expect(claims[0]).toContain('"grant_id":"grant_a"');
+        expect(claims[1]).toBe(claims[0]);
+
+        count = 3;
+        yield* TestClock.adjust("10 minutes");
+        yield* instance!.snapshot.refresh;
+        refuseClaim = true;
+        expect((yield* instance!.consumeResetCredit!().pipe(Effect.result))._tag).toBe("Failure");
+        refuseClaim = false;
+        yield* TestClock.adjust("1 second");
+        expect(yield* instance!.consumeResetCredit!()).toBe("reset");
+        expect(claims).toHaveLength(4);
+        expect(claims[3]).not.toBe(claims[2]);
+      }).pipe(Effect.provideService(HostProcess.Platform, "linux"), Effect.provide(layerTest)),
+  );
+
   const redeemClaudeReset = (claim: { result: string; usageFailsAfterClaim: boolean }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
