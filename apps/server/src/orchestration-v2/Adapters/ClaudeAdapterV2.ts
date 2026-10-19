@@ -268,9 +268,8 @@ const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
 // The SDK puts no deadline on control requests. The CLI answers
 // mcp_set_servers once each server connected or hit its own 30 s timeout.
 const CLAUDE_MCP_REGISTRATION_TIMEOUT = "90 seconds";
-// How long a continuation run waits for Claude to open a wake turn it only got
-// a notification for. Claude's first frame after a prompt arrives within
-// seconds; a subagent result already read in the turn before never opens one.
+// Claude can consume a subagent result before the launching turn ends, leaving
+// its notification with no native wake turn to answer the continuation.
 const CLAUDE_WAKE_TURN_START_DEADLINE = "2 minutes";
 // Claude Code flushes transcript writes every 100 ms, so a workflow member's
 // reply can land after the progress frame that settles it. Its transcript
@@ -2130,11 +2129,10 @@ function isClaudeTurnStartMessage(message: SDKMessage): boolean {
   return message.type === "system" && message.subtype === "init";
 }
 
-/** A frame of the root session's own turn: its `init` or a root user or assistant message. */
 function isClaudeRootTurnFrame(message: SDKMessage): boolean {
   return (
     isClaudeTurnStartMessage(message) ||
-    ((message.type === "user" || message.type === "assistant") &&
+    ((message.type === "user" || message.type === "assistant" || message.type === "stream_event") &&
       message.parent_tool_use_id == null)
   );
 }
@@ -3075,6 +3073,7 @@ interface ActiveClaudeTurnContext {
   readonly promptUuid: string | null;
   promptEcho: "pending" | "confirmed";
   promptStarted: boolean;
+  nativeWakeStarted: boolean;
   gatedFramesBeforeEcho: number;
   readonly heldRootFrames: Array<SDKMessage>;
 }
@@ -3497,9 +3496,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveClaudeTurnContext | null>(null);
-        // Counts frames of the root session's own turn, so a waiting wake turn
-        // can tell whether Claude opened it; subagent frames do not count.
-        const rootTurnFramesHandled = yield* Ref.make(0);
         // Foreground Bash calls whose output file is being tailed, by tool_use_id.
         const taskOutputTails = new Map<
           string,
@@ -7988,11 +7984,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly message: SDKMessage;
         }) {
           const message = input.message;
-          if (isClaudeRootTurnFrame(message)) {
-            yield* Ref.update(rootTurnFramesHandled, (count) => count + 1);
-          }
           const context = yield* Ref.get(activeTurn);
           const liveQuery = yield* Ref.get(queryContext);
+          if (
+            context?.promptUuid === null &&
+            liveQuery?.query === input.query &&
+            isClaudeRootTurnFrame(message)
+          ) {
+            context.nativeWakeStarted = true;
+          }
           if (
             context === null ||
             context.promptUuid === null ||
@@ -8746,6 +8746,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               promptUuid,
               promptEcho: isClaudeProviderContinuationTurn(turnInput) ? "confirmed" : "pending",
               promptStarted: false,
+              nativeWakeStarted: false,
               gatedFramesBeforeEcho: 0,
               heldRootFrames: [],
             };
@@ -8862,32 +8863,33 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   yield* handleSdkMessage({ query: querySession.query, message: lastResult });
                   return;
                 }
-                const hasNativeWakeFrame = drained.some(
-                  (entry) =>
-                    entry.type === "user" ||
-                    entry.type === "assistant" ||
-                    isClaudeTurnStartMessage(entry),
-                );
-                if (hasOpaqueTaskNotification && !hasNativeWakeFrame) {
+                if (hasOpaqueTaskNotification && !context.nativeWakeStarted) {
                   const completedAt = yield* DateTime.now;
                   yield* finalizeActiveTurn({ context, status: "completed", completedAt });
-                } else if (!hasNativeWakeFrame) {
-                  // A subagent notification alone waits for Claude to open the
-                  // wake turn. If Claude already read the result in the turn
-                  // before, it never does: settle unless the turn opens in time.
-                  const framesAtDrain = yield* Ref.get(rootTurnFramesHandled);
+                } else if (!context.nativeWakeStarted) {
                   yield* Effect.sleep(CLAUDE_WAKE_TURN_START_DEADLINE).pipe(
                     Effect.andThen(
-                      Effect.gen(function* () {
-                        if ((yield* Ref.get(activeTurn)) !== context) return;
-                        if ((yield* Ref.get(rootTurnFramesHandled)) !== framesAtDrain) return;
-                        yield* Effect.logWarning("orchestration-v2.claude-wake-turn-never-opened", {
-                          providerTurnId: context.providerTurnId,
-                          nativeThreadId,
-                        });
-                        const completedAt = yield* DateTime.now;
-                        yield* finalizeActiveTurn({ context, status: "completed", completedAt });
-                      }),
+                      sdkMessageLock.withPermits(1)(
+                        Effect.gen(function* () {
+                          if (
+                            (yield* Ref.get(activeTurn)) !== context ||
+                            (yield* Ref.get(queryContext)) !== querySession ||
+                            querySession.stopping ||
+                            context.nativeWakeStarted ||
+                            (yield* Ref.get(interruptedTurns)).has(context.providerTurnId)
+                          )
+                            return;
+                          yield* Effect.logWarning(
+                            "orchestration-v2.claude-wake-turn-never-opened",
+                            {
+                              providerTurnId: context.providerTurnId,
+                              nativeThreadId,
+                            },
+                          );
+                          const completedAt = yield* DateTime.now;
+                          yield* finalizeActiveTurn({ context, status: "completed", completedAt });
+                        }),
+                      ),
                     ),
                     Effect.forkIn(sessionScope),
                   );
