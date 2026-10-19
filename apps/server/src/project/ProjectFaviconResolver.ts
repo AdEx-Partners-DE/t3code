@@ -16,7 +16,10 @@ import * as T3ProjectFileLoader from "./T3ProjectFileLoader.ts";
 
 const FAVICON_CACHE_CAPACITY = 512;
 const FAVICON_POSITIVE_CACHE_TTL = Duration.minutes(10);
-const FAVICON_NEGATIVE_CACHE_TTL = Duration.minutes(1);
+// A miss costs a scan of every candidate file, and clients ask for project icon
+// URLs all the time; a new icon file showing within 15 minutes matches the
+// enrichment cache (#16206).
+const FAVICON_NEGATIVE_CACHE_TTL = Duration.minutes(15);
 
 function faviconCacheKey(cwd: string, faviconPath?: string): string {
   return `${faviconPath ?? ""}\0${cwd}`;

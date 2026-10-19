@@ -101,6 +101,9 @@ it.layer(layerTest)("ProjectFaviconResolverLive", (it) => {
         expect(yield* resolver.resolvePath(cwd)).toBeNull();
 
         yield* TestClock.adjust(Duration.minutes(2));
+        expect(yield* resolver.resolvePath(cwd)).toBeNull();
+
+        yield* TestClock.adjust(Duration.minutes(14));
 
         expect(yield* resolver.resolvePath(cwd)).not.toBeNull();
       }).pipe(Effect.provide(TestClock.layer())),
