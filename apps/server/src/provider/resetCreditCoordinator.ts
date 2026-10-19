@@ -123,22 +123,28 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const state = yield* stateFor(accountKey);
       return yield* state.lock.withPermits(1)(
-        Effect.gen(function* () {
-          const known = yield* Ref.get(state.claudeRead);
-          const now = yield* Clock.currentTimeMillis;
-          if (now < known.nextAttemptAt) return claudeResetCreditsToContract(known.block, now);
-          const result = yield* Effect.result(read);
-          if (result._tag === "Success" && Option.isNone(result.success))
-            return claudeResetCreditsToContract(known.block, yield* Clock.currentTimeMillis);
-          const interval =
-            result._tag === "Success"
-              ? READ_INTERVAL
-              : Math.min(known.interval * 2, MAX_READ_INTERVAL);
-          const block =
-            result._tag === "Success" ? Option.getOrUndefined(result.success) : known.block;
-          yield* Ref.set(state.claudeRead, { nextAttemptAt: now + interval, interval, block });
-          return claudeResetCreditsToContract(block, yield* Clock.currentTimeMillis);
-        }),
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const known = yield* Ref.get(state.claudeRead);
+            const now = yield* Clock.currentTimeMillis;
+            if (now < known.nextAttemptAt) return claudeResetCreditsToContract(known.block, now);
+            // Cancellation after dispatch still spends the account's regular read budget.
+            yield* Ref.set(state.claudeRead, { ...known, nextAttemptAt: now + READ_INTERVAL });
+            const result = yield* Effect.result(restore(read));
+            if (result._tag === "Success" && Option.isNone(result.success)) {
+              yield* Ref.set(state.claudeRead, known);
+              return claudeResetCreditsToContract(known.block, yield* Clock.currentTimeMillis);
+            }
+            const interval =
+              result._tag === "Success"
+                ? READ_INTERVAL
+                : Math.min(known.interval * 2, MAX_READ_INTERVAL);
+            const block =
+              result._tag === "Success" ? Option.getOrUndefined(result.success) : known.block;
+            yield* Ref.set(state.claudeRead, { nextAttemptAt: now + interval, interval, block });
+            return claudeResetCreditsToContract(block, yield* Clock.currentTimeMillis);
+          }),
+        ),
       );
     });
 
