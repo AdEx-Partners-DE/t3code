@@ -2667,9 +2667,7 @@ export default function Sidebar() {
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
   const routeTargetRef = useRef(routeTarget);
-  routeTargetRef.current = routeTarget;
   const routeThreadKeyRef = useRef(routeThreadKey);
-  routeThreadKeyRef.current = routeThreadKey;
 
   const environmentLabelById = useMemo(
     () =>
@@ -2681,7 +2679,6 @@ export default function Sidebar() {
   const environmentMachineById = useEnvironmentMachines();
   const projectGroups = useSidebarProjectGroups();
   const projectGroupsRef = useRef(projectGroups);
-  projectGroupsRef.current = projectGroups;
   // Threads on non-primary environments (T3 Connect, hosted) resolve their
   // provider entry from their own environment's config: default instance ids
   // are driver slugs, so a flat map would collide across environments.
@@ -3096,13 +3093,13 @@ export default function Sidebar() {
     return () => window.clearTimeout(id);
   }, [snoozedThreads]);
 
-  const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
   const settledResetKey = projectScopeKey ?? "all";
-  const lastSettledResetKeyRef = useRef(settledResetKey);
-  if (lastSettledResetKeyRef.current !== settledResetKey) {
-    lastSettledResetKeyRef.current = settledResetKey;
-    setSettledVisibleCount(SETTLED_TAIL_INITIAL_COUNT);
-  }
+  const [settledTail, setSettledTail] = useState({
+    scopeKey: settledResetKey,
+    count: SETTLED_TAIL_INITIAL_COUNT,
+  });
+  const settledVisibleCount =
+    settledTail.scopeKey === settledResetKey ? settledTail.count : SETTLED_TAIL_INITIAL_COUNT;
   const visibleSettledThreads = useMemo(() => {
     if (settledThreads.length <= settledVisibleCount) return settledThreads;
     const visible = settledThreads.slice(0, settledVisibleCount);
@@ -3118,10 +3115,11 @@ export default function Sidebar() {
     return visible;
   }, [routeThreadKey, settledThreads, settledVisibleCount]);
   const hiddenSettledCount = settledThreads.length - visibleSettledThreads.length;
-  const showMoreSettled = useCallback(
-    () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
-    [],
-  );
+  const showMoreSettled = () =>
+    setSettledTail({
+      scopeKey: settledResetKey,
+      count: settledVisibleCount + SETTLED_TAIL_PAGE_COUNT,
+    });
   // Project blocks the user folded away in the by-project order.
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useLocalStorage(
     COLLAPSED_PROJECT_GROUPS_KEY,
@@ -3218,7 +3216,6 @@ export default function Sidebar() {
     [orderedThreads],
   );
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
-  orderedThreadKeysRef.current = orderedThreadKeys;
   const threadByKey = useMemo(
     () =>
       new Map(
@@ -3233,9 +3230,7 @@ export default function Sidebar() {
   // identities would give every row a fresh callback prop on each shell
   // event and defeat row memoization during streaming.
   const threadByKeyRef = useRef(threadByKey);
-  threadByKeyRef.current = threadByKey;
   const handleNewThreadRef = useRef(newThreadContext.handleNewThread);
-  handleNewThreadRef.current = newThreadContext.handleNewThread;
   const settledThreadKeys = useMemo(
     () =>
       new Set(
@@ -3246,7 +3241,6 @@ export default function Sidebar() {
     [settledThreads],
   );
   const settledThreadKeysRef = useRef(settledThreadKeys);
-  settledThreadKeysRef.current = settledThreadKeys;
   const snoozedThreadKeys = useMemo(
     () =>
       new Set(
@@ -3257,7 +3251,6 @@ export default function Sidebar() {
     [snoozedThreads],
   );
   const snoozedThreadKeysRef = useRef(snoozedThreadKeys);
-  snoozedThreadKeysRef.current = snoozedThreadKeys;
 
   const jumpLabelByKey = useMemo(() => {
     const mapping = new Map<string, string>();
@@ -3672,7 +3665,19 @@ export default function Sidebar() {
     return map;
   }, [activeThreads, pinnedThreads, settledThreads, snoozedThreads, workingThreads]);
   const sectionByThreadKeyRef = useRef(sectionByThreadKey);
-  sectionByThreadKeyRef.current = sectionByThreadKey;
+  // Handlers read these at event time; writing them during render would make the
+  // React Compiler skip the whole component.
+  useLayoutEffect(() => {
+    routeTargetRef.current = routeTarget;
+    routeThreadKeyRef.current = routeThreadKey;
+    projectGroupsRef.current = projectGroups;
+    orderedThreadKeysRef.current = orderedThreadKeys;
+    threadByKeyRef.current = threadByKey;
+    handleNewThreadRef.current = newThreadContext.handleNewThread;
+    settledThreadKeysRef.current = settledThreadKeys;
+    snoozedThreadKeysRef.current = snoozedThreadKeys;
+    sectionByThreadKeyRef.current = sectionByThreadKey;
+  });
   const [actionSweep, setActionSweep] = useState<{
     action: SidebarSweepAction;
     keys: ReadonlySet<string>;
@@ -4068,7 +4073,7 @@ export default function Sidebar() {
   const draggedThreadKey = dragState?.activeKey;
   const draggedFromSection = dragState?.activeSection;
   const dragActivationY = dragState?.activationY;
-  const dndCollisionDetection = useMemo(() => {
+  const dndCollisionDetection = (() => {
     if (draggedThreadKey === undefined || draggedFromSection === undefined)
       return createSidebarCollisionDetection(() => true);
     const source = threadByKey.get(draggedThreadKey);
@@ -4102,190 +4107,149 @@ export default function Sidebar() {
         activationY: dragActivationY ?? null,
       },
     );
-  }, [
-    activeKeysById,
-    pinnedKeysById,
-    serverConfigs,
-    activeKeys,
-    activeReorderableThreadKeys,
-    draggedThreadKey,
-    draggedFromSection,
-    dragActivationY,
-    draggableThreadKeys,
-    pinnedKeys,
-    sidebarListItems,
-    threadByKey,
-    workingShelfEnabled,
-  ]);
-  const handleThreadDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const activeKey = String(event.active.id);
-      const activeSection = sectionByThreadKey.get(activeKey);
-      const target =
-        event.over === null
-          ? null
-          : resolveSidebarDropTarget(sidebarListItems, activeKey, String(event.over.id));
-      const activeThread = threadByKey.get(activeKey);
-      if (activeSection === undefined || target === null || activeThread === undefined) return;
-      const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
-      const plan = planSidebarThreadDrop({
-        activeKey,
-        activeSection,
-        activePinned: activeThread.pinnedAt != null,
-        activeSettled: activeThread.settledOverride === "settled",
-        supportsSettlement:
-          serverConfigs.get(activeThread.environmentId)?.environment.capabilities
-            .threadSettlement === true,
-        target,
-        pinnedOrder: pinnedKeys,
-        pinnedKeysById,
-        reorderableKeys: draggableThreadKeys,
-        activeOrder: activeKeys,
-        activeKeysById,
-        activeReorderableKeys: activeReorderableThreadKeys,
-        activeTimeOrdered: inboxAutoOrdered,
-      });
-      if (plan.kind === "none") return;
-      if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
-      const assignments =
-        plan.kind === "pin"
-          ? [
-              ...(plan.orderKey === undefined ? [] : [{ id: activeKey, orderKey: plan.orderKey }]),
-              ...plan.extraAssignments,
-            ]
-          : plan.kind === "reorder-pinned" || plan.kind === "move-active"
-            ? plan.assignments
-            : [];
-      if (
-        !checkThreadOperations(
-          [activeKey, ...assignments.map(({ id }) => id)].flatMap((key) => {
-            const thread = threadByKey.get(key);
-            return thread ? [thread] : [];
-          }),
-        )
+  })();
+  const handleThreadDragEnd = (event: DragEndEvent) => {
+    const activeKey = String(event.active.id);
+    const activeSection = sectionByThreadKey.get(activeKey);
+    const target =
+      event.over === null
+        ? null
+        : resolveSidebarDropTarget(sidebarListItems, activeKey, String(event.over.id));
+    const activeThread = threadByKey.get(activeKey);
+    if (activeSection === undefined || target === null || activeThread === undefined) return;
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    const plan = planSidebarThreadDrop({
+      activeKey,
+      activeSection,
+      activePinned: activeThread.pinnedAt != null,
+      activeSettled: activeThread.settledOverride === "settled",
+      supportsSettlement:
+        serverConfigs.get(activeThread.environmentId)?.environment.capabilities.threadSettlement ===
+        true,
+      target,
+      pinnedOrder: pinnedKeys,
+      pinnedKeysById,
+      reorderableKeys: draggableThreadKeys,
+      activeOrder: activeKeys,
+      activeKeysById,
+      activeReorderableKeys: activeReorderableThreadKeys,
+      activeTimeOrdered: inboxAutoOrdered,
+    });
+    if (plan.kind === "none") return;
+    if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
+    const assignments =
+      plan.kind === "pin"
+        ? [
+            ...(plan.orderKey === undefined ? [] : [{ id: activeKey, orderKey: plan.orderKey }]),
+            ...plan.extraAssignments,
+          ]
+        : plan.kind === "reorder-pinned" || plan.kind === "move-active"
+          ? plan.assignments
+          : [];
+    if (
+      !checkThreadOperations(
+        [activeKey, ...assignments.map(({ id }) => id)].flatMap((key) => {
+          const thread = threadByKey.get(key);
+          return thread ? [thread] : [];
+        }),
       )
-        return;
-      const drop = {
-        key: activeKey,
-        sourceSection: activeSection,
-        section: target.section,
-        occurredAt: new Date().toISOString(),
-        clearsSnooze:
-          plan.kind === "pin" ||
-          plan.kind === "settle" ||
-          (plan.kind === "move-active" && plan.unsnooze),
-        order: plan.kind === "settle" ? null : plan.order,
-        keysAtDrop: target.section === "active" ? activeKeysById : pinnedKeysById,
-        assignedKeys: new Map(assignments.map(({ id, orderKey }) => [id, orderKey])),
-      };
-      setOptimisticDrop(drop);
-      void (async () => {
-        const run = async (
-          operation: Promise<AtomCommandResult<unknown, unknown>>,
-          title: string,
-        ) => {
-          const result = await operation;
-          if (result._tag === "Success") return true;
-          setOptimisticDrop((current) => (current === drop ? null : current));
-          if (!isAtomCommandInterrupted(result)) {
-            const error = squashAtomCommandFailure(result);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title,
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-          }
-          return false;
-        };
-        switch (plan.kind) {
-          case "settle": {
-            settlingThreadKeysRef.current.add(activeKey);
-            const navigateAfterSettle = planForwardNavigation(activeKey);
-            const settled = await run(settleThread(threadRef), "Failed to settle thread").finally(
-              () => settlingThreadKeysRef.current.delete(activeKey),
-            );
-            if (
-              settled &&
-              shouldNavigateAfterThreadPark({
-                threadKey: activeKey,
-                currentThreadKey: routeThreadKeyRef.current,
-                action: "settle",
-                now: new Date().toISOString(),
-                thread: readThreadShell(threadRef),
-              })
-            )
-              navigateAfterSettle?.();
-            return;
-          }
-          case "move-active":
-            if (plan.unpin && !(await run(unpinThread(threadRef), "Failed to unpin thread")))
-              return;
-            if (
-              plan.unsettle &&
-              !(await run(unsettleThread(threadRef), "Failed to un-settle thread"))
-            )
-              return;
-            if (plan.unsnooze && !(await run(unsnoozeThread(threadRef), "Failed to wake thread")))
-              return;
-            break;
-          case "pin":
-            if (
-              !(await run(
-                pinThread(
-                  threadRef,
-                  plan.orderKey === undefined ? {} : { orderKey: plan.orderKey },
-                ),
-                "Failed to pin thread",
-              ))
-            )
-              return;
-            break;
-          case "reorder-pinned":
-            break;
+    )
+      return;
+    const drop = {
+      key: activeKey,
+      sourceSection: activeSection,
+      section: target.section,
+      occurredAt: new Date().toISOString(),
+      clearsSnooze:
+        plan.kind === "pin" ||
+        plan.kind === "settle" ||
+        (plan.kind === "move-active" && plan.unsnooze),
+      order: plan.kind === "settle" ? null : plan.order,
+      keysAtDrop: target.section === "active" ? activeKeysById : pinnedKeysById,
+      assignedKeys: new Map(assignments.map(({ id, orderKey }) => [id, orderKey])),
+    };
+    setOptimisticDrop(drop);
+    void (async () => {
+      const run = async (
+        operation: Promise<AtomCommandResult<unknown, unknown>>,
+        title: string,
+      ) => {
+        const result = await operation;
+        if (result._tag === "Success") return true;
+        setOptimisticDrop((current) => (current === drop ? null : current));
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title,
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
         }
-        const keyWrites = plan.kind === "pin" ? plan.extraAssignments : plan.assignments;
-        for (const assignment of keyWrites) {
-          const thread = threadByKey.get(assignment.id);
-          if (thread === undefined) continue;
+        return false;
+      };
+      switch (plan.kind) {
+        case "settle": {
+          settlingThreadKeysRef.current.add(activeKey);
+          const navigateAfterSettle = planForwardNavigation(activeKey);
+          const settled = await run(settleThread(threadRef), "Failed to settle thread").finally(
+            () => settlingThreadKeysRef.current.delete(activeKey),
+          );
+          if (
+            settled &&
+            shouldNavigateAfterThreadPark({
+              threadKey: activeKey,
+              currentThreadKey: routeThreadKeyRef.current,
+              action: "settle",
+              now: new Date().toISOString(),
+              thread: readThreadShell(threadRef),
+            })
+          )
+            navigateAfterSettle?.();
+          return;
+        }
+        case "move-active":
+          if (plan.unpin && !(await run(unpinThread(threadRef), "Failed to unpin thread"))) return;
+          if (
+            plan.unsettle &&
+            !(await run(unsettleThread(threadRef), "Failed to un-settle thread"))
+          )
+            return;
+          if (plan.unsnooze && !(await run(unsnoozeThread(threadRef), "Failed to wake thread")))
+            return;
+          break;
+        case "pin":
           if (
             !(await run(
-              (plan.kind === "move-active" ? reorderActiveThread : reorderPinnedThread)(
-                scopeThreadRef(thread.environmentId, thread.id),
-                assignment.orderKey,
-              ),
-              plan.kind === "move-active"
-                ? "Failed to reorder active threads"
-                : "Failed to reorder pinned threads",
+              pinThread(threadRef, plan.orderKey === undefined ? {} : { orderKey: plan.orderKey }),
+              "Failed to pin thread",
             ))
           )
             return;
-        }
-      })();
-    },
-    [
-      activeKeysById,
-      pinnedKeysById,
-      serverConfigs,
-      activeKeys,
-      activeReorderableThreadKeys,
-      draggableThreadKeys,
-      pinThread,
-      pinnedKeys,
-      planForwardNavigation,
-      reorderPinnedThread,
-      reorderActiveThread,
-      sectionByThreadKey,
-      settleThread,
-      sidebarListItems,
-      threadByKey,
-      unpinThread,
-      unsettleThread,
-      unsnoozeThread,
-      workingShelfEnabled,
-    ],
-  );
+          break;
+        case "reorder-pinned":
+          break;
+      }
+      const keyWrites = plan.kind === "pin" ? plan.extraAssignments : plan.assignments;
+      for (const assignment of keyWrites) {
+        const thread = threadByKey.get(assignment.id);
+        if (thread === undefined) continue;
+        if (
+          !(await run(
+            (plan.kind === "move-active" ? reorderActiveThread : reorderPinnedThread)(
+              scopeThreadRef(thread.environmentId, thread.id),
+              assignment.orderKey,
+            ),
+            plan.kind === "move-active"
+              ? "Failed to reorder active threads"
+              : "Failed to reorder pinned threads",
+          ))
+        )
+          return;
+      }
+    })();
+  };
   const snoozingThreadKeysRef = useRef(new Set<string>());
   const performSnooze = useCallback(
     async (
@@ -4991,39 +4955,31 @@ export default function Sidebar() {
   // Shared by the shortcut and the command palette. The empty-state toast is
   // replaced, not stacked, when the command is repeated.
   const nothingWaitingToastRef = useRef<string | null>(null);
-  const openNextWaitingThread = useCallback(
-    (request: { quiet: boolean; kind?: WaitingThreadKind } = { quiet: false }) => {
-      const keyOf = (thread: EnvironmentThreadShell) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const target = resolveNextWaitingThread(
-        [...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads],
-        projectPriorities,
-        (thread) => keyOf(thread) === routeThreadKey,
-        request.kind,
-      );
-      if (nothingWaitingToastRef.current !== null) {
-        toastManager.close(nothingWaitingToastRef.current);
-        nothingWaitingToastRef.current = null;
-      }
-      if (target) {
-        navigateToThread(scopeThreadRef(target.environmentId, target.id));
-        return;
-      }
-      if (request.quiet) return;
-      nothingWaitingToastRef.current = toastManager.add({
-        type: "info",
-        title: "Nothing is waiting on you",
-      });
-    },
-    [
-      activeThreads,
-      navigateToThread,
-      pinnedThreads,
+  const openNextWaitingThread = (
+    request: { quiet: boolean; kind?: WaitingThreadKind } = { quiet: false },
+  ) => {
+    const keyOf = (thread: EnvironmentThreadShell) =>
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    const target = resolveNextWaitingThread(
+      [...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads],
       projectPriorities,
-      routeThreadKey,
-      workingThreads,
-    ],
-  );
+      (thread) => keyOf(thread) === routeThreadKey,
+      request.kind,
+    );
+    if (nothingWaitingToastRef.current !== null) {
+      toastManager.close(nothingWaitingToastRef.current);
+      nothingWaitingToastRef.current = null;
+    }
+    if (target) {
+      navigateToThread(scopeThreadRef(target.environmentId, target.id));
+      return;
+    }
+    if (request.quiet) return;
+    nothingWaitingToastRef.current = toastManager.add({
+      type: "info",
+      title: "Nothing is waiting on you",
+    });
+  };
   useEffect(() => subscribeNextWaitingThread(openNextWaitingThread), [openNextWaitingThread]);
   const waitingCounts = useMemo(
     () => countWaitingThreads([...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads]),
@@ -5048,22 +5004,19 @@ export default function Sidebar() {
       }),
     [],
   );
-  const portfolioThreads = useMemo(
-    () =>
-      portfolioChecklistOpen
-        ? [...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads].map((thread) => ({
-            environmentId: thread.environmentId,
-            id: thread.id,
-            projectId: thread.projectId,
-            title: thread.title,
-            projectName:
-              projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
-            latestRunId: thread.latestRun?.runId ?? null,
-            working: threadRuntimeIsActive(thread.runtime),
-          }))
-        : [],
-    [activeThreads, pinnedThreads, portfolioChecklistOpen, projectDisplayNameByKey, workingThreads],
-  );
+  const portfolioThreads = (() =>
+    portfolioChecklistOpen
+      ? [...allPinnedThreads, ...allActiveThreads, ...allWorkingThreads].map((thread) => ({
+          environmentId: thread.environmentId,
+          id: thread.id,
+          projectId: thread.projectId,
+          title: thread.title,
+          projectName:
+            projectDisplayNameByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
+          latestRunId: thread.latestRun?.runId ?? null,
+          working: threadRuntimeIsActive(thread.runtime),
+        }))
+      : [])();
   const pendingRequestThreads = useMemo(
     () =>
       pendingRequestsOpen
