@@ -3381,6 +3381,7 @@ describe("parseAgentSessionTranscript", () => {
       '<subagent_notification>\n{"agent_path":"agent-1","status":"completed"}\n</subagent_notification>',
       "<heartbeat>\n<automation_id>nightly-check</automation_id>\n</heartbeat>",
       '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>',
+      "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
     ];
     const thread = AgentSessionScanner.parseAgentSessionTranscript({
       contents: [
