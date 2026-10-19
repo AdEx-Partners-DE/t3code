@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { recordDecision } from "../decisionLog.ts";
@@ -779,6 +780,50 @@ export const make = Effect.gen(function* () {
             snoozed: projection.thread.snoozedUntil != null,
           },
         });
+        // A cut turn that does not continue otherwise ends as a bare "cancelled" run: the
+        // thread shows the message and nothing else, so the user cannot tell the work stopped.
+        if (continuationRun === undefined && cut.providerThreadId != null) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "turn-item.updated",
+            threadId: projection.thread.id,
+            runId: cut.id,
+            ...(cut.rootNodeId === null ? {} : { nodeId: cut.rootNodeId }),
+            providerInstanceId: cut.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              id: IdAllocator.derive.runSignalTurnItem({
+                runId: cut.id,
+                signal: "restart-not-continued",
+              }),
+              threadId: projection.thread.id,
+              runId: cut.id,
+              nodeId: cut.rootNodeId,
+              providerThreadId: cut.providerThreadId,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal:
+                Math.max(
+                  0,
+                  ...(projection.turnItems ?? [])
+                    .filter((item) => item.runId === cut.id)
+                    .map((item) => item.ordinal),
+                ) + 1,
+              status: "failed",
+              title: "Stopped by a server restart",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              type: "error",
+              failure: makeProviderFailure({
+                class: "unknown",
+                message:
+                  "The server restarted during this turn and did not continue it. Send the message again to pick the work up.",
+              }),
+            },
+          });
+        }
       }
       const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
         ? [

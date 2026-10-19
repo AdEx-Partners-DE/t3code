@@ -577,6 +577,73 @@ it.effect("cancels a stale waiting run when no checkpoint capture can finish it"
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("says in the thread when a restart cut a turn that it does not continue", () => {
+  const threadId = ThreadId.make("thread_cut_not_continued");
+  const runId = RunId.make("run_cut_not_continued");
+  const rootNodeId = NodeId.make("node_cut_not_continued");
+  const providerThreadId = ProviderThreadId.make("provider_thread_cut_not_continued");
+  let committedInput: Parameters<EventSink.EventSinkV2["Service"]["commitCommand"]>[0] | null =
+    null;
+  const projection = {
+    thread: { id: threadId },
+    runtimeRequests: [],
+    providerSessions: [],
+    providerThreads: [],
+    providerTurns: [],
+    runs: [
+      {
+        id: runId,
+        status: "running",
+        rootNodeId,
+        providerThreadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      },
+    ],
+    attempts: [],
+    nodes: [],
+    subagents: [],
+    messages: [],
+    turnItems: [],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const layer = ProviderRuntimeRecovery.layer.pipe(
+    Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: false })),
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getRecoveryThreadIds: () => Effect.succeed([threadId]),
+          getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getThreadRecords: () => Effect.succeed(projection),
+        }),
+        Layer.mock(EventSink.EventSinkV2)({
+          commitCommand: (input) => {
+            committedInput = input;
+            return Effect.succeed({ committed: true, cancelledEffectCount: 0 } as never);
+          },
+        }),
+        IdAllocator.layer,
+        Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
+          runRecoveryOnce: Effect.succeed(false),
+        }),
+        Layer.mock(EffectOutbox.EffectOutboxV2)({
+          listByCommandId: () => Effect.succeed([]),
+          reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
+        }),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile("startup");
+    const notes = (committedInput?.events ?? []).flatMap((event) =>
+      event.type === "turn-item.updated" && event.payload.type === "error" ? [event.payload] : [],
+    );
+    assert.lengthOf(notes, 1);
+    assert.equal(notes[0]?.runId, runId);
+    assert.equal(notes[0]?.title, "Stopped by a server restart");
+    assert.include(notes[0]?.type === "error" ? notes[0].failure.message : "", "did not continue");
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("closes a secret request card's form when its run is recovered", () => {
   const threadId = ThreadId.make("thread_secret_recovery");
   const runId = RunId.make("run_secret_recovery");
@@ -955,6 +1022,8 @@ it.effect(
           ["turn-item.updated", "cancelled"],
           ["provider-thread.updated", "idle"],
           ["provider-session.updated", "stopped"],
+          // The cut turn is not continued, so the thread says so.
+          ["turn-item.updated", "failed"],
         ],
       );
       const messageEvent = events.find((event) => event.type === "message.updated");
