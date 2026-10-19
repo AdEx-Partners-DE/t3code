@@ -1,4 +1,5 @@
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
+import { shallow } from "zustand/vanilla/shallow";
 import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
 import { MarkdownFindContext, findRevealRef } from "./markdownFindContext";
 import { useChatCanvas } from "./ChatCanvasContext";
@@ -618,16 +619,14 @@ const ConversationTimeline = memo(function ConversationTimeline({
     () => rememberedDisclosures?.attempts ?? new Set(),
   );
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  const listIdentityRef = useRef(listIdentityKey);
-  const previousLatestRunRef = useRef(latestRun);
+  const [listIdentity, setListIdentity] = useState(listIdentityKey);
   // The new thread must open with an instant end pin, even mid-turn.
   const [settlingListIdentity, setSettlingListIdentity] = useState<string | null>(listIdentityKey);
   let paintedExpandedRunIds = expandedRunIds;
   let paintedExpandedWorkGroupIds = expandedWorkGroupIds;
   let paintedExpandedAttemptIds = expandedAttemptIds;
-  if (listIdentityRef.current !== listIdentityKey) {
-    listIdentityRef.current = listIdentityKey;
-    previousLatestRunRef.current = latestRun;
+  if (listIdentity !== listIdentityKey) {
+    setListIdentity(listIdentityKey);
     setSettlingListIdentity(listIdentityKey);
     paintedExpandedRunIds = rememberedDisclosures?.runs ?? new Set();
     paintedExpandedWorkGroupIds = rememberedDisclosures?.workGroups ?? new Set();
@@ -780,10 +779,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
     [suspendEndScrollMaintenanceForDisclosure],
   );
 
+  const previousLatestRunRef = useRef({ identity: listIdentityKey, run: latestRun });
   useEffect(() => {
-    const previous = previousLatestRunRef.current;
-    previousLatestRunRef.current = latestRun;
-    if (!latestRun || previous?.runId === undefined) {
+    const { identity, run: previous } = previousLatestRunRef.current;
+    previousLatestRunRef.current = { identity: listIdentityKey, run: latestRun };
+    if (identity !== listIdentityKey || !latestRun || previous?.runId === undefined) {
       return;
     }
     if (latestRun.runId === previous.runId) {
@@ -804,7 +804,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       next.delete(previous.runId);
       return next;
     });
-  }, [latestRun]);
+  }, [latestRun, listIdentityKey]);
 
   // Find the fold that hides the match: imported turns have no run id but still
   // fold under a synthetic key, so the match's own run id cannot open them.
@@ -854,45 +854,13 @@ const ConversationTimeline = memo(function ConversationTimeline({
     [activeFindAttemptId, paintedExpandedAttemptIds],
   );
 
-  const rowsProjectionRef = useRef<{
-    readonly threadKey: string;
-    readonly workspaceRoot: string | undefined;
-    readonly projection: MessagesTimelineRowsProjection;
-  } | null>(null);
-  const rawRows = useMemo(() => {
-    const previous = rowsProjectionRef.current;
-    const projection = deriveMessagesTimelineRowsWithState(
-      {
-        timelineEntries,
-        latestRun,
-        runningRunId,
-        expandedRunIds: visibleExpandedRunIds,
-        expandedAttemptIds: visibleExpandedAttemptIds,
-        expandedWorkGroupIds: paintedExpandedWorkGroupIds,
-        isWorking,
-        runlessWorkActive,
-        activeTurnStartedAt,
-        turnDiffSummaries,
-        supportsConversationRollback,
-        unreachableRevertTurnCounts,
-        worktreeSetup,
-      },
-      previous?.threadKey === listIdentityKey && previous.workspaceRoot === workspaceRoot
-        ? previous.projection
-        : null,
-    );
-    rowsProjectionRef.current = { threadKey: listIdentityKey, workspaceRoot, projection };
-    return projection.rows;
-  }, [
-    rowsProjectionRef,
-    listIdentityKey,
-    workspaceRoot,
+  const rawRows = useIncrementalTimelineRows(`${listIdentityKey}\0${workspaceRoot ?? ""}`, {
     timelineEntries,
     latestRun,
     runningRunId,
-    visibleExpandedRunIds,
-    visibleExpandedAttemptIds,
-    paintedExpandedWorkGroupIds,
+    expandedRunIds: visibleExpandedRunIds,
+    expandedAttemptIds: visibleExpandedAttemptIds,
+    expandedWorkGroupIds: paintedExpandedWorkGroupIds,
     isWorking,
     runlessWorkActive,
     activeTurnStartedAt,
@@ -900,7 +868,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     supportsConversationRollback,
     unreachableRevertTurnCounts,
     worktreeSetup,
-  ]);
+  });
   const rows = useStableRows(rawRows, listIdentityKey);
   // Run status/timestamps churn on every stream event; the shared row context
   // must not change with them or every timeline row re-renders per event.
@@ -2103,13 +2071,13 @@ function ContextCompactionTimelineRow({
 
 function UserVideoAttachment({ file }: { readonly file: ChatFileAttachment }) {
   const ctx = use(TimelineRowCtx);
-  const asset = useMemo(
-    () =>
-      file.downloadable === false
-        ? null
-        : buildAttachmentVideoAsset(ctx.activeThreadEnvironmentId, file),
-    [ctx.activeThreadEnvironmentId, file.downloadable, file.id, file.mimeType, file.name],
-  );
+  // Row updates rebuild attachment objects, so the asset follows only the
+  // fields it reads.
+  const { downloadable, id, mimeType, name } = file;
+  const asset =
+    downloadable === false
+      ? null
+      : buildAttachmentVideoAsset(ctx.activeThreadEnvironmentId, { id, mimeType, name });
   const resource = asset?.resource ?? null;
   const assetUrl = useAssetUrlState(ctx.activeThreadEnvironmentId, resource);
   const refreshAssetUrl = useAssetUrlRefresh(ctx.activeThreadEnvironmentId, resource);
@@ -4868,51 +4836,90 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
   );
 }
 
+function handoffRunsSignature(runs: ReadonlyArray<HandoffTimelineRun>): string {
+  return runs
+    .map(
+      (run) =>
+        `${run.id}\0${run.providerInstanceId}\0${run.ordinal}\0${run.modelSelection.instanceId}\0${run.modelSelection.model}`,
+    )
+    .join("\n");
+}
+
 function useStableHandoffRuns(
   runs: ReadonlyArray<HandoffTimelineRun>,
 ): ReadonlyArray<HandoffTimelineRun> {
-  const prev = useRef<{
-    signature: string;
-    value: ReadonlyArray<HandoffTimelineRun>;
-  }>({ signature: "", value: EMPTY_TIMELINE_RUNS });
-  return useMemo(() => {
-    const signature = runs
-      .map(
-        (run) =>
-          `${run.id}\0${run.providerInstanceId}\0${run.ordinal}\0${run.modelSelection.instanceId}\0${run.modelSelection.model}`,
-      )
-      .join("\n");
-    if (signature === prev.current.signature) {
-      return prev.current.value;
-    }
-    const value = runs.map((run) => ({
-      id: run.id,
-      ordinal: run.ordinal,
-      providerInstanceId: run.providerInstanceId,
-      modelSelection: run.modelSelection,
-    }));
-    prev.current = { signature, value };
-    return value;
-  }, [runs]);
+  const [state, setState] = useState<{
+    readonly source: ReadonlyArray<HandoffTimelineRun> | null;
+    readonly signature: string;
+    readonly value: ReadonlyArray<HandoffTimelineRun>;
+  }>({ source: null, signature: "", value: EMPTY_TIMELINE_RUNS });
+  if (state.source === runs) return state.value;
+  const signature = handoffRunsSignature(runs);
+  const value =
+    signature === state.signature
+      ? state.value
+      : runs.map((run) => ({
+          id: run.id,
+          ordinal: run.ordinal,
+          providerInstanceId: run.providerInstanceId,
+          modelSelection: run.modelSelection,
+        }));
+  setState({ source: runs, signature, value });
+  return value;
+}
+
+type MessagesTimelineRowsInput = MessagesTimelineRowsProjection["input"];
+
+// Expanded-id sets can be rebuilt during render; comparing them by content keeps
+// the render-time state update below from repeating forever.
+function sameRowsInput(left: MessagesTimelineRowsInput, right: MessagesTimelineRowsInput): boolean {
+  for (const key of Object.keys(right) as Array<keyof MessagesTimelineRowsInput>) {
+    const previous = left[key];
+    const next = right[key];
+    if (Object.is(previous, next)) continue;
+    if (previous instanceof Set && next instanceof Set && shallow(previous, next)) continue;
+    return false;
+  }
+  return Object.keys(left).length === Object.keys(right).length;
+}
+
+/**
+ * Rows derived from the previous projection of the same list, so a streamed
+ * text update patches its message rows instead of deriving every row again.
+ */
+function useIncrementalTimelineRows(
+  identity: string,
+  input: MessagesTimelineRowsInput,
+): MessagesTimelineRow[] {
+  const [state, setState] = useState(() => ({
+    identity,
+    input,
+    projection: deriveMessagesTimelineRowsWithState(input),
+  }));
+  if (state.identity === identity && sameRowsInput(state.input, input)) {
+    return state.projection.rows;
+  }
+  const projection = deriveMessagesTimelineRowsWithState(
+    input,
+    state.identity === identity ? state.projection : null,
+  );
+  setState({ identity, input, projection });
+  return projection.rows;
 }
 
 function useStableRows(rows: MessagesTimelineRow[], identity: string): MessagesTimelineRow[] {
-  const prevState = useRef<StableMessagesTimelineRowsState>({
-    byId: new Map<string, MessagesTimelineRow>(),
-    result: [],
-  });
-  const prevIdentity = useRef(identity);
-
-  return useMemo(() => {
-    const previous =
-      prevIdentity.current === identity
-        ? prevState.current
-        : { byId: new Map<string, MessagesTimelineRow>(), result: [] };
-    prevIdentity.current = identity;
-    const nextState = computeStableMessagesTimelineRows(rows, previous);
-    prevState.current = nextState;
-    return nextState.result;
-  }, [identity, rows]);
+  const [state, setState] = useState<{
+    readonly identity: string;
+    readonly source: MessagesTimelineRow[] | null;
+    readonly stable: StableMessagesTimelineRowsState;
+  }>({ identity, source: null, stable: { byId: new Map(), result: [] } });
+  if (state.identity === identity && state.source === rows) return state.stable.result;
+  const stable = computeStableMessagesTimelineRows(
+    rows,
+    state.identity === identity ? state.stable : { byId: new Map(), result: [] },
+  );
+  setState({ identity, source: rows, stable });
+  return stable.result;
 }
 
 type WorkEntryIconName =
