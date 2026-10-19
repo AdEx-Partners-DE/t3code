@@ -24,12 +24,7 @@ const TAG_HASH_OFFSET_BASIS = 0xcbf29ce484222325n;
 const TAG_HASH_PRIME = 0x100000001b3n;
 const TAG_HASH_MASK = 0xffffffffffffffffn;
 
-/**
- * Windows silently drops renderer notifications when the tag plus origin
- * exceeds the platform toast budget (electron/electron#40433), and the raw
- * `environmentId:threadId` composite is 73 characters. Digest the pair so
- * environment and thread uniqueness survive within a short tag.
- */
+/** Windows drops toast notifications with the 73-character environment/thread tag. */
 export function threadNotificationTag(environmentId: EnvironmentId, threadId: ThreadId): string {
   const key = `${environmentId}:${threadId}`;
   let hash = TAG_HASH_OFFSET_BASIS;

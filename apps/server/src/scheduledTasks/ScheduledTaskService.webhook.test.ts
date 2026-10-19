@@ -68,6 +68,7 @@ const withService = <A, E>(
   body: (input: {
     readonly service: ScheduledTaskService.ScheduledTaskService["Service"];
     readonly launches: Queue.Queue<LaunchInput>;
+    readonly sql: SqlClient.SqlClient;
     readonly secretsByRef: Map<string, string>;
     /** The settings service, when `options.settings` provided one. */
     readonly settings: Option.Option<ServerSettings.ServerSettingsService["Service"]>;
@@ -111,7 +112,8 @@ const withService = <A, E>(
     return yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
       const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-      return yield* body({ service, launches, secretsByRef, settings });
+      const sql = yield* SqlClient.SqlClient;
+      return yield* body({ service, launches, sql, secretsByRef, settings });
     }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provideMerge(layerDependencies))));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory));
 
@@ -223,7 +225,13 @@ it.effect.each(["pending", "running"] as const)(
         assert.equal(sent.threadId, "thread:restart");
         assert.equal(sent.mode, "queue");
         assert.equal(sent.scheduledTaskId, task.id);
-        assert.equal(sent.text, "Handle opened: " + bodyText + ".");
+        const frame = /^Handle <(webhook-data-[0-9a-f]{12})>/.exec(sent.text)?.[1];
+        assert.isDefined(frame);
+        assert.isTrue(
+          sent.text.startsWith(
+            `Handle <${frame}>opened</${frame}>: <${frame}>${bodyText}</${frame}>.`,
+          ),
+        );
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(completed);
         assert.equal((yield* service.list()).tasks[0]?.runCount, 1);
@@ -665,6 +673,52 @@ it.effect("a held request already delivered directly runs only once", () =>
       yield* Queue.take(launches);
       const logged = (yield* service.listWebhookDeliveries({ id: task.id })).deliveries;
       assert.equal(logged.length, 1);
+    }),
+  ),
+);
+
+it.effect("relay retries recover failed acceptance without releasing another request's claim", () =>
+  withService(({ service, launches, sql }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      const request = requestFor(task, { relayDeliveryId: "retry-after-log-failure" });
+      yield* sql`
+        CREATE TRIGGER fail_webhook_delivery_log
+        BEFORE INSERT ON scheduled_task_webhook_deliveries
+        BEGIN
+          SELECT RAISE(FAIL, 'injected delivery log failure');
+        END
+      `;
+      const error = yield* service.triggerWebhook(request).pipe(Effect.flip);
+      assert.equal(error.message, "Could not record webhook delivery.");
+      assert.equal(yield* Queue.size(launches), 0);
+      assert.isEmpty((yield* service.listWebhookDeliveries({ id: task.id })).deliveries);
+      yield* sql`DROP TRIGGER fail_webhook_delivery_log`;
+
+      const retried = yield* Effect.all(
+        [service.triggerWebhook(request), service.triggerWebhook(request)],
+        { concurrency: "unbounded" },
+      );
+      assert.deepEqual(
+        retried.map((result) => (result._tag === "accepted" ? result.outcome : result._tag)).sort(),
+        ["accepted", "duplicate"],
+      );
+      assert.include((yield* Queue.take(launches)).commandId, request.relayDeliveryId!);
+
+      yield* sql`
+        CREATE TRIGGER fail_webhook_claim
+        BEFORE INSERT ON scheduled_task_webhook_relay_deliveries
+        BEGIN
+          SELECT RAISE(FAIL, 'injected claim failure');
+        END
+      `;
+      const retryError = yield* service.triggerWebhook(request).pipe(Effect.flip);
+      assert.equal(retryError.message, "Could not record webhook delivery.");
+      yield* sql`DROP TRIGGER fail_webhook_claim`;
+      const replayed = yield* service.triggerWebhook(request);
+      assert.equal(replayed._tag === "accepted" ? replayed.outcome : replayed._tag, "duplicate");
+      assert.equal(yield* Queue.size(launches), 0);
+      assert.equal((yield* service.listWebhookDeliveries({ id: task.id })).deliveries.length, 1);
     }),
   ),
 );

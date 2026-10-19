@@ -142,6 +142,7 @@ function HandoffEndpoint(props: {
         : null;
     return {
       driverKind: candidate.driver,
+      enabled: candidate.enabled,
       ...(typeof agentId === "string" && agentId.trim()
         ? { acpRegistryAgentId: agentId.trim() }
         : {}),
