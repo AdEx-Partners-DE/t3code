@@ -7,6 +7,7 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
@@ -42,7 +43,7 @@ export class ResetCreditCoordinator extends Context.Service<
   {
     readonly readClaudeCredits: <R>(
       accountKey: string,
-      read: Effect.Effect<unknown, ClaudeResetCreditReadError, R>,
+      read: Effect.Effect<Option.Option<unknown>, ClaudeResetCreditReadError, R>,
     ) => Effect.Effect<ServerProviderResetCredits | undefined, never, R>;
     readonly redeemClaudeCredit: <E, R>(
       accountKey: string,
@@ -127,11 +128,14 @@ export const make = Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
           if (now < known.nextAttemptAt) return claudeResetCreditsToContract(known.block, now);
           const result = yield* Effect.result(read);
+          if (result._tag === "Success" && Option.isNone(result.success))
+            return claudeResetCreditsToContract(known.block, yield* Clock.currentTimeMillis);
           const interval =
             result._tag === "Success"
               ? READ_INTERVAL
               : Math.min(known.interval * 2, MAX_READ_INTERVAL);
-          const block = result._tag === "Success" ? result.success : known.block;
+          const block =
+            result._tag === "Success" ? Option.getOrUndefined(result.success) : known.block;
           yield* Ref.set(state.claudeRead, { nextAttemptAt: now + interval, interval, block });
           return claudeResetCreditsToContract(block, yield* Clock.currentTimeMillis);
         }),
@@ -146,33 +150,37 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const state = yield* stateFor(accountKey);
       return yield* state.lock.withPermits(1)(
-        Effect.gen(function* () {
-          const known = yield* Ref.get(state.claudeRead);
-          const grantId =
-            (yield* Ref.get(state.pendingClaudeGrant)) ??
-            claudeResetCreditsToContract(known.block, yield* Clock.currentTimeMillis)?.nextCreditId;
-          if (!grantId) return "noCredit" as const;
-          yield* Ref.set(state.pendingClaudeGrant, grantId);
-          // Reads use this same lock, so none can restore the pre-claim answer.
-          yield* Ref.set(state.claudeRead, EMPTY_CLAUDE_READ);
-          return yield* redeemLocked(
-            state,
-            (requestId) =>
-              consume(grantId, requestId).pipe(
-                Effect.tapError((error) =>
-                  isSettled(error) ? Ref.set(state.claudeRead, known) : Effect.void,
+        // Record confirmed outcomes before cancellation can restore the pre-claim answer.
+        Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const known = yield* Ref.get(state.claudeRead);
+            const grantId =
+              (yield* Ref.get(state.pendingClaudeGrant)) ??
+              claudeResetCreditsToContract(known.block, yield* Clock.currentTimeMillis)
+                ?.nextCreditId;
+            if (!grantId) return "noCredit" as const;
+            yield* Ref.set(state.pendingClaudeGrant, grantId);
+            yield* Ref.set(state.claudeRead, EMPTY_CLAUDE_READ);
+            return yield* redeemLocked(
+              state,
+              (requestId) =>
+                restore(consume(grantId, requestId)).pipe(
+                  Effect.tapError((error) =>
+                    isSettled(error) ? Ref.set(state.claudeRead, known) : Effect.void,
+                  ),
                 ),
+              isSettled,
+            ).pipe(
+              Effect.ensuring(
+                Effect.gen(function* () {
+                  if ((yield* Ref.get(state.pendingKey)) === null)
+                    yield* Ref.set(state.pendingClaudeGrant, null);
+                  else yield* Ref.set(state.claudeRead, { ...known, nextAttemptAt: 0 });
+                }),
               ),
-            isSettled,
-          ).pipe(
-            Effect.ensuring(
-              Effect.gen(function* () {
-                if ((yield* Ref.get(state.pendingKey)) === null)
-                  yield* Ref.set(state.pendingClaudeGrant, null);
-              }),
-            ),
-          );
-        }),
+            );
+          }),
+        ),
       );
     });
 

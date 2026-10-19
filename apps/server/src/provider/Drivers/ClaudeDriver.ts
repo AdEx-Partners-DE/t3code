@@ -5,6 +5,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -266,9 +267,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
         if (!account) return undefined;
         const credits = yield* resetCreditCoordinator.readClaudeCredits(
           account.key,
-          ClaudeResetCredits.fetchClaudeResetCredits(account.token, version).pipe(
-            Effect.provideService(HttpClient.HttpClient, httpClient),
-          ),
+          Effect.gen(function* () {
+            const current = yield* readResetAccount;
+            if (current?.key !== account.key) return Option.none();
+            return yield* ClaudeResetCredits.fetchClaudeResetCredits(current.token, version).pipe(
+              Effect.asSome,
+              Effect.provideService(HttpClient.HttpClient, httpClient),
+            );
+          }),
         );
         // Login files may have changed while this check waited for another instance.
         return (yield* readResetAccount)?.key === account.key ? credits : undefined;

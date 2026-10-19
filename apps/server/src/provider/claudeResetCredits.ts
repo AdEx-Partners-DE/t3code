@@ -181,16 +181,6 @@ export const fetchClaudeResetCredits = Effect.fn("fetchClaudeResetCredits")(
   Effect.mapError((cause) => new ClaudeResetCreditReadError({ cause })),
 );
 
-export const readClaudeResetCredits = Effect.fn("readClaudeResetCredits")(
-  function* (configDir: string, version: string) {
-    const token = yield* readAccessToken(configDir);
-    if (!token) return undefined;
-    const block = yield* fetchClaudeResetCredits(token, version);
-    return claudeResetCreditsToContract(block, DateTime.toEpochMillis(yield* DateTime.now));
-  },
-  Effect.orElseSucceed(() => undefined),
-);
-
 const accountKey = Effect.fnUntraced(function* (
   configDir: string,
   token: string,
