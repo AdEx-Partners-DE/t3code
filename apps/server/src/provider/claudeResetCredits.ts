@@ -1,27 +1,14 @@
-/**
- * Claude banked resets (the CLI's `cedar_ember` program). The CLI reads the
- * grants from the OAuth usage endpoint and claims one against the
- * organization; this module does the same with the credentials the CLI keeps
- * in its config directory. macOS keeps them in the keychain, so there the
- * feature is not offered.
- *
- * @module provider/claudeResetCredits
- */
 import type {
   ProviderConsumeResetCreditOutcome,
   ServerProviderResetCredits,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 const API_BASE = "https://api.anthropic.com";
@@ -95,16 +82,13 @@ class ClaudeResetCreditError extends Schema.TaggedError<ClaudeResetCreditError>(
 const isClaudeResetCreditError = Schema.is(ClaudeResetCreditError);
 
 /**
- * Every reset failure except `requestFailed` and `unconfirmed` is final:
- * Claude answered, or nothing was sent. An unanswered or unconfirmed claim
- * retries with the same request id.
+ * An unanswered or unconfirmed claim retries with the same request id.
  */
 export const isSettledClaudeResetCreditFailure = (error: unknown) =>
   isClaudeResetCreditError(error) &&
   error.reason !== "requestFailed" &&
   error.reason !== "unconfirmed";
 
-/** Rejects unparseable and calendar-invalid timestamps such as February 30. */
 const isFutureTimestamp = (value: string, nowMs: number) => {
   if (!COMPLETE_TIMESTAMP.test(value)) return false;
   const [year, month, day] = value.slice(0, 10).split("-").map(Number);
@@ -113,7 +97,6 @@ const isFutureTimestamp = (value: string, nowMs: number) => {
   );
 };
 
-/** Grants that are paused or past `ends_at` cannot be claimed and do not count. */
 export function claudeResetCreditsToContract(
   block: unknown,
   nowMs: number,
@@ -166,41 +149,28 @@ const withClaudeHeaders = (token: string, version: string) =>
     "user-agent": `claude-cli/${version} (external, cli)`,
   });
 
-/**
- * Reads the banked resets for the login in `configDir`. Unlike
- * `readClaudeResetCredits`, a refused or failed request is an error, so a
- * caller can tell it from an account that has no resets.
- */
-export const fetchClaudeResetCredits = Effect.fn("fetchClaudeResetCredits")(function* (
-  configDir: string,
-  version: string,
-) {
-  const token = yield* readAccessToken(configDir);
-  if (!token) return undefined;
-  const client = yield* HttpClient.HttpClient;
-  const response = yield* client.execute(
-    HttpClientRequest.get(`${API_BASE}/api/oauth/usage`, {
-      urlParams: { cedar_ember: "1", skip_spend: "1" },
-    }).pipe(withClaudeHeaders(token, version)),
-  );
-  const body = yield* HttpClientResponse.schemaBodyJson(UsageResponse)(
-    yield* HttpClientResponse.filterStatusOk(response),
-  );
-  return claudeResetCreditsToContract(
-    body.cedar_ember,
-    DateTime.toEpochMillis(yield* DateTime.now),
-  );
-}, Effect.timeout("10 seconds"));
+export const readClaudeResetCredits = Effect.fn("readClaudeResetCredits")(
+  function* (configDir: string, version: string) {
+    const token = yield* readAccessToken(configDir);
+    if (!token) return undefined;
+    const client = yield* HttpClient.HttpClient;
+    const response = yield* client.execute(
+      HttpClientRequest.get(`${API_BASE}/api/oauth/usage`, {
+        urlParams: { cedar_ember: "1", skip_spend: "1" },
+      }).pipe(withClaudeHeaders(token, version)),
+    );
+    const body = yield* HttpClientResponse.schemaBodyJson(UsageResponse)(
+      yield* HttpClientResponse.filterStatusOk(response),
+    );
+    return claudeResetCreditsToContract(
+      body.cedar_ember,
+      DateTime.toEpochMillis(yield* DateTime.now),
+    );
+  },
+  Effect.timeout("10 seconds"),
+  Effect.orElseSucceed(() => undefined),
+);
 
-/**
- * Reads the banked resets for the login in `configDir`. Any failure reads as
- * "no resets" so the usage bars never break on this optional extra.
- */
-export const readClaudeResetCredits = (configDir: string, version: string) =>
-  fetchClaudeResetCredits(configDir, version).pipe(Effect.orElseSucceed(() => undefined));
-
-/** The CLI keeps the account record beside its settings, or in the home directory by default. */
-/** The organization the login is signed in to; one email can belong to several. */
 export const readClaudeOrganizationId = (accountConfigPath: string) =>
   readJson(Config, accountConfigPath).pipe(
     Effect.map((config) => config.oauthAccount?.organizationUuid?.trim() || undefined),
@@ -224,8 +194,8 @@ const CLAIM_OUTCOMES = {
 } as const satisfies Record<string, ProviderConsumeResetCreditOutcome>;
 
 /**
- * Claims `grantId`. `requestId` is the idempotency key: a retry with the same
- * id is the same claim. Ids are checked before anything is sent.
+ * `requestId` is the idempotency key: a retry with the same id is the same
+ * claim.
  */
 export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(function* (input: {
   readonly configDir: string;
@@ -289,79 +259,3 @@ export const consumeClaudeResetCredit = Effect.fn("consumeClaudeResetCredit")(fu
   }
   return CLAIM_OUTCOMES[body.result];
 });
-
-/** How long one reading of the banked resets stands before the next request. */
-export const RESET_CREDITS_READ_INTERVAL_MS = 10 * 60_000;
-/** The longest wait after refused requests; the endpoint answered 429 to most reads. */
-export const RESET_CREDITS_READ_MAX_INTERVAL_MS = 60 * 60_000;
-
-/**
- * Whether the banked resets are asked for again: never asked, or the last
- * request is old enough. Each refused request in a row doubles the wait.
- */
-export function resetCreditsReadDue(
-  lastAttemptMs: number | null,
-  nowMs: number,
-  refusedInARow = 0,
-): boolean {
-  const interval = Math.min(
-    RESET_CREDITS_READ_INTERVAL_MS * 2 ** refusedInARow,
-    RESET_CREDITS_READ_MAX_INTERVAL_MS,
-  );
-  return lastAttemptMs === null || nowMs - lastAttemptMs >= interval;
-}
-
-/**
- * Asks for the banked resets at most once per interval and keeps the last
- * answer in between. Every provider check called the endpoint, about once a
- * minute per account, and it answered 429 each time; a refused request then
- * also emptied the display. A failed `read` (an error) keeps the last answer
- * and doubles the wait; a successful one replaces it, also when it says the
- * account has no resets. Reads run one at a time. `forget` makes the next call
- * ask again, for the moment a reset has just been redeemed; a read still in
- * flight then does not store its older answer.
- */
-export const makeThrottledResetCreditsReader = <A, E, R>(
-  read: (version: string) => Effect.Effect<A | undefined, E, R>,
-) =>
-  Effect.gen(function* () {
-    const state = yield* Ref.make<{
-      readonly attemptedAt: number | null;
-      readonly value: A | undefined;
-      readonly refusedInARow: number;
-      readonly generation: number;
-    }>({
-      attemptedAt: null,
-      value: undefined,
-      refusedInARow: 0,
-      generation: 0,
-    });
-    const oneAtATime = yield* Semaphore.make(1);
-    return {
-      read: (version: string) =>
-        oneAtATime.withPermits(1)(
-          Effect.gen(function* () {
-            const known = yield* Ref.get(state);
-            const now = yield* Clock.currentTimeMillis;
-            if (!resetCreditsReadDue(known.attemptedAt, now, known.refusedInARow)) {
-              return known.value;
-            }
-            const outcome = yield* Effect.exit(read(version));
-            return yield* Ref.modify(state, (current) => {
-              // Forgotten while the request ran: its answer may predate a redeem.
-              if (current.generation !== known.generation) return [current.value, current];
-              const next = Exit.isSuccess(outcome)
-                ? { ...current, attemptedAt: now, value: outcome.value, refusedInARow: 0 }
-                : { ...current, attemptedAt: now, refusedInARow: current.refusedInARow + 1 };
-              return [next.value, next];
-            });
-          }),
-        ),
-      forget: Ref.update(state, (current) => ({
-        attemptedAt: null,
-        value: undefined,
-        refusedInARow: 0,
-        generation: current.generation + 1,
-      })),
-    };
-  });
