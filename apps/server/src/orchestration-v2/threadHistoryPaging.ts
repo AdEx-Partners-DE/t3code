@@ -463,7 +463,10 @@ function messagesForBoundedProjection(
     (message) =>
       retainedMessageIds.has(String(message.id)) ||
       (message.runId !== null && retainedRunIds.has(String(message.runId))) ||
-      message.delegatedCompletion !== undefined,
+      message.delegatedCompletion !== undefined ||
+      // Clients open a workflow coordinator's thread from its script, however
+      // far back the history window starts. A thread has at most one.
+      message.workflowScript === true,
   );
 }
 
@@ -556,8 +559,11 @@ export function buildBoundedThreadProjection(input: {
     turnItems: [],
     visibleTurnItems: [],
   });
+  // Control state (checkpoint file lists, an active plan) cannot be paged, so it may claim at most
+  // half the budget; past that the window would shrink to the one row every page admits.
   const windowBudget = Math.max(
     Math.min(THREAD_HISTORY_MIN_WINDOW_BYTES, policy.maxEncodedBytes),
+    policy.maxEncodedBytes / 2,
     policy.maxEncodedBytes - dependencyReserve - controlBytes - 1_024,
   );
   const windowPolicy: ThreadHistoryPagePolicy = {

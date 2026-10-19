@@ -153,10 +153,11 @@ import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
+import { useClientSettings, updateClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
+import { useNowSecond } from "../hooks/useNowSecond";
 import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
@@ -469,17 +470,19 @@ function JumpHintBadge(props: { label: string }) {
   );
 }
 
-// Self-ticking so only this span re-renders each second, not the whole row.
 function WorkingDuration(props: { startedAt: string | null }) {
   const startedMs = props.startedAt !== null ? Date.parse(props.startedAt) : Number.NaN;
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (Number.isNaN(startedMs)) return;
-    const id = window.setInterval(() => setTick((tick) => tick + 1), 1_000);
-    return () => window.clearInterval(id);
-  }, [startedMs]);
   if (Number.isNaN(startedMs)) return null;
-  return <span className="tabular-nums">{formatWorkingDurationLabel(Date.now() - startedMs)}</span>;
+  return <WorkingDurationLabel startedMs={startedMs} />;
+}
+
+// Self-ticking so only this span re-renders each second, not the whole row;
+// the shared tick lands every working row's update in the same frame.
+function WorkingDurationLabel(props: { startedMs: number }) {
+  const nowMs = useNowSecond();
+  return (
+    <span className="tabular-nums">{formatWorkingDurationLabel(nowMs - props.startedMs)}</span>
+  );
 }
 
 function terminalProcessLabel(count: number): string {
@@ -2565,7 +2568,6 @@ export default function Sidebar() {
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const inboxOrder = useClientSettings((s) => s.sidebarInboxOrder);
   const projectPriorities = useClientSettings((s) => s.sidebarProjectPriorities);
-  const updateClientSettings = useUpdateClientSettings();
   // The saved manual order only applies while nothing else arranges the inbox.
   const inboxAutoOrdered = workingShelfEnabled || inboxOrder !== "manual";
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);

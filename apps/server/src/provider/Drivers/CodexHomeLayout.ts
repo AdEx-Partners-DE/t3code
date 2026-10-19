@@ -41,7 +41,14 @@ const LOCAL_FILES_MARKER_TEXT =
   "Windows refused T3 Code a symlink in this Codex shadow home. Directories are linked to the Codex home with junctions. Top-level files that were not already linked stay local to this home.\n";
 
 const PRIVATE_ENTRY_NAMES = new Set(["auth.json", "models_cache.json"]);
-const SHADOW_LOCAL_ENTRY_NAMES = new Set(["log", "memories", "tmp", LOCAL_FILES_MARKER_NAME]);
+// Finder maintains metadata separately for each directory, including shadow homes.
+const SHADOW_LOCAL_ENTRY_NAMES = new Set([
+  "log",
+  "memories",
+  "tmp",
+  ".DS_Store",
+  LOCAL_FILES_MARKER_NAME,
+]);
 // Codex creates these runtime locks itself when it starts in a shadow home before the shared
 // home has one. They guard shared state, so a local copy is replaced with the shared link.
 const REPLACEABLE_SHARED_RUNTIME_ENTRIES = new Set(["mcp-oauth-locks", ".sqlite-maintenance.lock"]);
