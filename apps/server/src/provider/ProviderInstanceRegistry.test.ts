@@ -660,19 +660,28 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
   });
 
   it.effect.skipIf(windowsHost)(
-    "throttles Claude reset reads, retains failed reads, and resets backoff on an empty success",
+    "throttles Claude reset reads across failures and cancellation, and resets backoff on an empty success",
     () =>
       Effect.gen(function* () {
         const fixture = yield* makeClaudeResetFixtures();
+        const readStarted = yield* Deferred.make<void>();
+        const releaseRead = yield* Deferred.make<void>();
+        let delayNextRead = false;
         let requests = 0;
         let status = 200;
         let body: unknown = resetCreditResponse(3);
         const client = HttpClient.make((request) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             if (!request.url.endsWith("/api/oauth/usage")) {
               return HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }));
             }
             requests++;
+            if (delayNextRead) {
+              delayNextRead = false;
+              expect(request.method).toBe("GET");
+              yield* Deferred.succeed(readStarted, undefined);
+              yield* Deferred.await(releaseRead);
+            }
             return HttpClientResponse.fromWeb(request, Response.json(body, { status }));
           }),
         );
@@ -699,6 +708,27 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         ]) {
           status = step.status;
           body = step.calls === 6 ? { cedar_ember: { eligible: false } } : resetCreditResponse(5);
+          yield* TestClock.adjust(step.after);
+          const snapshot = yield* instance!.snapshot.refresh;
+          expect.soft(snapshot.usageLimits?.resetCredits?.availableCount).toBe(step.count);
+          expect.soft(requests).toBe(step.calls);
+        }
+
+        yield* TestClock.adjust("10 minutes");
+        body = resetCreditResponse(1);
+        delayNextRead = true;
+        const reading = yield* instance!.snapshot.refresh.pipe(Effect.forkChild);
+        yield* Deferred.await(readStarted);
+        expect(requests).toBe(8);
+        yield* Fiber.interrupt(reading);
+        yield* Deferred.succeed(releaseRead, undefined);
+
+        // A dispatched GET spends the account's budget even if its caller cancels the refresh.
+        for (const step of [
+          { after: 0, calls: 8, count: 5 },
+          { after: 10 * minute - 1, calls: 8, count: 5 },
+          { after: 1, calls: 9, count: 1 },
+        ]) {
           yield* TestClock.adjust(step.after);
           const snapshot = yield* instance!.snapshot.refresh;
           expect.soft(snapshot.usageLimits?.resetCredits?.availableCount).toBe(step.count);
