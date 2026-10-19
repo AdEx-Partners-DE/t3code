@@ -871,6 +871,94 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       }).pipe(Effect.provideService(HostProcess.Platform, "linux"), Effect.provide(layerTest)),
   );
 
+  it.effect.skipIf(windowsHost)(
+    "uses the current Claude token after a refresh waits for an active claim",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const fixture = yield* makeClaudeResetFixtures();
+        const claimStarted = yield* Deferred.make<void>();
+        const releaseClaim = yield* Deferred.make<void>();
+        const tokenCaptured = yield* Deferred.make<string>();
+        let watchingCredentials = false;
+        let credentialReads = 0;
+        let rotated = false;
+        const usageTokens: Array<string | undefined> = [];
+        const client = HttpClient.make((request) =>
+          Effect.gen(function* () {
+            if (request.url.endsWith("/api/oauth/usage")) {
+              usageTokens.push(request.headers.authorization);
+              const revoked =
+                rotated && request.headers.authorization === "Bearer synthetic-account-a";
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json(resetCreditResponse(rotated ? 2 : 3), {
+                  status: revoked ? 401 : 200,
+                }),
+              );
+            }
+            if (request.url.endsWith("/reset_rate_limits")) {
+              yield* Deferred.succeed(claimStarted, undefined);
+              yield* Deferred.await(releaseClaim);
+              return HttpClientResponse.fromWeb(request, Response.json({ result: "reset" }));
+            }
+            return HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }));
+          }),
+        );
+        const [redeemer, observer] = yield* fixture
+          .start(client, [fixture.home, fixture.home])
+          .pipe(
+            Effect.provideService(FileSystem.FileSystem, {
+              ...fs,
+              readFileString: (file, encoding) =>
+                fs.readFileString(file, encoding).pipe(
+                  Effect.tap((contents) => {
+                    if (
+                      !watchingCredentials ||
+                      file !== path.join(fixture.home, ".credentials.json")
+                    )
+                      return Effect.void;
+                    // The refresh checks identity first, then captures the token for its credit read.
+                    credentialReads++;
+                    return credentialReads === 2
+                      ? Deferred.succeed(tokenCaptured, contents)
+                      : Effect.void;
+                  }),
+                ),
+            }),
+          );
+        yield* Effect.all([awaitClaudeReady(redeemer!), awaitClaudeReady(observer!)], {
+          concurrency: "unbounded",
+        });
+        expect((yield* observer!.snapshot.refresh).usageLimits?.resetCredits?.availableCount).toBe(
+          3,
+        );
+        yield* TestClock.adjust("10 minutes");
+        const claiming = yield* redeemer!.consumeResetCredit!().pipe(Effect.forkChild);
+        yield* Deferred.await(claimStarted);
+        usageTokens.length = 0;
+        watchingCredentials = true;
+        const reading = yield* observer!.snapshot.refresh.pipe(Effect.forkChild);
+        expect(yield* Deferred.await(tokenCaptured)).toContain("synthetic-account-a");
+        watchingCredentials = false;
+        expect(usageTokens).toEqual([]);
+        yield* fixture.writeLogin(fixture.home, "account-a", "org-a", "synthetic-rotated");
+        rotated = true;
+        yield* Deferred.succeed(releaseClaim, undefined);
+        yield* Fiber.join(reading);
+        expect(yield* Fiber.join(claiming)).toBe("reset");
+
+        expect.soft(usageTokens).toEqual(["Bearer synthetic-rotated"]);
+        // A revoked request must not make either instance wait through the failure backoff.
+        for (const instance of [observer!, redeemer!]) {
+          expect
+            .soft((yield* instance.snapshot.refresh).usageLimits?.resetCredits?.availableCount)
+            .toBe(2);
+        }
+      }).pipe(Effect.provideService(HostProcess.Platform, "linux"), Effect.provide(layerTest)),
+  );
+
   it.effect.skipIf(windowsHost)("ages all cached Claude grants without another usage request", () =>
     Effect.gen(function* () {
       const fixture = yield* makeClaudeResetFixtures();
@@ -920,17 +1008,20 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
   );
 
   it.effect.skipIf(windowsHost)(
-    "keeps unconfirmed Claude claims and starts fresh after settled failures",
+    "keeps unconfirmed Claude claims through failed and empty usage reads",
     () =>
       Effect.gen(function* () {
         const fixture = yield* makeClaudeResetFixtures();
         const claims: Array<string> = [];
         let count = 3;
-        let refuseClaim = false;
+        let usageStatus = 200;
         const client = HttpClient.make((request) =>
           Effect.sync(() => {
             if (request.url.endsWith("/api/oauth/usage")) {
-              return HttpClientResponse.fromWeb(request, Response.json(resetCreditResponse(count)));
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json(resetCreditResponse(count), { status: usageStatus }),
+              );
             }
             if (request.url.endsWith("/reset_rate_limits")) {
               claims.push(
@@ -938,13 +1029,11 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
                   ? new TextDecoder().decode(request.body.body)
                   : "",
               );
-              if (refuseClaim) {
-                return HttpClientResponse.fromWeb(request, Response.json({}, { status: 429 }));
-              }
               count = 0;
+              usageStatus = claims.length === 1 ? 429 : 200;
               return HttpClientResponse.fromWeb(
                 request,
-                Response.json({ result: claims.length === 1 ? "unavailable" : "reset" }),
+                Response.json({ result: claims.length < 3 ? "unavailable" : "reset" }),
               );
             }
             return HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }));
@@ -953,25 +1042,21 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         const [instance] = yield* fixture.start(client);
         yield* awaitClaudeReady(instance!);
         expect((yield* instance!.consumeResetCredit!().pipe(Effect.result))._tag).toBe("Failure");
+        expect
+          .soft((yield* instance!.snapshot.refresh).usageLimits?.resetCredits?.availableCount)
+          .toBe(3);
+
+        yield* TestClock.adjust("1 second");
+        expect((yield* instance!.consumeResetCredit!().pipe(Effect.result))._tag).toBe("Failure");
         expect((yield* instance!.snapshot.refresh).usageLimits?.resetCredits).toEqual({
           availableCount: 0,
         });
         yield* TestClock.adjust("1 second");
         expect(yield* instance!.consumeResetCredit!()).toBe("reset");
-        expect(claims).toHaveLength(2);
+        expect(claims).toHaveLength(3);
         expect(claims[0]).toContain('"grant_id":"grant_a"');
         expect(claims[1]).toBe(claims[0]);
-
-        count = 3;
-        yield* TestClock.adjust("10 minutes");
-        yield* instance!.snapshot.refresh;
-        refuseClaim = true;
-        expect((yield* instance!.consumeResetCredit!().pipe(Effect.result))._tag).toBe("Failure");
-        refuseClaim = false;
-        yield* TestClock.adjust("1 second");
-        expect(yield* instance!.consumeResetCredit!()).toBe("reset");
-        expect(claims).toHaveLength(4);
-        expect(claims[3]).not.toBe(claims[2]);
+        expect(claims[2]).toBe(claims[0]);
       }).pipe(Effect.provideService(HostProcess.Platform, "linux"), Effect.provide(layerTest)),
   );
 
