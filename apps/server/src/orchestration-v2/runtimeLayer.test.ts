@@ -4563,6 +4563,161 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("a queued user message that starts after a settled run's question answers it", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-queued-answer-thread");
+      const requestId = RuntimeRequestId.make("runtime-layer-queued-answer-request");
+      const nodeId = NodeId.make("runtime-layer-queued-answer-node");
+      const itemId = TurnItemId.make("runtime-layer-queued-answer-item");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-queued-answer-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-queued-answer-project"),
+        title: "Queued answer",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-queued-answer",
+      });
+      for (const [suffix, dispatchMode] of [
+        ["active", { type: "start_immediately" }],
+        ["queued", { type: "queue_after_active" }],
+      ] as const) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`runtime-layer-queued-answer-${suffix}`),
+          threadId,
+          messageId: MessageId.make(`runtime-layer-queued-answer-${suffix}`),
+          text: `Message ${suffix}.`,
+          attachments: [],
+          modelSelection,
+          dispatchMode,
+        });
+      }
+      yield* orchestrator.dispatch({
+        type: "queue.hold",
+        commandId: CommandId.make("runtime-layer-queued-answer-hold"),
+        threadId,
+      });
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const activeRun = before.runs.find((run) => run.status === "starting");
+      const queuedRun = before.runs.find((run) => run.status === "queued");
+      assert.isDefined(activeRun);
+      assert.isDefined(queuedRun);
+
+      // The active run asks after the message was queued, then ends its turn.
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        commandId: CommandId.make("runtime-layer-queued-answer-seed"),
+        events: [
+          {
+            id: EventId.make("runtime-layer-queued-answer-node-event"),
+            type: "node.updated",
+            threadId,
+            runId: activeRun.id,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: nodeId,
+              threadId,
+              runId: activeRun.id,
+              parentNodeId: null,
+              rootNodeId: nodeId,
+              kind: "user_input_request",
+              status: "waiting",
+              countsForRun: false,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              runtimeRequestId: requestId,
+              checkpointScopeId: null,
+              startedAt: now,
+              completedAt: null,
+            },
+          },
+          {
+            id: EventId.make("runtime-layer-queued-answer-request-event"),
+            type: "runtime-request.updated",
+            threadId,
+            runId: activeRun.id,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: requestId,
+              nodeId,
+              providerTurnId: null,
+              nativeRequestRef: null,
+              kind: "user_input",
+              status: "pending",
+              responseCapability: { type: "message" },
+              createdAt: now,
+              resolvedAt: null,
+            },
+          },
+          {
+            id: EventId.make("runtime-layer-queued-answer-item-event"),
+            type: "turn-item.updated",
+            threadId,
+            runId: activeRun.id,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: itemId,
+              type: "user_input_request",
+              threadId,
+              runId: activeRun.id,
+              nodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 0,
+              status: "waiting",
+              title: null,
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+              requestId,
+              responseMode: "message",
+              questions: [{ id: "choice", header: "Choice", question: "Continue?", options: [] }],
+            },
+          },
+          {
+            id: EventId.make("runtime-layer-queued-answer-run-event"),
+            type: "run.updated",
+            threadId,
+            runId: activeRun.id,
+            occurredAt: now,
+            payload: { ...activeRun, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      const asked = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(asked.runtimeRequests[0]?.status, "pending");
+
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("runtime-layer-queued-answer-resume"),
+        threadId,
+      });
+      const answered = yield* orchestrator.getThreadProjection(threadId);
+      assert.notEqual(answered.runs.find((run) => run.id === queuedRun.id)?.status, "queued");
+      assert.equal(answered.runtimeRequests[0]?.status, "resolved");
+      assert.equal(answered.runtimeRequests[0]?.decision, "cancel");
+      assert.equal(answered.nodes.find((node) => node.id === nodeId)?.status, "cancelled");
+      assert.equal(answered.turnItems.find((item) => item.id === itemId)?.status, "cancelled");
+    }),
+  );
+
   it.effect("moves a waiting message to the thread's new model only when asked to", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

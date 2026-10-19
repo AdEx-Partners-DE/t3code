@@ -1834,8 +1834,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           session.status !== "stopped" &&
           session.status !== "error",
       );
+      // A user message queued before a run asked its question (or while it
+      // waited) reaches the agent only now. It answers that question as a
+      // message sent now would, so the thread stops waiting for an answer.
+      const answeredQuestionEvents = yield* Ref.make<Array<OrchestrationV2DomainEvent>>([]);
+      if (queuedMessage.createdBy === "user") {
+        for (const question of projection.runtimeRequests) {
+          if (
+            question.status !== "pending" ||
+            question.kind !== "user_input" ||
+            question.responseCapability.type !== "message"
+          )
+            continue;
+          const questionRunId = projection.nodes.find((node) => node.id === question.nodeId)?.runId;
+          const questionRun = projection.runs.find((run) => run.id === questionRunId);
+          if (questionRun !== undefined && delegatedTaskTerminalStatus(questionRun.status) === null)
+            continue;
+          yield* dispatchRuntimeRequestRespond(
+            {
+              type: "runtime-request.respond",
+              commandId,
+              threadId,
+              requestId: question.id,
+              decision: "cancel",
+            },
+            answeredQuestionEvents,
+            yield* Ref.make<Array<PendingOrchestrationEffectV2>>([]),
+          );
+        }
+      }
       yield* writeSystemEvents(
         [
+          ...(yield* Ref.get(answeredQuestionEvents)),
           ...(selectionChanged
             ? [
                 {
