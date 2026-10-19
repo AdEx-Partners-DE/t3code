@@ -165,8 +165,9 @@ function resolveDeliveryIntent(
   if (deliveryIntent === "restart") {
     return { type: "restart_active", targetRunId: activeRun.id };
   }
-  // a run can become running before its provider turn arrives, or remain active
-  // after that turn ends. preserve automatic messages in the queue during either gap.
+  // A run can be active before its provider turn starts or after it finishes,
+  // and a waiting run has no turn to take input. Queue automatic input in those
+  // gaps so steering cannot reject the message.
   if (
     activeRun.status !== "running" ||
     !projection.providerTurns.some(
