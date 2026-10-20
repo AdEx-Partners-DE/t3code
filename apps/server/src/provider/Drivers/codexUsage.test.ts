@@ -218,6 +218,26 @@ describe("parseCodexLine", () => {
     expect(codexUsageFormat.readMalformedRecords?.(state)).toBe(1);
   });
 
+  it("ignores a replay of the current sequence's first request without moving the baseline back", () => {
+    const state = initialCodexScanState();
+    parseCodexLine(turnContext, state);
+    const request = counters(100, 20);
+    const processed = [
+      counted(request, request),
+      counted(request, counters(200, 40)),
+      counted(request, request),
+      counted(request, counters(300, 60)),
+    ].map((line) => {
+      const record = parseCodexLine(line, state);
+      return record === null ? 0 : totalTokens(record.totals);
+    });
+
+    expect({
+      processed,
+      skipped: codexUsageFormat.readMalformedRecords?.(state),
+    }).toEqual({ processed: [120, 120, 0, 120], skipped: 0 });
+  });
+
   it.each(["request", "cumulative"])("skips malformed %s counters and recovers", (malformed) => {
     const state = initialCodexScanState();
     parseCodexLine(turnContext, state);

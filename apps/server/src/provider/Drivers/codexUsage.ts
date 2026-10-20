@@ -71,6 +71,8 @@ export const CodexScanState = Schema.Struct({
   sessionId: Schema.mutableKey(Schema.String),
   lastUsageSignature: Schema.mutableKey(Schema.NullOr(Schema.String)),
   lastCumulativeUsage: Schema.mutableKey(Schema.NullOr(CodexTokenUsage)),
+  // Optional so scan states cached before this field existed stay valid.
+  sequenceStartUsage: Schema.mutableKey(Schema.optionalKey(CodexTokenUsage)),
   malformedRecords: Schema.mutableKey(TokenCount),
   sawSessionMeta: Schema.mutableKey(Schema.Boolean),
   modelProvider: Schema.mutableKey(Schema.String),
@@ -246,10 +248,19 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): UsageRecord |
   const signature = JSON.stringify(last);
   if (cumulative !== null) {
     // A new counter sequence starts over, so its first snapshot is the request itself.
+    const startsSequence = CODEX_USAGE_FIELDS.every((key) => cumulative[key] === last[key]);
     const restarted =
-      previous !== null &&
-      cumulative.total_tokens < previous.total_tokens &&
-      CODEX_USAGE_FIELDS.every((key) => cumulative[key] === last[key]);
+      startsSequence && previous !== null && cumulative.total_tokens < previous.total_tokens;
+    const sequenceStart = state.sequenceStartUsage;
+    // Re-emitting the current sequence's first request looks like a restart, but is already billed.
+    if (
+      restarted &&
+      sequenceStart !== undefined &&
+      CODEX_USAGE_FIELDS.every((key) => cumulative[key] === sequenceStart[key])
+    ) {
+      state.lastCumulativeUsage = previous;
+      return null;
+    }
     if (
       !restarted &&
       !CODEX_USAGE_FIELDS.every((key) => cumulative[key] - (previous?.[key] ?? 0) === last[key])
@@ -257,6 +268,7 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): UsageRecord |
       state.malformedRecords += 1;
       return null;
     }
+    if (startsSequence) state.sequenceStartUsage = cumulative;
   } else {
     if (signature === state.lastUsageSignature) return null;
     // Advance expected totals for billed legacy requests so a cumulative re-emission is stale.
