@@ -800,7 +800,10 @@ const windowsProcessTableSnapshot = Effect.fn("terminal.windowsProcessTableSnaps
       .run({
         command: "powershell.exe",
         args: ["-NoProfile", "-NonInteractive", "-Command", command],
-        timeout: "1500 millis",
+        // Starting PowerShell plus the CIM query takes about 1 s on an idle
+        // Windows machine and over 1.5 s under load, so a tighter limit fails
+        // every tick while the machine is busy. Failures already back off.
+        timeout: "5 seconds",
         maxOutputBytes: 262_144,
         outputMode: "truncate",
         timeoutBehavior: "timedOutResult",
