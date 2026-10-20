@@ -14538,6 +14538,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           continuationRequests: { offer: () => Effect.void },
           queryRunner: {
             allocateSessionId: Effect.succeed(WAKE_NATIVE_SESSION),
+            hasSession: () => Effect.succeed(true),
             open: () => Effect.fail(new ClaudeAdapterV2.ClaudeMcpRegistrationTimeoutError()),
             forkSession: () => Effect.die("unused forkSession"),
             subagentLaunchToolUseId: () => Effect.succeed(null),
