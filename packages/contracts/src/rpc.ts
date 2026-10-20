@@ -215,6 +215,8 @@ import {
   OrchestrationV2GetShellSnapshotError,
   OrchestrationV2CommandOutputError,
   OrchestrationV2GetThreadProjectionError,
+  OrchestrationV2PortfolioActionInput,
+  OrchestrationV2PortfolioActionOutput,
   OrchestrationV2RpcSchemas,
   OrchestrationV2ThreadLaunchError,
 } from "./orchestrationV2.ts";
@@ -1713,24 +1715,6 @@ const WsOrchestrationV2GetTurnItemRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.get
   error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
 });
 
-const WsOrchestrationV2OverrideOpenThreadModelsRpc = Rpc.make(
-  ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels,
-  {
-    payload: OrchestrationV2RpcSchemas.overrideOpenThreadModels.input,
-    success: OrchestrationV2RpcSchemas.overrideOpenThreadModels.output,
-    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
-  },
-);
-
-const WsOrchestrationV2NudgeIdleThreadsRpc = Rpc.make(
-  ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads,
-  {
-    payload: OrchestrationV2RpcSchemas.nudgeIdleThreads.input,
-    success: OrchestrationV2RpcSchemas.nudgeIdleThreads.output,
-    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
-  },
-);
-
 const WsOrchestrationV2ListThreadChecklistsRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.listThreadChecklists,
   {
@@ -1740,19 +1724,14 @@ const WsOrchestrationV2ListThreadChecklistsRpc = Rpc.make(
   },
 );
 
-const WsOrchestrationV2RefreshThreadChecklistRpc = Rpc.make(
-  ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist,
-  {
-    payload: OrchestrationV2RpcSchemas.refreshThreadChecklist.input,
-    success: OrchestrationV2RpcSchemas.refreshThreadChecklist.output,
-    error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
-  },
-);
-
-const WsOrchestrationV2ClearAllQueuesRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.clearAllQueues, {
-  payload: OrchestrationV2RpcSchemas.clearAllQueues.input,
-  success: OrchestrationV2RpcSchemas.clearAllQueues.output,
-  error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
+const WsOrchestrationV2PortfolioActionRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.portfolioAction, {
+  payload: OrchestrationV2PortfolioActionInput,
+  success: OrchestrationV2PortfolioActionOutput,
+  error: Schema.Union([
+    OrchestrationV2DispatchCommandError,
+    OrchestrationV2GetThreadProjectionError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 const WsOrchestrationV2LaunchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.launchThread, {
@@ -2128,11 +2107,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
   WsOrchestrationV2LaunchThreadRpc,
-  WsOrchestrationV2ClearAllQueuesRpc,
+  WsOrchestrationV2PortfolioActionRpc,
   WsOrchestrationV2ListThreadChecklistsRpc,
-  WsOrchestrationV2RefreshThreadChecklistRpc,
-  WsOrchestrationV2NudgeIdleThreadsRpc,
-  WsOrchestrationV2OverrideOpenThreadModelsRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,

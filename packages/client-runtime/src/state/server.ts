@@ -1,5 +1,7 @@
 import {
   type EnvironmentId,
+  type OrchestrationV2PortfolioActionInput,
+  type OrchestrationV2PortfolioActionOutput,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -22,9 +24,11 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 
 import {
+  type AtomCommandFailure,
+  type AtomCommandResult,
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
   createEnvironmentQueryAtomFamily,
@@ -609,6 +613,24 @@ export function resolveServerConfigValue(
   return initialConfig ?? projection?.config ?? null;
 }
 
+const portfolioActionKey = ({
+  environmentId,
+  input,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly input: OrchestrationV2PortfolioActionInput;
+}) =>
+  input.action === "refreshThreadChecklist"
+    ? // A status set or given back by hand is its own request, never folded into a rewrite.
+      JSON.stringify([
+        environmentId,
+        input.action,
+        input.threadId,
+        input.setItem ?? null,
+        input.releaseItem ?? null,
+      ])
+    : JSON.stringify([environmentId, input.action]);
+
 export function createServerEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<
     EnvironmentRegistry.EnvironmentRegistry | Persistence.EnvironmentCacheStore | R,
@@ -624,6 +646,38 @@ export function createServerEnvironmentAtoms<R, E>(
   },
 ) {
   const configScheduler = createAtomCommandScheduler();
+  // The fork's actions across open threads go out as one RPC method (the group
+  // is as large as the type checker takes). Each keeps its own command, input
+  // and result here, so callers never see the shared method.
+  const portfolioCommand = <Action extends OrchestrationV2PortfolioActionInput["action"]>(
+    action: Action,
+    label: string,
+  ) => {
+    const command = createEnvironmentRpcCommand(runtime, {
+      label,
+      tag: ORCHESTRATION_V2_WS_METHODS.portfolioAction,
+      concurrency: { mode: "singleFlight", key: portfolioActionKey },
+    });
+    type Input = Omit<Extract<OrchestrationV2PortfolioActionInput, { action: Action }>, "action">;
+    type Output = Extract<OrchestrationV2PortfolioActionOutput, { action: Action }>;
+    return {
+      ...command,
+      run: (
+        registry: AtomRegistry.AtomRegistry,
+        target: { readonly environmentId: EnvironmentId; readonly input: Input },
+      ) =>
+        // The server answers each action with that action's result.
+        command.run(registry, {
+          environmentId: target.environmentId,
+          input: { ...target.input, action } as Extract<
+            OrchestrationV2PortfolioActionInput,
+            { action: Action }
+          >,
+        }) as Promise<
+          AtomCommandResult<Output, AtomCommandFailure<Awaited<ReturnType<typeof command.run>>>>
+        >,
+    };
+  };
   const updateScheduler = createAtomCommandScheduler();
   const configConcurrency = {
     mode: "serial" as const,
@@ -975,36 +1029,19 @@ export function createServerEnvironmentAtoms<R, E>(
 
   return {
     configValueAtom,
-    overrideOpenThreadModels: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:override-open-thread-models",
-      tag: ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels,
-      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
-    }),
-    nudgeIdleThreads: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:nudge-idle-threads",
-      tag: ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads,
-      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
-    }),
-    refreshThreadChecklist: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:refresh-thread-checklist",
-      tag: ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist,
-      concurrency: {
-        mode: "singleFlight",
-        // A status set or given back by hand is its own request, never folded into a rewrite.
-        key: ({ environmentId, input }) =>
-          JSON.stringify([
-            environmentId,
-            input.threadId,
-            input.setItem ?? null,
-            input.releaseItem ?? null,
-          ]),
-      },
-    }),
-    clearAllQueues: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:clear-all-queues",
-      tag: ORCHESTRATION_V2_WS_METHODS.clearAllQueues,
-      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
-    }),
+    overrideOpenThreadModels: portfolioCommand(
+      "overrideOpenThreadModels",
+      "environment-data:server:override-open-thread-models",
+    ),
+    nudgeIdleThreads: portfolioCommand(
+      "nudgeIdleThreads",
+      "environment-data:server:nudge-idle-threads",
+    ),
+    refreshThreadChecklist: portfolioCommand(
+      "refreshThreadChecklist",
+      "environment-data:server:refresh-thread-checklist",
+    ),
+    clearAllQueues: portfolioCommand("clearAllQueues", "environment-data:server:clear-all-queues"),
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",
       tag: WS_METHODS.serverRunStorageCleanup,

@@ -1938,44 +1938,6 @@ export const layerWsRpc = (
                 ),
             ),
           ),
-        [ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels]: (input) =>
-          (input.restore === true
-            ? openThreadModelOverride.restore({
-                commandId: input.commandId,
-                scope: input.scope ?? "all",
-              })
-            : openThreadModelOverride.apply({
-                commandId: input.commandId,
-                override: {
-                  model: input.model,
-                  effort: input.effort,
-                  keepOwnAccount: input.keepOwnAccount,
-                },
-                scope: input.scope ?? "all",
-              })
-          ).pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2DispatchCommandError({
-                  commandId: input.commandId,
-                  commandType: "thread.model-selection.set",
-                  message: "Failed to set the model on the open threads",
-                  cause,
-                }),
-            ),
-          ),
-        [ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads]: (input) =>
-          openThreadNudge.send(input).pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2DispatchCommandError({
-                  commandId: input.commandId,
-                  commandType: "message.dispatch",
-                  message: "Failed to nudge the open threads",
-                  cause,
-                }),
-            ),
-          ),
         [ORCHESTRATION_V2_WS_METHODS.listThreadChecklists]: (input) =>
           Effect.gen(function* () {
             if (input.threadId !== undefined) {
@@ -2008,39 +1970,90 @@ export const layerWsRpc = (
                 }),
             ),
           ),
-        [ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist]: (input) =>
-          threadChecklist.write(input).pipe(
-            Effect.map((checklist) => ({ checklist })),
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2GetThreadProjectionError({
-                  threadId: input.threadId,
-                  message:
-                    "detail" in cause && typeof cause.detail === "string"
-                      ? cause.detail
-                      : "Could not write the checklist for this thread",
-                  cause,
-                }),
-            ),
-          ),
-        [ORCHESTRATION_V2_WS_METHODS.clearAllQueues]: (input) =>
-          (input.restore === undefined
-            ? threadManagement.clearAllQueues({ commandId: input.commandId })
-            : threadManagement.restoreClearedQueues({
-                commandId: input.commandId,
-                ...input.restore,
-              })
-          ).pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestrationV2DispatchCommandError({
-                  commandId: input.commandId,
-                  commandType: "queue.clear",
-                  message: "Failed to clear the queues",
-                  cause,
-                }),
-            ),
-          ),
+        [ORCHESTRATION_V2_WS_METHODS.portfolioAction]: (input) => {
+          switch (input.action) {
+            case "overrideOpenThreadModels":
+              return (
+                input.restore === true
+                  ? openThreadModelOverride.restore({
+                      commandId: input.commandId,
+                      scope: input.scope ?? "all",
+                    })
+                  : openThreadModelOverride.apply({
+                      commandId: input.commandId,
+                      override: {
+                        model: input.model,
+                        effort: input.effort,
+                        keepOwnAccount: input.keepOwnAccount,
+                      },
+                      scope: input.scope ?? "all",
+                    })
+              ).pipe(
+                Effect.map((result) => ({ action: input.action, ...result })),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2DispatchCommandError({
+                      commandId: input.commandId,
+                      commandType: "thread.model-selection.set",
+                      message: "Failed to set the model on the open threads",
+                      cause,
+                    }),
+                ),
+              );
+            case "nudgeIdleThreads":
+              return openThreadNudge
+                .send({ commandId: input.commandId, text: input.text, limit: input.limit })
+                .pipe(
+                  Effect.map((result) => ({ action: input.action, ...result })),
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationV2DispatchCommandError({
+                        commandId: input.commandId,
+                        commandType: "message.dispatch",
+                        message: "Failed to nudge the open threads",
+                        cause,
+                      }),
+                  ),
+                );
+            case "refreshThreadChecklist": {
+              const { action, ...request } = input;
+              return threadChecklist.write(request).pipe(
+                Effect.map((checklist) => ({ action, checklist })),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2GetThreadProjectionError({
+                      threadId: input.threadId,
+                      message:
+                        "detail" in cause && typeof cause.detail === "string"
+                          ? cause.detail
+                          : "Could not write the checklist for this thread",
+                      cause,
+                    }),
+                ),
+              );
+            }
+            case "clearAllQueues":
+              return (
+                input.restore === undefined
+                  ? threadManagement.clearAllQueues({ commandId: input.commandId })
+                  : threadManagement.restoreClearedQueues({
+                      commandId: input.commandId,
+                      ...input.restore,
+                    })
+              ).pipe(
+                Effect.map((result) => ({ action: input.action, ...result })),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2DispatchCommandError({
+                      commandId: input.commandId,
+                      commandType: "queue.clear",
+                      message: "Failed to clear the queues",
+                      cause,
+                    }),
+                ),
+              );
+          }
+        },
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": input.commandId,

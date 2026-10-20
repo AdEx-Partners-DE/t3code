@@ -43,10 +43,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.vcsSwitchRef]: AuthSourceControlWriteScope,
   [WS_METHODS.vcsInit]: AuthSourceControlWriteScope,
 
-  [ORCHESTRATION_V2_WS_METHODS.clearAllQueues]: AuthOrchestrationOperateScope,
-  [ORCHESTRATION_V2_WS_METHODS.refreshThreadChecklist]: AuthOrchestrationOperateScope,
-  [ORCHESTRATION_V2_WS_METHODS.nudgeIdleThreads]: AuthOrchestrationOperateScope,
-  [ORCHESTRATION_V2_WS_METHODS.overrideOpenThreadModels]: AuthOrchestrationOperateScope,
+  [ORCHESTRATION_V2_WS_METHODS.portfolioAction]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksUpsert]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksSetEnabled]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksDelete]: AuthOrchestrationOperateScope,

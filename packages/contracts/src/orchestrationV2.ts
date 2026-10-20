@@ -3159,11 +3159,8 @@ export type ThreadChecklist = typeof ThreadChecklist.Type;
 
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
-  clearAllQueues: "orchestration.clearAllQueues",
   listThreadChecklists: "orchestration.listThreadChecklists",
-  refreshThreadChecklist: "orchestration.refreshThreadChecklist",
-  nudgeIdleThreads: "orchestration.nudgeIdleThreads",
-  overrideOpenThreadModels: "orchestration.overrideOpenThreadModels",
+  portfolioAction: "orchestration.portfolioAction",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
@@ -3880,6 +3877,51 @@ export const OrchestrationV2RpcSchemas = {
     output: OrchestrationV2CommandOutputFrame,
   },
 } as const;
+
+/**
+ * The fork's actions across open threads share one method, told apart by
+ * `action`: the RPC group is as large as the type checker takes, and at 204
+ * methods the server's types turn into `any`.
+ */
+export const OrchestrationV2PortfolioActionInput = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("overrideOpenThreadModels"),
+    ...OrchestrationV2RpcSchemas.overrideOpenThreadModels.input.fields,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("nudgeIdleThreads"),
+    ...OrchestrationV2RpcSchemas.nudgeIdleThreads.input.fields,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("refreshThreadChecklist"),
+    ...OrchestrationV2RpcSchemas.refreshThreadChecklist.input.fields,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("clearAllQueues"),
+    ...OrchestrationV2RpcSchemas.clearAllQueues.input.fields,
+  }),
+]);
+export type OrchestrationV2PortfolioActionInput = typeof OrchestrationV2PortfolioActionInput.Type;
+
+export const OrchestrationV2PortfolioActionOutput = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("overrideOpenThreadModels"),
+    ...OrchestrationV2RpcSchemas.overrideOpenThreadModels.output.fields,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("nudgeIdleThreads"),
+    ...OrchestrationV2RpcSchemas.nudgeIdleThreads.output.fields,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("refreshThreadChecklist"),
+    ...OrchestrationV2RpcSchemas.refreshThreadChecklist.output.fields,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("clearAllQueues"),
+    ...OrchestrationV2RpcSchemas.clearAllQueues.output.fields,
+  }),
+]);
+export type OrchestrationV2PortfolioActionOutput = typeof OrchestrationV2PortfolioActionOutput.Type;
 
 export const ProviderReplayEntry = Schema.Union([
   Schema.Struct({

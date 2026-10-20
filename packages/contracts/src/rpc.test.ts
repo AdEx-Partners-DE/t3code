@@ -27,6 +27,28 @@ describe("WebSocket RPC contracts", () => {
     expect(methods.filter((method) => method.startsWith("orchestrationV1."))).toEqual([]);
   });
 
+  it("stays below the size at which the server's types turn into any", () => {
+    // Measured on this fork: at 204 methods `apps/server` typechecks with
+    // "any in the requirements channel" (backlog 0cx). A nightly merge that
+    // brings it there fails here instead of silently in the server.
+    expect(WsRpcGroup.requests.size).toBeLessThan(204);
+  });
+
+  it("carries the portfolio action in its input and its result", () => {
+    const portfolio = WsRpcGroup.requests.get(ORCHESTRATION_V2_WS_METHODS.portfolioAction)!;
+    const decode = Schema.decodeUnknownExit(portfolio.payloadSchema);
+
+    expect(
+      Exit.isSuccess(
+        decode({ action: "nudgeIdleThreads", commandId: "command-1", text: "go on", limit: 1 }),
+      ),
+    ).toBe(true);
+    // The fields of one action do not pass for another.
+    expect(Exit.isSuccess(decode({ action: "clearAllQueues", text: "go on", limit: 1 }))).toBe(
+      false,
+    );
+  });
+
   it("rejects server-internal commands sent to dispatchCommand", () => {
     const dispatchCommand = WsRpcGroup.requests.get(ORCHESTRATION_V2_WS_METHODS.dispatchCommand);
     if (dispatchCommand === undefined) throw new Error("dispatchCommand is not registered");
