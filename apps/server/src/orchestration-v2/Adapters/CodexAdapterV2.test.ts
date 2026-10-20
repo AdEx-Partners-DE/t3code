@@ -69,6 +69,7 @@ import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
+import { mapCodexModelCapabilities } from "../../provider/CodexProvider.ts";
 import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
 
@@ -589,101 +590,141 @@ describe("CodexAdapterV2 runtime policy", () => {
 
       assert.equal(params.collaborationMode?.mode, "plan");
       assert.notProperty(params.collaborationMode?.settings, "developer_instructions");
+      assert.notProperty(params.collaborationMode?.settings, "reasoning_effort");
+      assert.isUndefined(params.effort);
     }),
   );
 
-  it.effect("compiles per-turn Codex model options and cwd from their owning inputs", () =>
+  it.effect.each(["default", "plan"] as const)(
+    "compiles per-turn Codex model options and cwd from their owning inputs in %s mode",
+    (interactionMode) =>
+      Effect.gen(function* () {
+        const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "native-model-options",
+          hasT3Mcp: true,
+          codexInput: [{ type: "text", text: "test" }],
+          runtimePolicy: {
+            runtimeMode: "full-access",
+            interactionMode,
+            cwd: "/workspace/model-options",
+            reasoningEffort: "low",
+          },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.4",
+            options: [
+              { id: "reasoningEffort", value: "xhigh" },
+              { id: "serviceTier", value: "priority" },
+            ],
+          },
+        });
+
+        assert.equal(params.model, "gpt-5.4");
+        assert.equal(params.effort, "xhigh");
+        assert.equal(params.serviceTier, "priority");
+        assert.equal(params.cwd, "/workspace/model-options");
+        assert.equal(params.collaborationMode?.settings.model, "gpt-5.4");
+        assert.equal(params.collaborationMode?.mode, interactionMode);
+        assert.equal(params.collaborationMode?.settings.reasoning_effort, "xhigh");
+        assert.include(
+          params.additionalContext?.t3_code_runtime?.value ?? "",
+          "as gpt-5.4 with xhigh reasoning effort",
+        );
+
+        const managed = yield* CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "native-model-options",
+          codexInput: [{ type: "text", text: "test" }],
+          runtimePolicy: {
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            cwd: "/workspace/model-options",
+          },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.4",
+            options: [{ id: "serviceTier", value: "priority" }],
+          },
+          omitServiceTier: true,
+        });
+        assert.equal(managed.serviceTier, undefined);
+      }),
+  );
+
+  it.effect("uses Astra's advertised effort default while preserving explicit selections", () =>
     Effect.gen(function* () {
-      const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
-        nativeThreadId: "native-model-options",
-        codexInput: [{ type: "text", text: "test" }],
-        runtimePolicy: {
-          runtimeMode: "full-access",
-          interactionMode: "plan",
-          cwd: "/workspace/model-options",
-          reasoningEffort: "low",
-        },
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.4",
-          options: [
-            { id: "reasoningEffort", value: "xhigh" },
-            { id: "serviceTier", value: "priority" },
-          ],
-        },
+      const model = "gpt-6-astra";
+      const capabilities = mapCodexModelCapabilities({
+        id: model,
+        model,
+        displayName: model,
+        description: "Test model",
+        hidden: false,
+        isDefault: true,
+        defaultReasoningEffort: "low",
+        supportedReasoningEfforts: ["low", "medium", "high"].map((reasoningEffort) => ({
+          reasoningEffort,
+          description: reasoningEffort,
+        })),
+        additionalSpeedTiers: [],
       });
-
-      assert.equal(params.model, "gpt-5.4");
-      assert.equal(params.effort, "xhigh");
-      assert.equal(params.serviceTier, "priority");
-      assert.equal(params.cwd, "/workspace/model-options");
-      assert.equal(params.collaborationMode?.settings.model, "gpt-5.4");
-      assert.equal(params.collaborationMode?.settings.reasoning_effort, "xhigh");
-
-      const managed = yield* CodexAdapterV2.buildCodexTurnStartParams({
-        nativeThreadId: "native-model-options",
-        codexInput: [{ type: "text", text: "test" }],
-        runtimePolicy: {
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          cwd: "/workspace/model-options",
-        },
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.4",
-          options: [{ id: "serviceTier", value: "priority" }],
-        },
-        omitServiceTier: true,
-      });
-      assert.equal(managed.serviceTier, undefined);
+      const advertised = capabilities.optionDescriptors?.find(
+        (option) => option.id === "reasoningEffort",
+      )?.currentValue;
+      assert.equal(advertised, "medium");
+      for (const selected of [undefined, "high"] as const) {
+        const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "native-astra-effort",
+          codexInput: [{ type: "text", text: "test" }],
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model,
+            ...(selected ? { options: [{ id: "reasoningEffort", value: selected }] } : {}),
+          },
+          hasT3Mcp: true,
+        });
+        const expected = selected ?? advertised;
+        assert.equal(params.effort, expected);
+        assert.equal(params.collaborationMode?.settings.reasoning_effort, expected);
+        assert.include(
+          params.additionalContext?.t3_code_runtime?.value ?? "",
+          `${expected} reasoning effort`,
+        );
+      }
     }),
+  );
+
+  it.effect.each(["default", "plan"] as const)(
+    "omits unset effort from T3 %s collaboration settings and runtime context",
+    (interactionMode) =>
+      Effect.gen(function* () {
+        const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "native-unset-effort",
+          codexInput: [{ type: "text", text: "test" }],
+          runtimePolicy: {
+            runtimeMode: "full-access",
+            interactionMode,
+            cwd: null,
+          },
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.4",
+          },
+          hasT3Mcp: true,
+        });
+
+        assert.isUndefined(params.effort);
+        assert.equal(params.collaborationMode?.mode, interactionMode);
+        assert.equal(params.collaborationMode?.settings.model, "gpt-5.4");
+        assert.notProperty(params.collaborationMode?.settings, "reasoning_effort");
+        const runtimeContext = params.additionalContext?.t3_code_runtime?.value ?? "";
+        assert.include(runtimeContext, "as gpt-5.4");
+        assert.notInclude(runtimeContext, "reasoning effort");
+      }),
   );
 });
 
 describe("CodexAdapterV2 process spawning", () => {
-  it("injects cwd, model, and MCP authorization into thread-scoped params", () => {
-    const threadId = ThreadId.make("thread-codex-mcp");
-    const mcpSession = {
-      environmentId: EnvironmentId.make("environment-codex-mcp"),
-      threadId,
-      providerSessionId: "mcp-session-codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      endpoint: "http://127.0.0.1:43123/mcp",
-      authorizationHeader: "Bearer secret-codex-token",
-      browserToolsAvailable: true,
-    };
-
-    assert.deepEqual(
-      CodexAdapterV2.codexThreadRuntimeParams({
-        mcpSession,
-        modelSelection: { model: "gpt-5.4" },
-        runtimePolicy: {
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          cwd: "/workspace/thread-codex-mcp",
-        },
-      }),
-      {
-        cwd: "/workspace/thread-codex-mcp",
-        model: "gpt-5.4",
-        config: {
-          "tools.update_plan.enabled": true,
-          // Codex waits up to 10 s, not 1 s, for MCP servers before the first request (#13437).
-          mcp_optional_startup_grace_ms: 10_000,
-          mcp_servers: {
-            "t3-code": {
-              url: "http://127.0.0.1:43123/mcp",
-              tool_timeout_sec: 3_900,
-              http_headers: {
-                Authorization: "Bearer secret-codex-token",
-              },
-            },
-          },
-        },
-      },
-    );
-  });
-
   it.effect("resolves Windows command shims through the shared spawn policy", () =>
     Effect.gen(function* () {
       const command = yield* CodexAdapterV2.makeCodexAppServerSpawnCommand({
@@ -2258,6 +2299,123 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
         ),
       ),
+  );
+
+  it.effect("adds the session MCP server without replacing launch-argument servers", () =>
+    Effect.gen(function* () {
+      const scenario = "launch-mcp-servers";
+      yield* (yield* McpProviderSessions.McpProviderSessions).set({
+        environmentId: EnvironmentId.make("environment-codex-mcp"),
+        threadId: ThreadId.make(`thread-${scenario}`),
+        providerSessionId: `provider-session-${scenario}`,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer secret-codex-token",
+        browserToolsAvailable: true,
+      });
+      const requests: Array<unknown> = [];
+      yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({
+          scenario,
+          entries: codexReplayPreamble({
+            nativeThreadId: "launch-mcp-thread",
+            nativeTurnId: "unused",
+            prompt: "unused",
+          }).slice(0, 5),
+        }),
+        () => Effect.void,
+        (method, params) =>
+          Effect.sync(() => {
+            if (method === "thread/start") requests.push(params);
+          }),
+      );
+      assert.deepEqual(requests, [
+        {
+          cwd: "/workspace",
+          model: "gpt-5.4",
+          config: {
+            "tools.update_plan.enabled": true,
+            mcp_optional_startup_grace_ms: 10_000,
+            "mcp_servers.t3-code": {
+              url: "http://127.0.0.1:43123/mcp",
+              tool_timeout_sec: 3_900,
+              http_headers: { Authorization: "Bearer secret-codex-token" },
+            },
+          },
+        },
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("replays historical and dotted MCP config while enforcing other thread config", () =>
+    Effect.gen(function* () {
+      const recordedServer = {
+        url: "http://127.0.0.1:41000/mcp",
+        http_headers: { Authorization: "Bearer recorded-token" },
+      };
+      const currentConfig = {
+        "tools.update_plan.enabled": true,
+        "mcp_servers.t3-code": {
+          url: "http://127.0.0.1:42000/mcp",
+          http_headers: { Authorization: "Bearer current-token" },
+        },
+        "mcp_servers.extra.command": "cat",
+      };
+      for (const recordedMcp of [
+        { mcp_servers: { "t3-code": recordedServer } },
+        { "mcp_servers.t3-code": recordedServer, "mcp_servers.extra.command": "echo" },
+      ]) {
+        const entries = codexReplayPreamble({
+          nativeThreadId: "replayed-mcp-thread",
+          nativeTurnId: "unused",
+          prompt: "unused",
+        })
+          .slice(3, 5)
+          .map((entry) => withReplayRequestId(entry, 1));
+        entries[0] = {
+          type: "expect_outbound",
+          frame: {
+            id: 1,
+            method: "thread/start",
+            params: { config: { "tools.update_plan.enabled": true, ...recordedMcp } },
+          },
+        };
+        entries.push({
+          ...entries[0],
+          frame: {
+            id: 2,
+            method: "thread/start",
+            params: { config: { "tools.update_plan.enabled": true, ...recordedMcp } },
+          },
+        });
+        const driver = yield* CodexReplay.makeReplayDriver(
+          makeCodexReplayTranscript({
+            scenario: "mcp-config-normalization",
+            entries,
+          }),
+        );
+        yield* Effect.gen(function* () {
+          const client = yield* CodexClient.CodexAppServerClient;
+          const response = yield* client.request("thread/start", { config: currentConfig });
+          assert.equal(response.thread.id, "replayed-mcp-thread");
+          assert.isNull((yield* Ref.get(driver.state)).failure);
+          yield* client
+            .request("thread/start", {
+              config: { ...currentConfig, "tools.update_plan.enabled": false },
+            })
+            .pipe(Effect.flip);
+          assert.instanceOf(
+            (yield* Ref.get(driver.state)).failure,
+            CodexReplay.CodexAppServerReplayFrameMismatchError,
+          );
+        }).pipe(Effect.provide(CodexReplay.layerReplayWithDriver(driver)));
+      }
+    }).pipe(Effect.scoped),
   );
 
   it.effect("identifies sessions to Codex with the same client info as main", () =>
@@ -5316,7 +5474,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       );
     },
   );
-  it.effect("interrupts a completed run's background command through orchestration", () => {
+  it.effect("stops a completed run's background command without a client-supplied run", () => {
     const transcript = makeBackgroundStopTranscript(true);
     return Effect.scoped(
       Effect.gen(function* () {
@@ -5414,10 +5572,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             Effect.forkChild({ startImmediately: true }),
           );
           yield* orchestrator.dispatch({
-            type: "run.interrupt",
+            type: "thread.stop",
             commandId: CommandId.make("stop-background-command"),
             threadId,
-            runId: run.id,
           });
           yield* worker.drain();
           yield* Fiber.join(stopped);
@@ -10210,11 +10367,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       kind: { type: "update", move_path: null },
       diff: "@@",
     };
-    const renameB: FileUpdateChange = {
-      path: "/w/b.ts",
-      kind: { type: "update", move_path: "/w/c.ts" },
+    const renameC: FileUpdateChange = {
+      path: "/w/c.ts",
+      kind: { type: "update", move_path: "/w/d.ts" },
       diff: "@@",
     };
+
+    const deleteE: FileUpdateChange = { path: "/w/e.ts", kind: { type: "delete" }, diff: "gone" };
 
     const fileChange = (
       phase: "started" | "completed",
@@ -10240,14 +10399,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       },
     });
 
-    // The next frame waits for the answer, so frame order never depends on
-    // how the adapter schedules its request handlers.
     const approval = (input: {
       readonly id: number;
       readonly turnId: string;
       readonly itemId: string;
-      readonly reason?: string;
-      readonly grantRoot?: string;
     }): Array<CodexReplay.CodexAppServerReplayEntry> => [
       {
         type: "emit_inbound",
@@ -10260,8 +10415,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             turnId: input.turnId,
             itemId: input.itemId,
             startedAtMs: 2,
-            reason: input.reason ?? null,
-            grantRoot: input.grantRoot ?? null,
+            reason: null,
+            grantRoot: null,
           },
         },
       },
@@ -10290,7 +10445,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ) =>
       Effect.gen(function* () {
         const pending = yield* Queue.unbounded<OrchestrationV2RuntimeRequest>();
-        const terminals = yield* Queue.unbounded<void>();
         const harness = yield* makeCodexReplayHarness(
           makeCodexReplayTranscript({
             scenario,
@@ -10299,9 +10453,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           (event) =>
             event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending"
               ? Queue.offer(pending, event.runtimeRequest)
-              : event.type === "turn.terminal"
-                ? Queue.offer(terminals, undefined)
-                : Effect.void,
+              : Effect.void,
         );
         yield* harness.runtime.startTurn(
           makeCodexTestTurnInput({
@@ -10322,7 +10474,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               }),
             ),
           ),
-          nextTerminal: Queue.take(terminals),
         };
       });
 
@@ -10338,41 +10489,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           : [],
       )[0];
 
-    it.effect("lists the started item's paths in the approval prompt", () =>
-      Effect.gen(function* () {
-        const { harness, answerNext } = yield* startApprovalTurn("file-approval-before", [
-          fileChange("started", nativeTurnId, "patch-a", [renameB, addA]),
-          ...approval({ id: 0, turnId: nativeTurnId, itemId: "patch-a" }),
-          fileChange("completed", nativeTurnId, "patch-a", [renameB, addA]),
-          turnCompleted(nativeTurnId),
-        ]);
-        const request = yield* answerNext;
-        yield* harness.firstTerminal;
-
-        assert.equal(
-          approvalItem(harness.events, request)?.prompt,
-          "add /w/a.ts\nupdate /w/b.ts -> /w/c.ts",
-        );
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
-    );
-
-    it.effect("keeps the approval without a prompt when the item starts after it", () =>
+    it.effect("answers without waiting for late paths or borrowing another item's paths", () =>
       Effect.gen(function* () {
         const { harness, answerNext } = yield* startApprovalTurn("file-approval-after", [
+          fileChange("started", nativeTurnId, "other-patch", [updateB]),
+          // Late details cannot arrive until the approval response has been sent.
           ...approval({ id: 0, turnId: nativeTurnId, itemId: "patch-a" }),
           fileChange("started", nativeTurnId, "patch-a", [addA]),
           fileChange("completed", nativeTurnId, "patch-a", [addA]),
+          fileChange("completed", nativeTurnId, "other-patch", [updateB]),
           turnCompleted(nativeTurnId),
         ]);
         const request = yield* answerNext;
         yield* harness.firstTerminal;
 
-        // Every update counts: late details must not re-emit the approval with a prompt.
         const items = harness.events.flatMap((event) =>
           event.type === "turn_item.updated" &&
           event.turnItem.type === "approval_request" &&
@@ -10380,10 +10510,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ? [event.turnItem]
             : [],
         );
+        assert.equal(request.nativeRequestRef?.nativeId, "patch-a");
         assert.isNotEmpty(items);
         for (const item of items) {
           assert.equal(item.requestKind, "file-change");
-          assert.notProperty(item, "prompt");
+          assert.isUndefined(item.prompt);
         }
         assert.deepEqual(
           harness.terminalEvents().map((event) => event.status),
@@ -10397,131 +10528,35 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
     );
 
-    it.effect("falls back to the grant root when the item never starts", () =>
+    it.effect("matches file paths to items approved out of order", () =>
       Effect.gen(function* () {
-        const { harness, answerNext } = yield* startApprovalTurn("file-approval-never", [
-          ...approval({ id: 0, turnId: nativeTurnId, itemId: "patch-a", grantRoot: "/w" }),
-          ...approval({ id: 1, turnId: nativeTurnId, itemId: "patch-b" }),
+        const { harness, answerNext } = yield* startApprovalTurn("file-approval-concurrent", [
+          fileChange("started", nativeTurnId, "patch-a", [renameC, deleteE, addA]),
+          fileChange("started", nativeTurnId, "patch-b", [updateB]),
+          ...approval({ id: 0, turnId: nativeTurnId, itemId: "patch-b" }),
+          fileChange("completed", nativeTurnId, "patch-b", [updateB]),
+          ...approval({ id: 1, turnId: nativeTurnId, itemId: "patch-a" }),
+          fileChange("completed", nativeTurnId, "patch-a", [renameC, deleteE, addA]),
           turnCompleted(nativeTurnId),
         ]);
-        const withRoot = yield* answerNext;
-        const withoutRoot = yield* answerNext;
+        const first = yield* answerNext;
+        const second = yield* answerNext;
         yield* harness.firstTerminal;
 
-        assert.equal(approvalItem(harness.events, withRoot)?.prompt, "/w");
-        const bare = approvalItem(harness.events, withoutRoot);
-        assert.equal(bare?.requestKind, "file-change");
-        assert.notProperty(bare, "prompt");
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
-    );
-
-    it.effect(
-      "names only each concurrent item's own paths when approvals arrive out of order",
-      () =>
-        Effect.gen(function* () {
-          const { harness, answerNext } = yield* startApprovalTurn("file-approval-concurrent", [
-            fileChange("started", nativeTurnId, "patch-a", [addA]),
-            fileChange("started", nativeTurnId, "patch-b", [updateB]),
-            ...approval({ id: 0, turnId: nativeTurnId, itemId: "patch-b" }),
-            ...approval({ id: 1, turnId: nativeTurnId, itemId: "patch-a" }),
-            fileChange("completed", nativeTurnId, "patch-b", [updateB]),
-            fileChange("completed", nativeTurnId, "patch-a", [addA]),
-            turnCompleted(nativeTurnId),
-          ]);
-          const first = yield* answerNext;
-          const second = yield* answerNext;
-          yield* harness.firstTerminal;
-
-          assert.deepEqual(
-            [first, second].map((request) => [
-              request.nativeRequestRef?.nativeId,
-              approvalItem(harness.events, request)?.prompt,
-            ]),
-            [
-              ["patch-b", "update /w/b.ts"],
-              ["patch-a", "add /w/a.ts"],
-            ],
-          );
-        }).pipe(
-          Effect.scoped,
-          Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-          ),
-        ),
-    );
-
-    it.effect("prefers the approval reason over the item's paths", () =>
-      Effect.gen(function* () {
-        const { harness, answerNext } = yield* startApprovalTurn("file-approval-reason", [
-          fileChange("started", nativeTurnId, "patch-a", [renameB, addA]),
-          ...approval({
-            id: 0,
-            turnId: nativeTurnId,
-            itemId: "patch-a",
-            reason: "Need to edit config",
-          }),
-          fileChange("completed", nativeTurnId, "patch-a", [renameB, addA]),
-          turnCompleted(nativeTurnId),
-        ]);
-        const request = yield* answerNext;
-        yield* harness.firstTerminal;
-
-        assert.equal(approvalItem(harness.events, request)?.prompt, "Need to edit config");
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
-    );
-
-    it.effect("does not carry an item's paths into a later turn that reuses its id", () =>
-      Effect.gen(function* () {
-        const secondTurnId = "file-approval-second-turn";
-        const secondPrompt = "Edit again.";
-        const secondTurnStart = codexReplayPreamble({
-          nativeThreadId,
-          nativeTurnId: secondTurnId,
-          prompt: secondPrompt,
-        }).slice(-3);
-        const { harness, answerNext, nextTerminal } = yield* startApprovalTurn(
-          "file-approval-reused-id",
+        assert.deepEqual(
+          [first, second].map((request) => [
+            request.nativeRequestRef?.nativeId,
+            approvalItem(harness.events, request)?.prompt,
+          ]),
           [
-            // The first turn ends without completing its file change item.
-            fileChange("started", nativeTurnId, "patch-a", [addA]),
-            ...approval({ id: 0, turnId: nativeTurnId, itemId: "patch-a" }),
-            turnCompleted(nativeTurnId),
-            ...secondTurnStart.slice(0, 2).map((entry) => withReplayRequestId(entry, 4)),
-            ...secondTurnStart.slice(2),
-            ...approval({ id: 1, turnId: secondTurnId, itemId: "patch-a" }),
-            turnCompleted(secondTurnId),
+            ["patch-b", "update /w/b.ts"],
+            ["patch-a", "add /w/a.ts\nupdate /w/c.ts -> /w/d.ts\ndelete /w/e.ts"],
           ],
         );
-        const first = yield* answerNext;
-        yield* nextTerminal;
-        yield* harness.runtime.startTurn({
-          ...makeCodexTestTurnInput({
-            threadId: harness.threadId,
-            providerThread: harness.providerThread,
-            now: yield* DateTime.now,
-            attemptId: RunAttemptId.make("file-approval-reused-id-second"),
-            text: secondPrompt,
-          }),
-          runOrdinal: 2,
-          providerTurnOrdinal: 2,
-        });
-        const second = yield* answerNext;
-        yield* nextTerminal;
-
-        assert.equal(approvalItem(harness.events, first)?.prompt, "add /w/a.ts");
-        const reused = approvalItem(harness.events, second);
-        assert.equal(reused?.requestKind, "file-change");
-        assert.notProperty(reused, "prompt");
+        assert.deepEqual(
+          harness.terminalEvents().map((event) => event.status),
+          ["completed"],
+        );
       }).pipe(
         Effect.scoped,
         Effect.provide(

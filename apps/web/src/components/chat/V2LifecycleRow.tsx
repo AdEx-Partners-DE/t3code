@@ -47,8 +47,8 @@ import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   shouldShowInstanceBadge,
+  type ProviderInstanceEntry,
 } from "../../providerInstances";
-import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { getTriggerDisplayModelName } from "./providerIconUtils";
 import { ProviderInstanceIcon, providerTextColor } from "./ProviderInstanceIcon";
@@ -572,16 +572,18 @@ function SubagentTimelineTooltip(
   );
 }
 
-function EnvironmentHandoffRow(props: {
+function EnvironmentHandoffRow({
+  environmentId,
+  ...props
+}: {
   readonly environmentId: EnvironmentId;
   readonly endpoints: HandoffEndpoints;
   readonly strategy?: Extract<OrchestrationV2TurnItem, { type: "handoff" }>["strategy"];
   readonly failed: boolean;
 }) {
   const providers =
-    useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ??
-    EMPTY_SERVER_PROVIDERS;
-  return <HandoffRow {...props} providers={providers} />;
+    useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
+  return <HandoffRow {...props} environmentId={environmentId} providers={providers} />;
 }
 
 export function HandoffRow(props: {
@@ -594,6 +596,9 @@ export function HandoffRow(props: {
   readonly failed?: boolean;
 }) {
   const { from: fromEndpoints, to } = props.endpoints;
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
+  const derived = deriveProviderInstanceEntries(props.providers);
+  const entries = settings ? applyProviderInstanceSettings(derived, settings, null) : derived;
   return (
     <TimelineSystemDivider
       label={
@@ -614,8 +619,7 @@ export function HandoffRow(props: {
               className="inline-flex min-w-0 items-center"
             >
               <HandoffEndpoint
-                environmentId={props.environmentId}
-                providers={props.providers}
+                entries={entries}
                 instanceId={endpoint.instanceId}
                 model={endpoint.model}
               />
@@ -629,12 +633,7 @@ export function HandoffRow(props: {
           {fromEndpoints.length > 0 ? (
             <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0" />
           ) : null}
-          <HandoffEndpoint
-            environmentId={props.environmentId}
-            providers={props.providers}
-            instanceId={to.instanceId}
-            model={to.model}
-          />
+          <HandoffEndpoint entries={entries} instanceId={to.instanceId} model={to.model} />
         </span>
       }
     />
@@ -642,21 +641,14 @@ export function HandoffRow(props: {
 }
 
 function HandoffEndpoint(props: {
-  readonly environmentId: EnvironmentId;
-  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly entries: ReadonlyArray<ProviderInstanceEntry>;
   readonly instanceId: ProviderInstanceId;
   readonly model?: string | undefined;
 }) {
-  // Settings carry each ACP instance's agent, which tells its glyph apart.
-  const entries = applyProviderInstanceSettings(
-    deriveProviderInstanceEntries(props.providers),
-    useEnvironmentSettings(props.environmentId),
-    null,
-  );
-  const entry = entries.find((candidate) => candidate.instanceId === props.instanceId);
+  const entry = props.entries.find((candidate) => candidate.instanceId === props.instanceId);
   // Same account badge as the sidebar: a handoff between two accounts of one
   // provider would otherwise show the same glyph on both sides.
-  const showBadge = entry !== undefined && shouldShowInstanceBadge(entry, entries);
+  const showBadge = entry !== undefined && shouldShowInstanceBadge(entry, props.entries);
   const model = props.model?.trim();
   const providerModel =
     model === undefined || model.length === 0
@@ -686,9 +678,9 @@ function HandoffEndpoint(props: {
               acpRegistryAgentId={entry?.acpRegistryAgentId}
               acpRegistryIconUrl={entry?.acpRegistryIconUrl}
               showBadge={showBadge}
-              // Glyph dims, badge stays saturated; sized like the sidebar row.
-              iconClassName={cn("size-3.5", showBadge && "opacity-60")}
-              badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-5xs"
+              size="compact"
+              // Glyph dims, badge stays saturated.
+              iconClassName={cn(showBadge && "opacity-60")}
               indicatorBackground="var(--background)"
             />
             <span

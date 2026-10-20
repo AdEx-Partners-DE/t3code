@@ -20,6 +20,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
@@ -111,6 +112,10 @@ it.effect.each([
                       launches += 1;
                       return Effect.succeed({} as never);
                     },
+                  }),
+                  Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                    namedProjectsRoot: "/projects",
+                    isScratchProject: () => Effect.succeed(false),
                   }),
                   Layer.mock(ThreadManagementService.ThreadManagementService)({
                     sendToThread: (input) => {
@@ -313,6 +318,10 @@ it.effect(
                       Effect.andThen(Effect.die(new Error("test launch failure"))),
                     ),
                 }),
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: "/projects",
+                  isScratchProject: () => Effect.succeed(false),
+                }),
                 Layer.mock(ThreadManagementService.ThreadManagementService)({}),
                 Layer.mock(SecretRequests.SecretRequests)({}),
                 NodeCrypto.layer,
@@ -427,6 +436,10 @@ it.effect(
                       Effect.andThen(Effect.die(new Error("test launch failure"))),
                     ),
                 }),
+                Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                  namedProjectsRoot: "/projects",
+                  isScratchProject: () => Effect.succeed(false),
+                }),
                 Layer.mock(ThreadManagementService.ThreadManagementService)({}),
                 Layer.mock(SecretRequests.SecretRequests)({}),
                 NodeCrypto.layer,
@@ -480,6 +493,10 @@ it.effect("holds every due task while scheduled tasks are paused, and runs them 
                 Effect.andThen(Effect.die(new Error("test launch failure"))),
               ),
           }),
+          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+            namedProjectsRoot: "/projects",
+            isScratchProject: () => Effect.succeed(false),
+          }),
           Layer.mock(ThreadManagementService.ThreadManagementService)({}),
           Layer.mock(SecretRequests.SecretRequests)({}),
           ServerSettings.layerTest({ scheduledTasksPaused: paused }),
@@ -532,6 +549,10 @@ it.effect("runs a task that was switched on again by itself while all tasks are 
               Effect.andThen(Effect.die(new Error("test launch failure"))),
             ),
         }),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({}),
         Layer.mock(SecretRequests.SecretRequests)({}),
         ServerSettings.layerTest({ scheduledTasksPaused: true }),
@@ -580,6 +601,10 @@ it.effect("does not queue another prompt while the task's last one still waits i
         ScheduledTaskService.layer,
         Layer.mergeAll(
           Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+            namedProjectsRoot: "/projects",
+            isScratchProject: () => Effect.succeed(false),
+          }),
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getProjectThreadRecords: (() =>
               Effect.succeed({
@@ -665,6 +690,10 @@ const idleHarness = (input: {
       ScheduledTaskService.layer,
       Layer.mergeAll(
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadShell: ((threadId: string) =>
             Ref.update(shellsRead, (ids) => [...ids, threadId]).pipe(
@@ -865,6 +894,10 @@ it.effect("a portfolio task sends to standing open threads only, once per finish
       ScheduledTaskService.layer,
       Layer.mergeAll(
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getShellSnapshot: (() =>
             Effect.succeed({
@@ -968,6 +1001,10 @@ it.effect("a portfolio task limited to its project leaves other projects' thread
       ScheduledTaskService.layer,
       Layer.mergeAll(
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getShellSnapshot: (() =>
             Effect.succeed({

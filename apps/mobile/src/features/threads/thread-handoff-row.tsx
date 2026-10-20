@@ -13,20 +13,24 @@ import {
 } from "@t3tools/client-runtime/state/provider-instance-display";
 import type {
   EnvironmentId,
-  ProviderInstanceConfig,
   OrchestrationV2ProjectedTurnItem,
   ProviderInstanceId,
   ServerProvider,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import { useMemo } from "react";
-import { Alert, Pressable, View, type ColorValue } from "react-native";
+import { Pressable, View, type ColorValue } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { ProviderIcon, ProviderInstanceIcon } from "../../components/ProviderIcon";
 import { environmentThreadDetails } from "../../state/threads";
 import { serverEnvironment } from "../../state/server";
 import { ThreadContextDivider } from "./thread-context-divider";
+
+type HandoffProvider = ServerProvider & {
+  readonly driverKind: ServerProvider["driver"];
+  readonly acpRegistryAgentId: string | undefined;
+};
 
 function handoffEndpointsAtom(
   environmentId: EnvironmentId,
@@ -81,8 +85,20 @@ export function ThreadHandoffDivider(props: {
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
   const { endpoints } = props;
   const endpointProps = {
-    providers: config?.providers ?? [],
-    providerInstances: config?.settings.providerInstances,
+    providers: (config?.providers ?? []).map((provider) => {
+      const rawConfig = config?.settings.providerInstances[provider.instanceId]?.config;
+      const instanceConfig =
+        rawConfig !== null && typeof rawConfig === "object"
+          ? (rawConfig as Readonly<Record<string, unknown>>)
+          : null;
+      const agentId = instanceConfig?.source === "local" ? undefined : instanceConfig?.agentId;
+      return {
+        ...provider,
+        driverKind: provider.driver,
+        accentColor: normalizeProviderAccentColor(provider.accentColor),
+        acpRegistryAgentId: typeof agentId === "string" ? agentId.trim() || undefined : undefined,
+      };
+    }),
     surfaceColor: props.surfaceColor,
   };
   return (
@@ -118,8 +134,7 @@ export function ThreadHandoffDivider(props: {
 function HandoffEndpoint(props: {
   instanceId: ProviderInstanceId;
   model?: string | undefined;
-  providers: ReadonlyArray<ServerProvider>;
-  providerInstances: Readonly<Record<string, ProviderInstanceConfig>> | undefined;
+  providers: ReadonlyArray<HandoffProvider>;
   surfaceColor: string;
 }) {
   const provider = props.providers.find((candidate) => candidate.instanceId === props.instanceId);
@@ -129,31 +144,9 @@ function HandoffEndpoint(props: {
     model?.name ??
     props.model ??
     (provider ? resolveProviderInstanceDisplayName(provider) : props.instanceId);
-  const accentColor = normalizeProviderAccentColor(provider?.accentColor);
   // Same account badge as the thread rows: a handoff between two accounts of
-  // one provider would otherwise show the same glyph on both sides. Settings
-  // carry each ACP instance's agent, which tells its glyph apart.
-  const badgeEntry = (candidate: ServerProvider) => {
-    const config = props.providerInstances?.[candidate.instanceId]?.config;
-    // A local ACP command has no registry agent, as on web.
-    const agentId =
-      typeof config === "object" && config && Reflect.get(config, "source") !== "local"
-        ? Reflect.get(config, "agentId")
-        : null;
-    return {
-      driverKind: candidate.driver,
-      enabled: candidate.enabled,
-      ...(typeof agentId === "string" && agentId.trim()
-        ? { acpRegistryAgentId: agentId.trim() }
-        : {}),
-    };
-  };
-  const showBadge =
-    provider !== undefined &&
-    shouldShowInstanceBadge(
-      { ...badgeEntry(provider), accentColor },
-      props.providers.map(badgeEntry),
-    );
+  // one provider would otherwise show the same glyph on both sides.
+  const showBadge = provider !== undefined && shouldShowInstanceBadge(provider, props.providers);
   return (
     <Pressable
       accessibilityRole="button"
@@ -174,7 +167,7 @@ function HandoffEndpoint(props: {
           iconUrl={provider.iconUrl}
           size={14}
           displayName={resolveProviderInstanceDisplayName(provider)}
-          accentColor={accentColor}
+          accentColor={provider.accentColor}
           showBadge
           surfaceColor={props.surfaceColor}
         />

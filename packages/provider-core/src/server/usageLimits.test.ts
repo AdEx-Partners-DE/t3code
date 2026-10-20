@@ -115,7 +115,7 @@ describe("applyUsageLimitsUpdate", () => {
     ).toBe(next);
   });
 
-  it("marks a sparse update with nothing published as a failed read", () => {
+  it("marks a first sparse update as unavailable", () => {
     expect(
       applyUsageLimitsUpdate({ previous: undefined, checkedAt, update: { windows: [weekly] } }),
     ).toEqual({ checkedAt, windows: [weekly], unavailable: { reason: "probeFailed" } });

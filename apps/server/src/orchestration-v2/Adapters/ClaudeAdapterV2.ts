@@ -60,6 +60,7 @@ import {
 import {
   type ChatAttachment,
   ClaudeSettings,
+  TrimmedNonEmptyString,
   defaultInstanceIdForDriver,
   type ModelSelection,
   type OrchestrationV2ConversationMessage,
@@ -110,10 +111,10 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
-import * as ProcessRunner from "../../processRunner.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import { planClaudeSkillDispatch } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
@@ -123,6 +124,7 @@ import {
 } from "../../claudeModelOptions.ts";
 import * as ServerConfig from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
 import {
   claudeSignedOutMessage,
@@ -518,7 +520,6 @@ export class ClaudeAgentSdkQueryRunner extends Context.Service<
 export interface ClaudeAgentSdkSessionForkInput {
   readonly sessionId: string;
   readonly options: ForkSessionOptions;
-  /** The instance's environment; its `CLAUDE_CONFIG_DIR` holds the session. */
   readonly environment: NodeJS.ProcessEnv;
   readonly threadId: ThreadId;
   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
@@ -753,18 +754,58 @@ export function makeClaudeAgentSdkProtocolLogger(input: {
   };
 }
 
-// The argument and output shapes of `claudeHistoryWorker.ts`'s `forkSession`.
-const encodeHistoryForkOptions = Schema.encodeSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      dir: Schema.optionalKey(Schema.String),
-      upToMessageId: Schema.optionalKey(Schema.String),
-    }),
-  ),
-);
-const decodeHistoryForkResult = Schema.decodeUnknownEffect(
+const encodeClaudeHistoryOptions = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeClaudeHistoryFork = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ sessionId: Schema.String })),
 );
+
+const claudeConfigDirOf = (
+  path: Path.Path,
+  environment: NodeJS.ProcessEnv,
+  homeDirectory: string,
+) => path.resolve(environment.CLAUDE_CONFIG_DIR ?? path.join(homeDirectory, ".claude"));
+
+// The SDK reads CLAUDE_CONFIG_DIR from process.env. Isolate custom homes in a
+// worker so concurrent providers keep the server's environment.
+const forkClaudeSessionInWorker = Effect.fn("forkClaudeSessionInWorker")(function* (
+  input: ClaudeAgentSdkSessionForkInput,
+) {
+  const path = yield* Path.Path;
+  const fromSource = import.meta.url.endsWith(".ts");
+  // A single executable hosts the worker itself; it has no sibling script.
+  const workerArguments = (yield* HostProcess.IsExecutable)
+    ? ["__claude-history"]
+    : [
+        ...(fromSource ? ["--experimental-strip-types"] : []),
+        yield* path.fromFileUrl(
+          new URL(
+            fromSource ? "../../claude-history-worker.ts" : "./claude-history-worker.mjs",
+            import.meta.url,
+          ),
+        ),
+      ];
+  const executablePath = yield* HostProcess.ExecutablePath;
+  const result = yield* spawnAndCollect(
+    executablePath,
+    ChildProcess.make(
+      executablePath,
+      [
+        ...workerArguments,
+        "forkSession",
+        input.sessionId,
+        encodeClaudeHistoryOptions(input.options),
+      ],
+      { env: { ...input.environment, ELECTRON_RUN_AS_NODE: "1" } },
+    ),
+  ).pipe(Effect.timeout("30 seconds"));
+  if (result.code !== 0) {
+    return yield* new ClaudeAgentSdkQueryRunnerError({
+      method: "forkSession",
+      cause: result.stderr.trim() || `Claude history worker exited with code ${result.code}.`,
+    });
+  }
+  return yield* decodeClaudeHistoryFork(result.stdout);
+});
 
 export const layerQueryRunner: Layer.Layer<
   ClaudeAgentSdkQueryRunner,
@@ -779,61 +820,11 @@ export const layerQueryRunner: Layer.Layer<
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const fileSystem = yield* FileSystem.FileSystem;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const path = yield* Path.Path;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
     const platform = yield* HostProcess.Platform;
-    const processRunner = yield* ProcessRunner.make();
-    const serverEnvironment = yield* HostProcess.Environment;
-    const executablePath = yield* HostProcess.ExecutablePath;
-    const isExecutable = yield* HostProcess.IsExecutable;
-
-    // The SDK's history helpers read the session from `process.env`'s config
-    // dir. A session under another instance's `CLAUDE_CONFIG_DIR` (a second
-    // account) is forked by `claudeHistoryWorker.ts` in a child process with
-    // that instance's environment, never by changing the server's.
-    const forkInHistoryWorker = Effect.fn("ClaudeAgentSdkQueryRunner.forkInHistoryWorker")(
-      function* (input: ClaudeAgentSdkSessionForkInput) {
-        const workerArgs = [
-          input.sessionId,
-          encodeHistoryForkOptions({
-            ...(input.options.dir === undefined ? {} : { dir: input.options.dir }),
-            ...(input.options.upToMessageId === undefined
-              ? {}
-              : { upToMessageId: input.options.upToMessageId }),
-          }),
-        ];
-        const args = isExecutable
-          ? ["__claude-history", "forkSession", ...workerArgs]
-          : [
-              yield* path.fromFileUrl(
-                new URL(
-                  import.meta.url.endsWith(".ts")
-                    ? "../../claude-history-worker.ts"
-                    : "./claude-history-worker.mjs",
-                  import.meta.url,
-                ),
-              ),
-              "forkSession",
-              ...workerArgs,
-            ];
-        const result = yield* processRunner.run({
-          command: executablePath,
-          args,
-          // The CLI resolves a relative config dir against the project.
-          ...(input.options.dir === undefined ? {} : { cwd: input.options.dir }),
-          env: { ...input.environment, ELECTRON_RUN_AS_NODE: "1" },
-          timeout: "30 seconds",
-        });
-        if (result.code !== 0) {
-          return yield* new ClaudeAgentSdkQueryRunnerError({
-            method: "forkSession",
-            cause: result.stderr.trim() || `The Claude history worker exited with ${result.code}.`,
-          });
-        }
-        return yield* decodeHistoryForkResult(result.stdout);
-      },
-    );
 
     return ClaudeAgentSdkQueryRunner.of({
       allocateSessionId: crypto
@@ -1119,15 +1110,19 @@ export const layerQueryRunner: Layer.Layer<
             options: input.options,
           },
         });
-        const result =
-          input.environment.CLAUDE_CONFIG_DIR === serverEnvironment.CLAUDE_CONFIG_DIR
-            ? yield* Effect.tryPromise({
-                try: () => forkClaudeSession(input.sessionId, input.options),
-                catch: (cause) => queryRunnerError(cause, "forkSession"),
-              })
-            : yield* forkInHistoryWorker(input).pipe(
-                Effect.mapError((cause) => queryRunnerError(cause, "forkSession")),
+        const hostEnvironment = yield* HostProcess.Environment;
+        const homeDirectory = yield* HostProcess.HomeDirectory;
+        const fork: Effect.Effect<ForkSessionResult, unknown> =
+          claudeConfigDirOf(path, input.environment, homeDirectory) ===
+          claudeConfigDirOf(path, hostEnvironment, homeDirectory)
+            ? Effect.tryPromise(() => forkClaudeSession(input.sessionId, input.options))
+            : forkClaudeSessionInWorker(input).pipe(
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+                Effect.provideService(Path.Path, path),
               );
+        const result = yield* fork.pipe(
+          Effect.mapError((cause) => queryRunnerError(cause, "forkSession")),
+        );
         yield* logProtocolEvent({
           direction: "incoming",
           stage: "decoded",
@@ -1990,7 +1985,8 @@ export function claudeRuntimeQueryPolicyForRuntimePolicy(
       permissionMode,
       ...(readOnlyTools === undefined ? {} : { tools: readOnlyTools }),
       ...(allowedTools === undefined ? {} : { allowedTools }),
-      installPermissionCallback,
+      // Claude routes Plan-mode writes to the callback even in Auto or Full access.
+      installPermissionCallback: true,
     };
   }
 
@@ -2188,6 +2184,15 @@ const CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS: ReadonlyMap<
   string,
   Exclude<OrchestrationV2PendingBackgroundTask["kind"], "subagent">
 > = new Map([["local_bash", "command"]]);
+
+// Claude Code 2.1.292 defers its goal Stop hook for these subagent types.
+// local_bash tasks defer it through the opaque-task roster.
+const CLAUDE_GOAL_DEFERRING_TASK_TYPES: ReadonlySet<string> = new Set([
+  "local_agent",
+  "remote_agent",
+  "in_process_teammate",
+  "local_workflow",
+]);
 
 function isClaudeOpaqueBackgroundTaskType(taskType: string | null | undefined): boolean {
   return typeof taskType === "string" && CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS.has(taskType);
@@ -3205,6 +3210,7 @@ interface ActiveClaudeProviderRetry {
 
 interface ActiveClaudeSubagent {
   task: OrchestrationV2Subagent;
+  readonly nativeTaskType: string | undefined;
   readonly confirmedOutcome: ProviderAdapter.ProviderAdapterV2SubagentOutcome | undefined;
   readonly rootNodeId: OrchestrationV2ExecutionNode["id"];
   readonly childThreadId: ThreadId;
@@ -3405,13 +3411,9 @@ export function claudeUserInputQuestions(
           const optionRecord = option as Record<string, unknown>;
           const label = typeof optionRecord.label === "string" ? optionRecord.label.trim() : "";
           if (label.length === 0) return [];
-          return [
-            {
-              label,
-              description:
-                typeof optionRecord.description === "string" ? optionRecord.description.trim() : "",
-            },
-          ];
+          const description =
+            typeof optionRecord.description === "string" ? optionRecord.description.trim() : "";
+          return [{ label, description: description || label }];
         })
       : [];
     return [
@@ -3542,60 +3544,47 @@ function applyClaudeTaskTool(
 }
 
 const CLAUDE_TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskUpdate", "TaskList"]);
-const CLAUDE_TASK_FILE_NAME = /^\d+\.json$/;
-const decodeClaudeTaskFile = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const decodeClaudeTaskFile = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: TrimmedNonEmptyString,
+      subject: TrimmedNonEmptyString,
+      status: Schema.Literals(["pending", "in_progress", "completed"]),
+      metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+    }),
+  ),
+);
 
-/**
- * Reads the task list Claude persisted for a session, in id order. Claude
- * keeps it at `<config dir>/tasks/<list id>/<task id>.json`, where the list id
- * is `CLAUDE_CODE_TASK_LIST_ID` or else the session id, so a list started
- * before a server restart is still the one later task tools edit. The format
- * is Claude's and undocumented: an unreadable task file is skipped, and a
- * missing or unreadable directory reads as no stored list rather than failing
- * the turn.
- */
 const readClaudeTaskList = Effect.fnUntraced(
   function* (input: {
-    readonly fileSystem: FileSystem.FileSystem;
-    readonly path: Path.Path;
     readonly environment: NodeJS.ProcessEnv;
     readonly cwd: string | null | undefined;
     readonly nativeThreadId: string;
   }) {
-    const { fileSystem, path } = input;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const configDirOverride = input.environment.CLAUDE_CONFIG_DIR?.trim();
-    // The CLI resolves a relative config dir against its own cwd.
     const configDir = configDirOverride
       ? path.resolve(input.cwd ?? ".", configDirOverride)
-      : path.join(yield* HostProcess.HomeDirectory, ".claude");
+      : yield* resolveClaudeHomePath({ homePath: "" });
     const listId = input.environment.CLAUDE_CODE_TASK_LIST_ID?.trim() || input.nativeThreadId;
     const directory = path.join(configDir, "tasks", listId.replace(/[^a-zA-Z0-9_-]/g, "-"));
-    const names = (yield* fileSystem.readDirectory(directory)).filter((name) =>
-      CLAUDE_TASK_FILE_NAME.test(name),
-    );
-    const tasks = yield* Effect.forEach(names, (name) =>
-      fileSystem.readFileString(path.join(directory, name)).pipe(
-        Effect.map((contents) => {
-          const task = Option.getOrUndefined(decodeClaudeTaskFile(contents));
-          const id = claudeTaskString(task, "id");
-          const text = claudeTaskString(task, "subject");
-          const status = claudeTaskStatus(claudeTaskField(task, "status"));
-          // Claude hides `_internal` tasks from TaskList; so do we.
-          const internal = claudeTaskField(claudeTaskField(task, "metadata"), "_internal");
-          return id === undefined || text === undefined || status === undefined || internal
-            ? []
-            : [{ id, text, status }];
-        }),
-        Effect.orElseSucceed(() => []),
-      ),
-    );
-    const list: ClaudeTaskList = new Map(
-      tasks
-        .flat()
-        .toSorted((left, right) => Number(left.id) - Number(right.id))
-        .map(({ id, text, status }) => [id, { text, status }]),
-    );
-    return list;
+    const tasks = new Map<string, Omit<OrchestrationV2PlanStep, "id">>();
+    const names = (yield* fileSystem.readDirectory(directory))
+      .filter((name) => /^\d+\.json$/.test(name))
+      .toSorted((left, right) => Number.parseInt(left, 10) - Number.parseInt(right, 10));
+    for (const name of names) {
+      const contents = yield* fileSystem
+        .readFileString(path.join(directory, name))
+        .pipe(Effect.orElseSucceed(() => ""));
+      const task = Option.getOrUndefined(decodeClaudeTaskFile(contents));
+      if (task === undefined || task.metadata?._internal) continue;
+      tasks.set(task.id, {
+        text: task.subject,
+        status: task.status === "in_progress" ? "running" : task.status,
+      });
+    }
+    return tasks;
   },
   Effect.orElseSucceed((): ClaudeTaskList | undefined => undefined),
 );
@@ -3738,7 +3727,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const openedNativeThreads = yield* Ref.make(new Set<string>());
         const latestPlanByKind = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact>());
         // Claude 5 task tools edit one list per native session, across turns.
-        const taskListsByNativeThread = yield* Ref.make(new Map<string, ClaudeTaskList>());
+        const taskListsByNativeThread = yield* Ref.make(
+          new Map<string, ClaudeTaskList | undefined>(),
+        );
         const planIdsByNativeItem = yield* Ref.make(
           new Map<string, OrchestrationV2PlanArtifact["id"]>(),
         );
@@ -4703,6 +4694,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const ids = claudeSubagentIds(resume.context, resume.taskId);
           const now = yield* DateTime.now;
           const subagent: ActiveClaudeSubagent = {
+            nativeTaskType: undefined,
             confirmedOutcome: undefined,
             childThread: null,
             task: {
@@ -5184,6 +5176,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly model?: string;
           readonly effort?: string;
           readonly owner?: ActiveClaudeSubagent;
+          readonly nativeTaskType?: string;
           readonly progress?: string;
           readonly workflowFrame?: unknown;
           readonly workflowName?: string;
@@ -5342,6 +5335,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           } satisfies OrchestrationV2Subagent;
           const subagent = {
             task,
+            nativeTaskType: input.nativeTaskType ?? existingSubagent?.nativeTaskType,
             confirmedOutcome:
               input.nativeOutcome !== undefined
                 ? confirmedSubagentOutcome(task)
@@ -6475,13 +6469,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   nativeThreadId === null ? undefined : goalsByNativeThread.get(nativeThreadId);
                 const goalChecked = goalCheckedTurns.delete(input.context.providerTurnId);
                 const terminalReason = input.result?.terminal_reason;
+                const liveQuery = yield* Ref.get(queryContext);
                 if (
                   nativeThreadId !== null &&
                   goal?.status === "active" &&
                   goalChecked &&
                   input.status === "completed" &&
                   (terminalReason === undefined || terminalReason === "completed") &&
-                  roster.size === 0
+                  roster.size === 0 &&
+                  !(
+                    liveQuery?.nativeThreadId === nativeThreadId &&
+                    (yield* liveProcessRunsBackgroundWork(liveQuery, { forGoalCheck: true }))
+                  )
                 ) {
                   goalsByNativeThread.set(nativeThreadId, {
                     objective: goal.objective,
@@ -6578,11 +6577,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           cause?: Cause.Cause<ClaudeAgentSdkQueryRunnerError>,
         ) {
           const current = yield* Ref.get(activeTurn);
-          const context =
-            current?.nativeThreadId === closedQuery.nativeThreadId ? current : closedQuery.lastTurn;
+          // A replacement query can reuse the native thread id; only this query's turn is ours.
+          const context = closedQuery.lastTurn;
           if (context === null) return;
           const interrupted =
             closedQuery.stopping || (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
+          // Finalization can yield to a replacement process; capture ownership and outcomes first.
           const subagents = yield* Ref.get(sessionSubagentsByTaskId);
           const buffered = (yield* Ref.get(wakeBuffers)).get(closedQuery.nativeThreadId)?.messages;
           if (current === context) {
@@ -6602,9 +6602,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           } else {
             yield* resetBackgroundTaskStateForNativeThreadProcess(closedQuery.nativeThreadId);
           }
+          // Preserve buffered outcomes before Stop clears the wake buffer.
           for (const [taskId, subagent] of subagents) {
             if (
-              subagent.task.workflow === undefined ||
               subagent.task.status !== "running" ||
               closedQuery.subagentsFromEarlierProcesses.has(subagent)
             )
@@ -7778,6 +7778,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               yield* updateClaudeSubagentNode({
                 context,
                 taskId: message.task_id,
+                ...(message.task_type === undefined ? {} : { nativeTaskType: message.task_type }),
                 ...(message.tool_use_id === undefined ? {} : { toolUseId: message.tool_use_id }),
                 ...(message.prompt === undefined ? {} : { prompt: message.prompt }),
                 ...(model === undefined ? {} : { model }),
@@ -8020,22 +8021,25 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               output,
               completedAt: yield* DateTime.now,
             });
-            if (parentToolUseId === null && !isClaudeToolResultError(toolResult)) {
+            if (
+              parentToolUseId === null &&
+              !isClaudeToolResultError(toolResult) &&
+              CLAUDE_TASK_TOOL_NAMES.has(toolCall.toolName)
+            ) {
               const taskLists = yield* Ref.get(taskListsByNativeThread);
               const knownTaskList = taskLists.get(liveQuery.nativeThreadId);
-              // This process has not seen the session's list yet (a server
-              // restart, or a resumed session): start from Claude's own copy.
-              // It already includes this call, so it is news even when
-              // applying the call changes nothing.
+              // TaskList already supplies a snapshot. Mutations need Claude's persisted
+              // list once; afterward the cache also records an unavailable store.
               const storedTaskList =
-                knownTaskList === undefined && CLAUDE_TASK_TOOL_NAMES.has(toolCall.toolName)
+                !taskLists.has(liveQuery.nativeThreadId) && toolCall.toolName !== "TaskList"
                   ? yield* readClaudeTaskList({
-                      fileSystem,
-                      path,
                       environment: adapterOptions.environment,
                       cwd: context.input.runtimePolicy.cwd,
                       nativeThreadId: liveQuery.nativeThreadId,
-                    })
+                    }).pipe(
+                      Effect.provideService(FileSystem.FileSystem, fileSystem),
+                      Effect.provideService(Path.Path, path),
+                    )
                   : undefined;
               const taskList =
                 applyClaudeTaskTool(
@@ -8044,11 +8048,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   claudeNativeToolInputValue(toolCall.input),
                   claudeNativeToolOutputValue(output),
                 ) ?? storedTaskList;
+              yield* Ref.set(
+                taskListsByNativeThread,
+                new Map(taskLists).set(liveQuery.nativeThreadId, taskList ?? knownTaskList),
+              );
               if (taskList !== undefined) {
-                yield* Ref.set(
-                  taskListsByNativeThread,
-                  new Map(taskLists).set(liveQuery.nativeThreadId, taskList),
-                );
                 yield* emitClaudePlanProjection({
                   context,
                   nativeItemId: `claude-tasks:${context.providerTurnId}`,
@@ -8596,6 +8600,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             } satisfies PermissionResult;
           }
 
+          if (
+            context.input.runtimePolicy.interactionMode === "plan" &&
+            context.input.runtimePolicy.approvalPolicy === "never"
+          ) {
+            return {
+              behavior: "deny",
+              message:
+                "This tool requires approval in Plan mode, but approvals are disabled for this thread.",
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
+
           if (!requiresClaudeApproval(context)) {
             return {
               behavior: "allow",
@@ -8753,6 +8769,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
         const liveProcessRunsBackgroundWork = Effect.fnUntraced(function* (
           live: ClaudeLiveQueryContext,
+          options?: { readonly forGoalCheck?: boolean },
         ) {
           if (
             rosterForNativeThread(
@@ -8767,6 +8784,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             if (
               subagent.task.status === "running" &&
               !live.subagentsFromEarlierProcesses.has(subagent) &&
+              (options?.forGoalCheck !== true ||
+                subagent.nativeTaskType === undefined ||
+                CLAUDE_GOAL_DEFERRING_TASK_TYPES.has(subagent.nativeTaskType)) &&
               !buffered.some(
                 (message) =>
                   message.type === "system" &&

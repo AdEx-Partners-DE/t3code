@@ -215,10 +215,6 @@ export function sortProviderInstanceEntries(
   return sorted;
 }
 
-/**
- * Look up a single instance entry by exact `instanceId`. Missing snapshots
- * are not inferred from driver kind in UI routing code.
- */
 function getProviderInstanceEntry(
   providers: ReadonlyArray<ServerProvider>,
   instanceId: ProviderInstanceId,

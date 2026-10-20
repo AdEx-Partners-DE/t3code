@@ -44,6 +44,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { usageHeadroomPercent } from "@t3tools/shared/usageLimitSwitch";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
+import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -436,6 +437,7 @@ export const layer = Layer.effect(
     const crypto = yield* Crypto.Crypto;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+    const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
     const secretRequests = yield* SecretRequests.SecretRequests;
     const scheduler = yield* Scheduler.Scheduler;
     // Optional, so harnesses that build this service without settings still work.
@@ -1676,6 +1678,11 @@ export const layer = Layer.effect(
                 return { token, secret, secretChanged };
               })
             : { token: null, secret: null, secretChanged: true };
+        const workspaceStrategy: ScheduledTask["workspaceStrategy"] =
+          input.workspaceStrategy.type === "worktree" &&
+          (yield* managedFolders.isScratchProject(input.projectId))
+            ? { type: "root" }
+            : input.workspaceStrategy;
         const scheduleUnchanged =
           existingTask !== null &&
           existingTask.enabled === input.enabled &&
@@ -1688,7 +1695,7 @@ export const layer = Layer.effect(
           schedule,
           projectId: input.projectId,
           threadId: input.threadId ?? null,
-          workspaceStrategy: input.workspaceStrategy,
+          workspaceStrategy,
           modelSelection: input.modelSelection,
           runtimeMode: input.runtimeMode,
           interactionMode: input.interactionMode,
