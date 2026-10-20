@@ -2401,6 +2401,9 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
       const opened = yield* Fiber.join(opening);
 
       assert.equal(opened._tag, "Failure");
+      if (opened._tag === "Failure") {
+        assert.instanceOf(opened.failure, ClaudeAdapterV2.ClaudeMcpRegistrationTimeoutError);
+      }
       assert.isTrue(cli.closed());
     }),
   );

@@ -40,6 +40,7 @@ import {
   ClaudeAppendSystemPromptFileError,
   ClaudeAppendSystemPromptMissingValueError,
   ClaudeBackgroundWorkBlocksQueryReplacementError,
+  ClaudeMcpRegistrationTimeoutError,
   ClaudeProviderCapabilitiesV2,
 } from "../Adapters/ClaudeAdapterV2.ts";
 import {
@@ -1304,6 +1305,7 @@ describe("orchestration v2 provider switching", () => {
       "a missing append value",
       new ClaudeAppendSystemPromptMissingValueError({ flag: "--append-system-prompt" }),
     ],
+    ["an unanswered MCP registration", new ClaudeMcpRegistrationTimeoutError()],
   ] as const)("keeps the native session after turns refused for %s", ([, refusalCause]) =>
     Effect.scoped(
       Effect.gen(function* () {
