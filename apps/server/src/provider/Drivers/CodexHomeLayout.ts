@@ -42,10 +42,12 @@ const LOCAL_FILES_MARKER_TEXT =
 
 const PRIVATE_ENTRY_NAMES = new Set(["auth.json", "models_cache.json"]);
 // Finder maintains metadata separately for each directory, including shadow homes.
+// Codex 0.162 keeps a plugin cache in `.tmp` of whichever home it runs in.
 const SHADOW_LOCAL_ENTRY_NAMES = new Set([
   "log",
   "memories",
   "tmp",
+  ".tmp",
   ".DS_Store",
   LOCAL_FILES_MARKER_NAME,
 ]);

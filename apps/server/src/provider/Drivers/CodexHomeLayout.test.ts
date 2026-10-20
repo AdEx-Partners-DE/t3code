@@ -137,6 +137,31 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
   });
 
   describe("materializeCodexShadowHome", () => {
+    it.effect("keeps the Codex .tmp directory local when both homes have one", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+        const shadowHome = yield* makeTempDir("t3code-codex-shadow-");
+        yield* fileSystem.makeDirectory(path.join(sharedHome, ".tmp", "plugins"), {
+          recursive: true,
+        });
+        yield* fileSystem.makeDirectory(path.join(shadowHome, ".tmp", "plugins"), {
+          recursive: true,
+        });
+        yield* writeTextFile(path.join(shadowHome, ".tmp", "plugins.sha"), "shadow\n");
+        const layout = yield* resolveCodexHomeLayout(
+          decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+        );
+
+        yield* materializeCodexShadowHome(layout);
+
+        expect(yield* fileSystem.readFileString(path.join(shadowHome, ".tmp", "plugins.sha"))).toBe(
+          "shadow\n",
+        );
+      }),
+    );
+
     it.effect.skipIf(!symlinksSupported)(
       "keeps Finder metadata local across repeated shadow home setup",
       () =>
