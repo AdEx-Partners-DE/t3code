@@ -53,7 +53,12 @@ const SHADOW_LOCAL_ENTRY_NAMES = new Set([
 ]);
 // Codex creates these runtime locks itself when it starts in a shadow home before the shared
 // home has one. They guard shared state, so a local copy is replaced with the shared link.
-const REPLACEABLE_SHARED_RUNTIME_ENTRIES = new Set(["mcp-oauth-locks", ".sqlite-maintenance.lock"]);
+const REPLACEABLE_SHARED_RUNTIME_ENTRIES = new Set([
+  "mcp-oauth-locks",
+  ".sqlite-maintenance.lock",
+  // Codex 0.162 guards writes to the shared sessions with these.
+  "thread-writer-locks",
+]);
 
 function resolveHomePath(path: Path.Path, home: string, value: string | undefined): string {
   const expanded =

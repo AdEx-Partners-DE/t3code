@@ -284,6 +284,31 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
         }),
     );
 
+    it.effect(
+      "replaces Codex-created local thread writer locks with the shared lock directory",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const shadowHome = yield* makeTempDir("t3code-codex-shadow-");
+          yield* writeTextFile(path.join(sharedHome, "thread-writer-locks", "shared.lock"), "");
+          yield* writeTextFile(path.join(shadowHome, "thread-writer-locks", "local.lock"), "");
+          const layout = yield* resolveCodexHomeLayout(
+            decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+          );
+
+          yield* materializeCodexShadowHome(layout);
+
+          expect(
+            yield* fileSystem.exists(path.join(shadowHome, "thread-writer-locks", "shared.lock")),
+          ).toBe(true);
+          expect(
+            yield* fileSystem.exists(path.join(shadowHome, "thread-writer-locks", "local.lock")),
+          ).toBe(false);
+        }),
+    );
+
     it.effect.skipIf(!symlinksSupported)(
       "replaces Codex-created local MCP OAuth locks with the shared lock directory",
       () =>
