@@ -49,15 +49,10 @@ const STATUS_DOT_CLASS: Record<ScheduledTask["lastRunStatus"], string> = {
   failed: "bg-destructive",
 };
 
-function taskScheduleLine(
-  task: ScheduledTask,
-  timeZone: string | undefined,
-  held: boolean,
-  nowMs: number,
-) {
+function taskScheduleLine(task: ScheduledTask, held: boolean, nowMs: number) {
   return (
     <>
-      {scheduleLabel(task.schedule, timeZone)}
+      {scheduleLabel(task.schedule)}
       {!task.enabled ? (
         " · off"
       ) : held ? (
@@ -284,13 +279,13 @@ export function ThreadAutomationsPanel(props: {
                   {task.title}
                 </span>
                 <p className="truncate text-2xs text-muted-foreground">
-                  {taskScheduleLine(task, tasksQuery.data?.timeZone, isHeld(task), nowMs)}
+                  {taskScheduleLine(task, isHeld(task), nowMs)}
                 </p>
               </TooltipTrigger>
               <TooltipPopup side="left">
                 <p className="font-medium">{task.title}</p>
                 <p className="text-muted-foreground">
-                  {taskScheduleLine(task, tasksQuery.data?.timeZone, isHeld(task), nowMs)}
+                  {taskScheduleLine(task, isHeld(task), nowMs)}
                 </p>
               </TooltipPopup>
             </Tooltip>
