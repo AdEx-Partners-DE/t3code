@@ -27,6 +27,7 @@ import {
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import { deriveThreadQueueWorkflowState } from "@t3tools/client-runtime/state/thread-workflows";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import {
   canPreloadBrowsePath,
@@ -144,7 +145,13 @@ import {
   useEnvironments,
   usePrimaryEnvironmentId,
 } from "../state/environments";
-import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import {
+  useProjects,
+  useServerConfigs,
+  useThreadProjection,
+  useThreadShells,
+  waitForProject,
+} from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -1600,6 +1607,15 @@ function OpenCommandPaletteDialog(props: {
   const tasksPaused = usePrimarySettings((settings) => settings.scheduledTasksPaused);
   const queuesPaused = usePrimarySettings((settings) => settings.threadQueuesPaused);
   const updatePrimarySettings = useUpdatePrimarySettings();
+  // A stop or restart holds the open thread's queue; the palette offers the way
+  // back next to the environment-wide pause, which it does not lift.
+  const activeThreadProjection = useThreadProjection(
+    activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null,
+  )?.projection;
+  const activeThreadQueueHeld =
+    activeThreadProjection !== undefined &&
+    deriveThreadQueueWorkflowState(activeThreadProjection).isHeld;
+  const resumeThreadQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, "resume queue");
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
@@ -1633,6 +1649,21 @@ function OpenCommandPaletteDialog(props: {
       await updatePrimarySettings({ threadQueuesPaused: !queuesPaused });
     },
   });
+  if (activeThread && activeThreadQueueHeld) {
+    pauseItems.push({
+      kind: "action",
+      value: "action:resume-thread-queue",
+      searchTerms: ["resume this thread's queue", "held queue", "queued messages", "resume queue"],
+      title: "Resume this thread's queue",
+      icon: <PlayIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await resumeThreadQueue({
+          environmentId: activeThread.environmentId,
+          input: { threadId: activeThread.id },
+        });
+      },
+    });
+  }
   pauseItems.push({
     kind: "action",
     value: "action:open-thread-model-override",

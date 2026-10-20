@@ -1279,7 +1279,7 @@ describe("orchestrator MCP toolkit", () => {
             const queueFirstPage = yield* invoke("t3_queue_list", { limit: 1 });
             expect(queueFirstPage.isError).toBe(false);
             expect(queueFirstPage.structuredContent).toMatchObject({
-              items: [{ queuedRunId: queueRace.queuedRun.id }],
+              items: [{ queuedRunId: queueRace.queuedRun.id, held: false }],
               nextCursor: 1,
             });
             const queueDefinition = server.tools.find(({ tool }) => tool.name === "t3_queue_list");
@@ -1309,7 +1309,14 @@ describe("orchestrator MCP toolkit", () => {
             });
             const queueSecondPage = yield* invoke("t3_queue_list", { cursor: 1, limit: 1 });
             expect(queueSecondPage.structuredContent).toEqual({
-              items: [{ queuedRunId: queuedUserRun.id, text: "🙂".repeat(1000), truncated: true }],
+              items: [
+                {
+                  queuedRunId: queuedUserRun.id,
+                  text: "🙂".repeat(1000),
+                  truncated: true,
+                  held: false,
+                },
+              ],
               nextCursor: null,
             });
             const queueRead = yield* invoke("t3_queue_read", { queuedRunId: queuedUserRun.id });
@@ -1317,6 +1324,7 @@ describe("orchestrator MCP toolkit", () => {
               queuedRunId: queuedUserRun.id,
               text: "🙂".repeat(16000),
               truncated: true,
+              held: false,
             });
             const missingQueueRead = yield* invoke("t3_queue_read", { queuedRunId: parentRun.id });
             expect(declaredFailure(missingQueueRead)).toMatchObject({ code: "invalid_request" });
@@ -1971,6 +1979,11 @@ describe("orchestrator MCP toolkit", () => {
                 (run) => run.id === heldFollowup.runId,
               ),
             ).toMatchObject({ status: "queued", queueHeld: true, startedAt: null });
+            // An agent reading the queue sees the message is held, not due.
+            const heldQueue = yield* invoke("t3_queue_list", { threadId: delegated.childThreadId });
+            expect(heldQueue.structuredContent).toMatchObject({
+              items: [{ queuedRunId: heldFollowup.runId, held: true }],
+            });
             const cancelHeldCall = yield* invoke("task_cancel", {
               taskId: heldFollowup.taskId,
               clientRequestId: "cancel-held-delegated-followup",

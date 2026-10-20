@@ -79,11 +79,13 @@ const queueEntry = Schema.Struct({
   queuedRunId: RunId,
   text: Schema.String,
   truncated: Schema.Boolean,
+  /** Held after a stop or restart: it waits for the user to resume the queue. */
+  held: Schema.Boolean,
 });
 const QueueListTool = Tool.make("t3_queue_list", {
   ...commandTool,
   description:
-    "List queued messages in delivery order. Results are a live offset page; use t3_thread_read for full thread history.",
+    "List queued messages in delivery order. Results are a live offset page; use t3_thread_read for full thread history. A held message waits until the user resumes the queue; agents cannot release it.",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     cursor: Schema.optional(NonNegativeInt),
