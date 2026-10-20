@@ -245,7 +245,13 @@ function parseCodexRecord(parsed: unknown, state: CodexScanState): UsageRecord |
 
   const signature = JSON.stringify(last);
   if (cumulative !== null) {
+    // A new counter sequence starts over, so its first snapshot is the request itself.
+    const restarted =
+      previous !== null &&
+      cumulative.total_tokens < previous.total_tokens &&
+      CODEX_USAGE_FIELDS.every((key) => cumulative[key] === last[key]);
     if (
+      !restarted &&
       !CODEX_USAGE_FIELDS.every((key) => cumulative[key] - (previous?.[key] ?? 0) === last[key])
     ) {
       state.malformedRecords += 1;

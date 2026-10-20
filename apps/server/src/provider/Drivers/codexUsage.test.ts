@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
+import { totalTokens } from "@t3tools/provider-core/server/usage";
+
 import { codexUsageFormat, initialCodexScanState, parseCodexLine } from "./codexUsage.ts";
 
 describe("parseCodexLine", () => {
@@ -185,6 +187,35 @@ describe("parseCodexLine", () => {
       expect(parseCodexLine(counted(request, total), state)?.totals.outputTokens, field).toBe(20);
       expect(codexUsageFormat.readMalformedRecords?.(state), field).toBe(1);
     }
+  });
+
+  it("counts the first request of a new cumulative counter sequence once", () => {
+    const state = initialCodexScanState();
+    parseCodexLine(turnContext, state);
+    const requests = [
+      [counters(1000, 200), counters(1000, 200)],
+      [counters(100, 20), counters(100, 20)],
+      [counters(100, 20), counters(200, 40)],
+    ] as const;
+    const records = requests.flatMap(([last, total]) => {
+      const record = parseCodexLine(counted(last, total), state);
+      return record === null ? [] : [record];
+    });
+
+    expect({
+      requests: records.length,
+      processedTokens: records.reduce((sum, record) => sum + totalTokens(record.totals), 0),
+      skipped: codexUsageFormat.readMalformedRecords?.(state),
+    }).toEqual({ requests: 3, processedTokens: 1440, skipped: 0 });
+  });
+
+  it("still rejects a cumulative drop that does not match the request", () => {
+    const state = initialCodexScanState();
+    parseCodexLine(turnContext, state);
+    parseCodexLine(counted(counters(1000, 200), counters(1000, 200)), state);
+
+    expect(parseCodexLine(counted(counters(100, 20), counters(90, 20)), state)).toBeNull();
+    expect(codexUsageFormat.readMalformedRecords?.(state)).toBe(1);
   });
 
   it.each(["request", "cumulative"])("skips malformed %s counters and recovers", (malformed) => {
