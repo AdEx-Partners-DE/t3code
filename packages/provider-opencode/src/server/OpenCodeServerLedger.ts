@@ -171,26 +171,26 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
   // leaves them running: Windows does not end a process's children with it.
   const recordable = platform === "linux" || platform === "darwin" || platform === "win32";
 
-  const observeLinux = (pid: number, group?: number) =>
-    Effect.gen(function* () {
-      const stat = yield* fs.readFileString(`/proc/${pid}/stat`);
-      const fields = stat
-        .slice(stat.lastIndexOf(")") + 2)
-        .trim()
-        .split(/\s+/);
-      const pgid = Number(fields[2]);
-      const startTime = fields[19];
-      if (!Number.isSafeInteger(pgid) || startTime === undefined) return undefined;
-      if (group !== undefined && pgid !== group) return undefined;
-      const cmdline = yield* fs.readFileString(`/proc/${pid}/cmdline`);
-      return {
-        pid,
-        pgid,
-        startTime,
-        command: cmdline.replace(/\0$/, "").replaceAll("\0", " "),
-        zombie: fields[0] === "Z",
-      } satisfies ObservedProcess;
-    });
+  // A process-group scan calls this for every /proc entry; avoid a span per process.
+  const observeLinux = Effect.fnUntraced(function* (pid: number, group?: number) {
+    const stat = yield* fs.readFileString(`/proc/${pid}/stat`);
+    const fields = stat
+      .slice(stat.lastIndexOf(")") + 2)
+      .trim()
+      .split(/\s+/);
+    const pgid = Number(fields[2]);
+    const startTime = fields[19];
+    if (!Number.isSafeInteger(pgid) || startTime === undefined) return undefined;
+    if (group !== undefined && pgid !== group) return undefined;
+    const cmdline = yield* fs.readFileString(`/proc/${pid}/cmdline`);
+    return {
+      pid,
+      pgid,
+      startTime,
+      command: cmdline.replace(/\0$/, "").replaceAll("\0", " "),
+      zombie: fields[0] === "Z",
+    } satisfies ObservedProcess;
+  });
 
   const psDarwin = (selection: ReadonlyArray<string>) =>
     spawner
@@ -322,8 +322,8 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
     (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
   );
 
-  const record = (server: Parameters<OpenCodeServerLedger["Service"]["track"]>[0]) =>
-    Effect.gen(function* () {
+  const record = Effect.fn("OpenCodeServerLedger.record")(
+    function* (server: Parameters<OpenCodeServerLedger["Service"]["track"]>[0]) {
       if (!recordable) return Effect.void;
       const pgid = server.pid;
       // The spawned process leads the group. If it already exited (a wrapper
@@ -372,14 +372,13 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
             Effect.logWarning("Could not forget a stopped OpenCode server", { cause }),
           ),
         );
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Could not record an OpenCode server process", { cause }).pipe(
-          Effect.as(Effect.void),
-        ),
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Could not record an OpenCode server process", { cause }).pipe(
+        Effect.as(Effect.void),
       ),
-      Effect.withSpan("OpenCodeServerLedger.record"),
-    );
+    ),
+  );
 
   const track: OpenCodeServerLedger["Service"]["track"] = (server) =>
     platform !== "win32"
@@ -400,49 +399,50 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
   // Signals only a group whose recorded member still has the same pid, start
   // time, group, and full command line, so a recycled pid is never touched.
   // Returns false when the recorded process could not be queried, so its entry is kept.
-  const stopOrphan = (entry: OpenCodeServerEntry) =>
-    Effect.gen(function* () {
-      const observed = yield* observeOrUnknown(entry.pid);
-      if (observed === "unknown") return false;
-      if (
-        observed === undefined ||
-        observed.zombie ||
-        observed.startTime !== entry.startTime ||
-        (platform !== "win32" && observed.pgid !== entry.pgid) ||
-        observed.command !== entry.command
-      ) {
-        return true;
-      }
-      yield* Effect.logInfo("Stopping an OpenCode server left by a previous T3 Code server", {
-        pid: entry.pgid,
-        port: entry.port,
-      });
-      if (platform === "win32") {
-        // The recorded process is the server itself; `/T` takes anything it started along.
-        yield* spawner
-          .string(
-            ChildProcess.make("taskkill", ["/PID", String(entry.pid), "/T", "/F"], {
-              stdin: "ignore",
-              stderr: "ignore",
-            }),
-          )
-          .pipe(Effect.timeout("15 seconds"), Effect.ignore);
-        // Judged by the process rather than taskkill's output: the entry stays unless the server
-        // is known to be gone, so a later start can try again.
-        const after = yield* observeOrUnknown(entry.pid);
-        return after !== "unknown" && (after === undefined || after.startTime !== entry.startTime);
-      }
-      signalGroup(entry.pgid, "SIGTERM");
-      for (let attempt = 0; attempt < STOP_POLL_ATTEMPTS && groupExists(entry.pgid); attempt++) {
-        yield* Effect.sleep(STOP_POLL_INTERVAL);
-      }
-      // The group never emptied, so its pgid cannot have been reused.
-      if (groupExists(entry.pgid)) signalGroup(entry.pgid, "SIGKILL");
+  const stopOrphan = Effect.fn("OpenCodeServerLedger.stopOrphan")(function* (
+    entry: OpenCodeServerEntry,
+  ) {
+    const observed = yield* observeOrUnknown(entry.pid);
+    if (observed === "unknown") return false;
+    if (
+      observed === undefined ||
+      observed.zombie ||
+      observed.startTime !== entry.startTime ||
+      (platform !== "win32" && observed.pgid !== entry.pgid) ||
+      observed.command !== entry.command
+    ) {
       return true;
+    }
+    yield* Effect.logInfo("Stopping an OpenCode server left by a previous T3 Code server", {
+      pid: entry.pgid,
+      port: entry.port,
     });
+    if (platform === "win32") {
+      // The recorded process is the server itself; `/T` takes anything it started along.
+      yield* spawner
+        .string(
+          ChildProcess.make("taskkill", ["/PID", String(entry.pid), "/T", "/F"], {
+            stdin: "ignore",
+            stderr: "ignore",
+          }),
+        )
+        .pipe(Effect.timeout("15 seconds"), Effect.ignore);
+      // Judged by the process rather than taskkill's output: the entry stays unless the server
+      // is known to be gone, so a later start can try again.
+      const after = yield* observeOrUnknown(entry.pid);
+      return after !== "unknown" && (after === undefined || after.startTime !== entry.startTime);
+    }
+    signalGroup(entry.pgid, "SIGTERM");
+    for (let attempt = 0; attempt < STOP_POLL_ATTEMPTS && groupExists(entry.pgid); attempt++) {
+      yield* Effect.sleep(STOP_POLL_INTERVAL);
+    }
+    // The group never emptied, so its pgid cannot have been reused.
+    if (groupExists(entry.pgid)) signalGroup(entry.pgid, "SIGKILL");
+    return true;
+  });
 
-  const reapEntry = (entryPath: string) =>
-    Effect.gen(function* () {
+  const reapEntry = Effect.fn("OpenCodeServerLedger.reapEntry")(
+    function* (entryPath: string) {
       const entry = decodeEntry(yield* fs.readFileString(entryPath));
       if (Option.isSome(entry) && entry.value.stateDir === input.stateDir) {
         // Running or unknown: the entry stays for a later start.
@@ -450,11 +450,14 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
         if (!(yield* stopOrphan(entry.value))) return;
       }
       yield* fs.remove(entryPath, { force: true });
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Could not clean up a recorded OpenCode server", { entryPath, cause }),
+    },
+    (effect, entryPath) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not clean up a recorded OpenCode server", { entryPath, cause }),
+        ),
       ),
-    );
+  );
 
   const reapOrphans = Effect.gen(function* () {
     const names = yield* fs.readDirectory(directory).pipe(Effect.orElseSucceed(() => []));

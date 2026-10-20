@@ -17,6 +17,9 @@ if (
   })
 ) {
   const command = process.argv[2];
+  // Guard sockets before any dispatch path can load outbound-capable modules.
+  const { ignoreMacosTypeOfServiceEinval } = await import("./outboundHttp.ts");
+  ignoreMacosTypeOfServiceEinval();
   if (command === "__service-launcher" && process.argv.length === 3) {
     // The launcher owns shutdown signals. Keep it outside the full CLI's
     // Effect runtime, as on the existing serviceLauncherCommand path.

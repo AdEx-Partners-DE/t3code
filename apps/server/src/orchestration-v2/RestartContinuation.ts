@@ -209,6 +209,7 @@ export function restartContinuationRun(
 
 /** Consecutive automatic continuations allowed before a person has to step in. */
 const MAX_CONTINUATION_CHAIN = 3;
+const CONTINUATION_LOOP_WINDOW_MS = 5 * 60 * 1_000;
 
 export const continueRestartedRun = Effect.fn("RestartContinuation.continueRestartedRun")(
   function* (input: { readonly threadId: ThreadId; readonly sourceRunId: RunId }) {
@@ -268,11 +269,15 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
     if (projection.thread.providerInstanceId !== source.providerInstanceId) return;
     // A turn that keeps crashing the server would otherwise restart it forever.
     let chainLength = 0;
+    const loopWindowStart =
+      DateTime.toEpochMillis(source.completedAt ?? source.requestedAt) -
+      CONTINUATION_LOOP_WINDOW_MS;
     for (
       let run: (typeof projection.runs)[number] | undefined = source;
       run?.restartContinuationOfRunId !== undefined && chainLength < MAX_CONTINUATION_CHAIN;
       run = projection.runs.find((candidate) => candidate.id === run?.restartContinuationOfRunId)
     ) {
+      if (DateTime.toEpochMillis(run.requestedAt) < loopWindowStart) break;
       chainLength += 1;
     }
     if (chainLength >= MAX_CONTINUATION_CHAIN) {

@@ -404,6 +404,45 @@ it.effect.each(
   },
 );
 
+it.effect(
+  "returns no dispatched thread when sending an automation to a missing thread fails",
+  () => {
+    const harness = makeHarness();
+    const layerScheduledTasks = ScheduledTasks.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          harness.layer,
+          NodeCrypto.layer,
+          Scheduler.layer,
+          Layer.mock(SecretRequests.SecretRequests)({}),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const tasks = yield* ScheduledTasks.ScheduledTaskService;
+      const threadId = ThreadId.make("thread:missing");
+      const { task } = yield* tasks.upsert({
+        title: "Daily audit",
+        prompt: "Audit performance and crashes.",
+        enabled: false,
+        schedule: { type: "interval", everyMs: 60_000 },
+        projectId,
+        threadId,
+        workspaceStrategy: { type: "root" },
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const result = yield* tasks.runNow({ id: task.id });
+      assert.equal(result.task.lastRunStatus, "failed");
+      assert.isNull(result.threadId);
+      assert.equal(result.task.threadId, threadId);
+    }).pipe(Effect.provide(Layer.mergeAll(harness.layer, layerScheduledTasks)));
+  },
+);
+
 it.effect.each([
   { switchedTo: "another provider", selection: claudeModelSelection },
   { switchedTo: "another account of the same provider", selection: otherCodexModelSelection },

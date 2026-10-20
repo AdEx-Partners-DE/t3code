@@ -49,6 +49,38 @@ const STATUS_DOT_CLASS: Record<ScheduledTask["lastRunStatus"], string> = {
   failed: "bg-destructive",
 };
 
+function taskScheduleLine(
+  task: ScheduledTask,
+  timeZone: string | undefined,
+  held: boolean,
+  nowMs: number,
+) {
+  return (
+    <>
+      {scheduleLabel(task.schedule, timeZone)}
+      {!task.enabled ? (
+        " · off"
+      ) : held ? (
+        task.nextRunAt !== null && Date.parse(task.nextRunAt) <= nowMs ? (
+          <>
+            {" · paused with all tasks, due since "}
+            <ScheduledRelativeLabel value={task.nextRunAt} />
+          </>
+        ) : (
+          " · paused with all tasks"
+        )
+      ) : task.nextRunAt !== null ? (
+        <>
+          {" · next "}
+          <ScheduledRelativeLabel value={task.nextRunAt} />
+        </>
+      ) : (
+        ""
+      )}
+    </>
+  );
+}
+
 const RELATED_REASON_LABEL: Record<ThreadAutomationReason, string> = {
   "covers-open-threads": "Sends to all open threads",
   "waits-for-thread": "Starts when this thread finishes",
@@ -99,13 +131,14 @@ export function ThreadAutomationsPanel(props: {
   );
   const thread = useThreadShell(threadRef);
   const nowMinute = useNowMinute();
+  const nowMs = Date.parse(`${nowMinute}:00.000Z`);
 
   const tasks = tasksQuery.data?.tasks ?? [];
   const boundTasks = tasks.filter((task) => task.threadId === props.threadId);
   const relatedTasks = relatedThreadAutomations({ tasks, threadId: props.threadId, thread });
   const summary = formatAutomationsSummary(
     summarizeAutomations({ tasks, paused: allTasksPaused, exemptIds: pauseExemptIds }),
-    Date.parse(`${nowMinute}:00.000Z`),
+    nowMs,
   );
   // A load error must not look like "no automations" — this thread may have
   // tasks whose controls would silently vanish. Only hide the section when we
@@ -245,34 +278,22 @@ export function ThreadAutomationsPanel(props: {
                 aria-hidden
               />
             </span>
-            <div className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium text-foreground/80">
-                {task.title}
-              </span>
-              <p className="truncate text-2xs text-muted-foreground">
-                {scheduleLabel(task.schedule)}
-                {!task.enabled ? (
-                  " · off"
-                ) : isHeld(task) ? (
-                  task.nextRunAt !== null &&
-                  Date.parse(task.nextRunAt) <= Date.parse(`${nowMinute}:00.000Z`) ? (
-                    <>
-                      {" · paused with all tasks, due since "}
-                      <ScheduledRelativeLabel value={task.nextRunAt} />
-                    </>
-                  ) : (
-                    " · paused with all tasks"
-                  )
-                ) : task.nextRunAt !== null ? (
-                  <>
-                    {" · next "}
-                    <ScheduledRelativeLabel value={task.nextRunAt} />
-                  </>
-                ) : (
-                  ""
-                )}
-              </p>
-            </div>
+            <Tooltip>
+              <TooltipTrigger render={<div className="min-w-0 flex-1" />}>
+                <span className="block truncate text-sm font-medium text-foreground/80">
+                  {task.title}
+                </span>
+                <p className="truncate text-2xs text-muted-foreground">
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone, isHeld(task), nowMs)}
+                </p>
+              </TooltipTrigger>
+              <TooltipPopup side="left">
+                <p className="font-medium">{task.title}</p>
+                <p className="text-muted-foreground">
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone, isHeld(task), nowMs)}
+                </p>
+              </TooltipPopup>
+            </Tooltip>
             <Tooltip>
               <TooltipTrigger
                 render={

@@ -135,7 +135,8 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
  * authoritative and replaces them.
  *
  * A successful probe replaces the published windows only when its read is
- * at least as recent. Finishing a probe does not make its usage read newer.
+ * at least as recent. Finishing a probe does not make its usage read newer;
+ * an older probe still contributes its metadata.
  */
 export function resolveUsageLimitsAfterProbe(input: {
   readonly published: ServerProviderUsageLimits | undefined;
@@ -152,7 +153,13 @@ export function resolveUsageLimitsAfterProbe(input: {
     !probed.unavailable &&
     Date.parse(published.checkedAt) > Date.parse(probed.checkedAt)
   ) {
-    return published;
+    // Credits stream beside the windows, so the newer read owns both.
+    return {
+      ...probed,
+      checkedAt: published.checkedAt,
+      windows: published.windows,
+      ...(published.credits !== undefined ? { credits: published.credits } : {}),
+    };
   }
   return probed;
 }

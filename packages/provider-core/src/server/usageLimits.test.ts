@@ -138,12 +138,33 @@ describe("applyUsageLimitsUpdate", () => {
 });
 
 describe("resolveUsageLimitsAfterProbe", () => {
-  it("keeps newer published usage when a successful probe carries an older read", () => {
+  it("uses read order for windows while taking metadata from the successful probe", () => {
     const live = {
       checkedAt: "2026-09-03T12:00:05.000Z",
-      windows: [{ ...session, usedPercent: 95 }, weekly],
+      windows: [
+        { ...session, usedPercent: 95 },
+        { ...weekly, usedPercent: 70 },
+      ],
+      resetCredits: { availableCount: 2 },
+      externalUsage: { label: "Old dashboard", url: "https://example.com/old" },
     };
-    expect(resolveUsageLimitsAfterProbe({ published: live, probed: published })).toBe(live);
+    const probed = {
+      ...published,
+      windows: [{ ...session, usedPercent: 0 }],
+      resetCredits: { availableCount: 1 },
+      externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
+    };
+
+    expect(resolveUsageLimitsAfterProbe({ published: live, probed })).toEqual({
+      ...probed,
+      checkedAt: live.checkedAt,
+      windows: live.windows,
+    });
+
+    const sameTime = { ...probed, checkedAt: live.checkedAt };
+    const newer = { ...probed, checkedAt: "2026-09-03T12:00:06.000Z" };
+    expect(resolveUsageLimitsAfterProbe({ published: live, probed: sameTime })).toEqual(sameTime);
+    expect(resolveUsageLimitsAfterProbe({ published: live, probed: newer })).toEqual(newer);
   });
 
   it("keeps the last good windows through a failed probe but not an unsupported one", () => {
@@ -162,4 +183,11 @@ it("replaces the old account balance after a successful full probe", () => {
   ).toBeUndefined();
   const next = { ...published, credits: { hasCredits: false, unlimited: false, balance: "0" } };
   expect(resolveUsageLimitsAfterProbe({ published: previous, probed: next })).toBe(next);
+});
+
+it("keeps a newer streamed balance when an older probe finishes", () => {
+  const credits = { hasCredits: true, unlimited: false, balance: "42" };
+  const live = { ...published, checkedAt: "2026-09-03T12:00:05.000Z", credits };
+  const probed = { ...published, credits: { ...credits, balance: "50" } };
+  expect(resolveUsageLimitsAfterProbe({ published: live, probed })?.credits).toEqual(credits);
 });

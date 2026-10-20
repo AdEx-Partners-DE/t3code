@@ -202,7 +202,11 @@ function splitModelKey(value: string): ModelSelection | null {
   };
 }
 
-export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
+function scheduleTimeZoneLabel(timeZone: string | undefined) {
+  return timeZone === "Etc/UTC" ? "UTC" : timeZone;
+}
+
+export function scheduleLabel(schedule: ScheduledTaskSchedule, timeZone?: string): string {
   if (schedule.type === "webhook") return "On webhook";
   if (schedule.type === "idle") {
     const runs = `${schedule.allOpenThreads ? (schedule.projectOnly ? "Open threads of this project, when idle" : "All open threads, when idle") : "When idle"}${schedule.supervise === true ? ", supervised" : ""}, ${schedule.runsUsed ?? 0} of ${schedule.maxRuns} runs used`;
@@ -228,7 +232,8 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
       : weekdays.length === 5 && weekdays.every((day) => day >= 1 && day <= 5)
         ? "Weekdays"
         : weekdays.map((day) => WEEKDAY_LABELS[day]).join(", ");
-  return `${days} at ${schedule.timeOfDay}`;
+  const zone = scheduleTimeZoneLabel(timeZone);
+  return `${days} at ${schedule.timeOfDay}${zone === undefined ? "" : ` ${zone}`}`;
 }
 
 /**
@@ -427,6 +432,7 @@ function ScheduledTaskEnvironmentList({
             return {
               environment,
               connected,
+              timeZone: data?.timeZone,
               tasks: data?.tasks.filter((task) =>
                 matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
               ),
@@ -472,7 +478,7 @@ function ScheduledTaskEnvironmentList({
 
   return (
     <SettingsGroup>
-      {populated.map(({ environment, tasks }) => {
+      {populated.map(({ environment, tasks, timeZone }) => {
         const { primary, secondary } = settingsScopeEnvironmentLabels(environment, environments);
         const transport = environmentTransportLabel(environment);
         return (
@@ -502,6 +508,7 @@ function ScheduledTaskEnvironmentList({
                 key={task.id}
                 environmentId={environment.environmentId}
                 task={task}
+                timeZone={timeZone}
                 onEdit={() => onEdit(environment.environmentId, task)}
               />
             ))}
@@ -673,6 +680,7 @@ function ScheduledTaskEnvironmentSection({
                 key={task.id}
                 environmentId={environment.environmentId}
                 task={task}
+                timeZone={tasksQuery.data?.timeZone}
                 onEdit={() => onEdit(environment.environmentId, task)}
               />
             ))
@@ -686,10 +694,12 @@ function ScheduledTaskEnvironmentSection({
 function ScheduledTaskRow({
   environmentId,
   task,
+  timeZone,
   onEdit,
 }: {
   readonly environmentId: EnvironmentId;
   readonly task: ScheduledTask;
+  readonly timeZone: string | undefined;
   readonly onEdit: () => void;
 }) {
   const canOperate = useAtomValue(
@@ -759,7 +769,7 @@ function ScheduledTaskRow({
       status={
         <div className="flex flex-wrap items-center gap-2">
           <span>
-            {scheduleLabel(task.schedule)} ·{" "}
+            {scheduleLabel(task.schedule, timeZone)} ·{" "}
             {!task.enabled ? (
               "Off"
             ) : heldByPause ? (
@@ -1129,6 +1139,7 @@ function ScheduledTaskEditorDialog({
     draft.editingId !== null &&
     tasksQuery.data !== null &&
     !tasksQuery.data.tasks.some((entry) => entry.id === draft.editingId);
+  const runAtZone = scheduleTimeZoneLabel(tasksQuery.data?.timeZone);
   const liveTask = tasksQuery.data
     ? (tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId) ?? null)
     : task;
@@ -1728,6 +1739,9 @@ function ScheduledTaskEditorDialog({
                         setDraft((current) => ({ ...current, timeOfDay: event.target.value }))
                       }
                     />
+                    {runAtZone === undefined ? null : (
+                      <span className="text-xs text-muted-foreground">{runAtZone}</span>
+                    )}
                     <span className="text-xs text-muted-foreground">on</span>
                   </div>
                   <ToggleGroup
