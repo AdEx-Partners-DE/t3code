@@ -367,9 +367,18 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
     );
     const update = capabilities.update;
     if (!update) {
+      // The snapshot that offered the button can predate a broken install (an
+      // interrupted npm update leaves a placeholder binary). Re-check it so the
+      // client drops the button and the message says what actually happened.
+      const current = (yield* providerRegistry.refreshInstance(instanceId)).find(
+        (candidate) => candidate.instanceId === instanceId,
+      );
       return yield* new ServerProviderUpdateError({
         provider,
-        reason: "This provider does not support one-click updates.",
+        reason:
+          current !== undefined && !current.installed
+            ? "This provider is not installed, or its install is incomplete. Reinstall it, then try again."
+            : "This provider does not support one-click updates.",
       });
     }
 

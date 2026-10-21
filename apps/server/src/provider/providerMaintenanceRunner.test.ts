@@ -26,6 +26,7 @@ import * as ProviderMaintenanceRunner from "./providerMaintenanceRunner.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
+  makeManualOnlyProviderMaintenanceCapabilities,
   makeProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
@@ -306,6 +307,50 @@ describe("providerMaintenanceRunner", () => {
         ),
       );
     },
+  );
+
+  it.effect.each([
+    [false, "not installed, or its install is incomplete"],
+    [true, "does not support one-click updates"],
+  ] as const)(
+    "re-checks the provider when it has no update path (installed: %s)",
+    ([installed, reason]) =>
+      Effect.gen(function* () {
+        const { registry, providersRef } = yield* makeRegistry();
+        let refreshed = 0;
+        const updater = yield* makeTestRunner({
+          ...registry,
+          getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+            Effect.succeed(
+              makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
+            ),
+          refreshInstance: () => {
+            refreshed += 1;
+            return Ref.updateAndGet(providersRef, (providers) =>
+              providers.map((provider) => ({ ...provider, installed })),
+            );
+          },
+        });
+
+        const exit = yield* updater.updateProvider(CODEX_DRIVER).pipe(Effect.exit);
+        assert.strictEqual(refreshed, 1);
+        assert.strictEqual(Exit.isFailure(exit), true);
+        if (Exit.isFailure(exit)) {
+          const error = Cause.squash(exit.cause);
+          assert.strictEqual(isServerProviderUpdateError(error), true);
+          if (isServerProviderUpdateError(error)) {
+            assert.include(error.reason, reason);
+          }
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            layerNonWindowsPlatform,
+            layerLatestVersionHttpClient("0.0.0"),
+            layerMockSpawner(() => assert.fail("no update command may run")),
+          ),
+        ),
+      ),
   );
 
   it.effect("spawns the updater with the environment its capabilities declare", () => {
