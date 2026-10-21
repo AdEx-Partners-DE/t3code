@@ -34,7 +34,7 @@ export const THREAD_HISTORY_MIN_WINDOW_BYTES = 262_144;
 /** Extra rows let the projection query retain an inclusive cursor and prove another page exists. */
 export const THREAD_HISTORY_SNAPSHOT_ROW_LIMIT = THREAD_HISTORY_PAGE_POLICY.maxItems + 2;
 
-export const THREAD_HISTORY_CURSOR_MAX_LENGTH = 4_096;
+const THREAD_HISTORY_CURSOR_MAX_LENGTH = 4_096;
 
 export type ThreadHistoryPagePolicy = {
   readonly maxUserTurns?: number | undefined;

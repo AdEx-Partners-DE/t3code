@@ -48,6 +48,7 @@ import {
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
 import {
+  formatWorkingDurationLabel,
   resolveThreadProviderStack,
   threadRuntimeCanArchive,
   threadRuntimeIsActive,
@@ -205,7 +206,6 @@ import {
   buildMultiSelectThreadContextMenuItems,
   deleteSelectedThreadEntries,
   filterSidebarProjectScopeItems,
-  formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
   isSidebarNestedLinkClick,

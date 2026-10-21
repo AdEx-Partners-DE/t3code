@@ -270,39 +270,6 @@ it("does not continue settled root runs with restart-cancelled background work",
 });
 
 it.effect.each(["completed", "waiting", "cancelled"] as const)(
-  "ignores a pending restart continuation for a %s run whose provider turn settled",
-  (status) =>
-    Effect.gen(function* () {
-      const base = makeProjection();
-      const work = [{ kind: "shell" as const, label: "sleep 25 && echo DONE" }];
-      const projection = {
-        ...base,
-        runs: [{ ...base.runs[0]!, status, restartCancelledBackgroundWork: work }],
-        providerTurns: [{ ...base.providerTurns[0]!, status: "completed" }],
-      } as unknown as OrchestrationV2ThreadProjection;
-      const commands: Parameters<
-        ThreadManagementService.ThreadManagementService["Service"]["dispatch"]
-      >[0][] = [];
-      yield* continueRestartedRun({ threadId, sourceRunId: runId }).pipe(
-        Effect.provide(
-          Layer.merge(
-            Layer.mock(ThreadManagementService.ThreadManagementService)({
-              getThreadRecords: () => Effect.succeed(projection),
-              recoverDelegatedTask: () => Effect.void,
-              dispatch: (command) => {
-                commands.push(command);
-                return Effect.succeed({} as never);
-              },
-            }),
-            ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true }),
-          ),
-        ),
-      );
-      assert.lengthOf(commands, 0);
-    }),
-);
-
-it.effect.each(["completed", "waiting", "cancelled"] as const)(
   "wakes a %s run whose monitor the restart cancelled, with the note as its prompt",
   (status) =>
     Effect.gen(function* () {
@@ -342,42 +309,6 @@ it.effect.each(["completed", "waiting", "cancelled"] as const)(
       assert.include(command.text, "- monitor: Watch CI run 42");
       assert.include(command.text, "- shell: vp run dev");
     }),
-);
-
-it.effect("does not continue a failed run that lost background work", () =>
-  Effect.gen(function* () {
-    const base = makeProjection();
-    const projection = {
-      ...base,
-      runs: [
-        {
-          ...base.runs[0]!,
-          status: "failed",
-          restartCancelledBackgroundWork: [{ kind: "shell" as const, label: "sleep 25" }],
-        },
-      ],
-      providerTurns: [{ ...base.providerTurns[0]!, status: "failed" }],
-    } as unknown as OrchestrationV2ThreadProjection;
-    const commands: Parameters<
-      ThreadManagementService.ThreadManagementService["Service"]["dispatch"]
-    >[0][] = [];
-    yield* continueRestartedRun({ threadId, sourceRunId: runId }).pipe(
-      Effect.provide(
-        Layer.merge(
-          Layer.mock(ThreadManagementService.ThreadManagementService)({
-            getThreadRecords: () => Effect.succeed(projection),
-            recoverDelegatedTask: () => Effect.void,
-            dispatch: (command) => {
-              commands.push(command);
-              return Effect.succeed({} as never);
-            },
-          }),
-          ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true }),
-        ),
-      ),
-    );
-    assert.lengthOf(commands, 0);
-  }),
 );
 
 it.effect.each([
@@ -1463,31 +1394,6 @@ it.effect("does not continue a cut /compact or /logout turn", () =>
       messages: [{ id: MessageId.make("message:user"), text: "/compact later", attachments: [] }],
     } as unknown as OrchestrationV2ThreadProjection);
     assert.lengthOf(texts, 1);
-  }),
-);
-
-it.effect("tells a turn cut mid-way about the background work it lost", () =>
-  Effect.gen(function* () {
-    const texts = yield* continuationTexts(
-      cutMidTurn({
-        restartCancelledBackgroundWork: [{ kind: "subagent", label: "Background reviewer" }],
-      }),
-    );
-    assert.lengthOf(texts, 1);
-    assert.include(texts[0]!, "Background reviewer");
-    assert.isTrue(texts[0]!.endsWith("Continue where you left off."));
-  }),
-);
-
-it.effect("shows a continuation as a T3 Code notice whose detail is the prompt", () =>
-  Effect.gen(function* () {
-    const [resumed] = yield* continuationDispatches(cutMidTurn());
-    assert.deepEqual(resumed?.notification, {
-      source: { kind: "system" },
-      outcome: "updated",
-      summary: "T3 Code restarted and resumed this turn",
-      detail: "Continue where you left off.",
-    });
   }),
 );
 

@@ -120,7 +120,7 @@ function codexRateLimitsToWindows(
   return windows;
 }
 
-export function codexResetCreditsToContract(
+function codexResetCreditsToContract(
   summary: CodexResetCreditsSummary | null | undefined,
 ): ServerProviderResetCredits | undefined {
   if (!summary) return undefined;
