@@ -4963,6 +4963,62 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("send now releases only the next message of a held queue", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-send-now-held-thread");
+      const message = (id: string, dispatchMode: "start_immediately" | "queue_after_active") =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`runtime-layer-send-now-held-${id}`),
+          threadId,
+          messageId: MessageId.make(`runtime-layer-send-now-held-${id}`),
+          text: `Message ${id}.`,
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: dispatchMode },
+        });
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-send-now-held-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-send-now-held-project"),
+        title: "Send one message from a held queue",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/runtime-layer-send-now-held",
+      });
+      yield* message("active", "start_immediately");
+      yield* message("first", "queue_after_active");
+      yield* message("second", "queue_after_active");
+      yield* orchestrator.dispatch({
+        type: "queue.hold",
+        commandId: CommandId.make("runtime-layer-send-now-held-hold"),
+        threadId,
+      });
+
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make("runtime-layer-send-now-held-send-now"),
+        threadId,
+        startNextDespitePause: true,
+      });
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      const queued = after.runs.filter((run) => run.status === "queued");
+      assert.deepEqual(
+        queued.map((run) => run.queueHeld === true),
+        [false, true],
+      );
+    }),
+  );
+
   it.effect("a queued user message that starts after a settled run's question answers it", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

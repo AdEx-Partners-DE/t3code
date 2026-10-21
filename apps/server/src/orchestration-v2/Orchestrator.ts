@@ -11801,7 +11801,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
         }
         const now = yield* DateTime.now;
-        const queued = projection.runs.filter((run) => run.status === "queued");
+        // "Send now" starts one message; a hold on the messages behind it stays.
+        const queued =
+          command.startNextDespitePause === true
+            ? queuedRunsInDeliveryOrder(projection).slice(0, 1)
+            : projection.runs.filter((run) => run.status === "queued");
         for (const run of queued) {
           yield* emit(
             events,
