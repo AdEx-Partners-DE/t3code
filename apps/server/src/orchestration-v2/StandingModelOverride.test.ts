@@ -9,6 +9,7 @@ import {
   standingAlignmentStep,
   standingOverrideFromApplied,
   standingSelectionFor,
+  switchWaitsForRun,
   userChoseOtherModel,
   userWroteSinceOverride,
   withScopedOverride,
@@ -165,6 +166,27 @@ describe("describeSelection", () => {
     expect(
       describeSelection({ instanceId: "codex", model: "gpt-6-astra" } as unknown as Selection),
     ).toBe("codex/gpt-6-astra");
+  });
+});
+
+describe("switchWaitsForRun", () => {
+  type Selection = Parameters<typeof switchWaitsForRun>[0]["current"];
+  const claude = { instanceId: "claude_oneneutrino", model: "claude-opus-5-5" } as Selection;
+  const codex = { instanceId: "codex", model: "gpt-6-astra" } as Selection;
+  const codexHigh = {
+    ...codex,
+    options: [{ id: "reasoningEffort", value: "high" }],
+  } as Selection;
+
+  it("holds a switch to another instance while a run is under way", () => {
+    expect(switchWaitsForRun({ activeRunId: "run:1", current: claude, next: codex })).toBe(true);
+  });
+
+  it("moves an idle thread, and a running one within its instance", () => {
+    expect(switchWaitsForRun({ activeRunId: null, current: claude, next: codex })).toBe(false);
+    expect(switchWaitsForRun({ activeRunId: "run:1", current: codex, next: codexHigh })).toBe(
+      false,
+    );
   });
 });
 

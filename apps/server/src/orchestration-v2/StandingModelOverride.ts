@@ -303,6 +303,21 @@ export function describeSelection(selection: ModelSelection): string {
 }
 
 /**
+ * Moving a thread to another instance while its run is under way detaches that
+ * run's provider session and fails the turn (Alpha, 2026-10-21; upstream
+ * #22748). Such a thread keeps its instance until the run ends: a client lines
+ * its composer up from the reported selection, and automatic work aligns it
+ * before its next start.
+ */
+export function switchWaitsForRun(input: {
+  readonly activeRunId: string | null;
+  readonly current: ModelSelection;
+  readonly next: ModelSelection;
+}): boolean {
+  return input.activeRunId !== null && input.current.instanceId !== input.next.instanceId;
+}
+
+/**
  * What one alignment does. A thread already on the rule's model needs nothing,
  * whoever put it there; recording it as keeping its own choice would name a
  * difference that does not exist.
@@ -390,6 +405,15 @@ export const alignThreadWithStandingOverride = (
         }),
     });
     if (step === "none" || next === null) return;
+    if (
+      step === "align" &&
+      switchWaitsForRun({
+        activeRunId: thread.activeRunId,
+        current: thread.modelSelection,
+        next,
+      })
+    )
+      return;
     if (step === "kept-own-choice") {
       const current = describeSelection(thread.modelSelection);
       // A task on a timer comes by every few minutes; the same choice is recorded once.

@@ -35,6 +35,7 @@ import {
   readStandingOverride,
   rememberStandingOverride,
   scopeCovers,
+  switchWaitsForRun,
   type ThreadScope,
 } from "./StandingModelOverride.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
@@ -156,6 +157,17 @@ export const make = Effect.gen(function* () {
             includeQueuedRuns: true,
           })
           .pipe(Effect.ignore);
+        continue;
+      }
+      if (
+        switchWaitsForRun({
+          activeRunId: thread.activeRunId,
+          current: thread.modelSelection,
+          next,
+        })
+      ) {
+        // Reported so the composer offers the new model for the next message.
+        selections.push({ threadId: thread.id, modelSelection: next });
         continue;
       }
       const set = yield* threads
