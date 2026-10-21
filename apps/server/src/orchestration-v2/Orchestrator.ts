@@ -1594,11 +1594,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (candidate) => candidate.id === projection.thread.activeProviderThreadId,
       );
       const followsCurrent = followsCurrentConversation(queuedMessage);
-      const targetProviderThread = followsCurrent
-        ? activeProviderThread?.providerInstanceId === queuedRun.providerInstanceId
-          ? activeProviderThread
-          : rootProviderThreadsForProvider(projection, queuedRun.providerInstanceId)[0]
-        : storedProviderThread;
+      // A waiting run moved to another instance ("set on all open threads") still
+      // names the old instance's provider thread; resuming that one there would
+      // hand the old conversation's native id to the new provider.
+      const targetProviderThread =
+        followsCurrent || storedProviderThread.providerInstanceId !== queuedRun.providerInstanceId
+          ? activeProviderThread?.providerInstanceId === queuedRun.providerInstanceId
+            ? activeProviderThread
+            : rootProviderThreadsForProvider(projection, queuedRun.providerInstanceId)[0]
+          : storedProviderThread;
       const queuedProviderThread: OrchestrationV2ProviderThread = targetProviderThread ?? {
         id: idAllocator.derive.providerThread({
           driver: targetAdapter.driver,

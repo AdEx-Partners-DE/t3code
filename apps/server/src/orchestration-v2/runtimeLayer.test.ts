@@ -5073,6 +5073,93 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("a waiting message moved to another instance starts on that instance's thread", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-moved-queued-instance");
+      const otherSelection = { instanceId: alternateInstanceId, model: "gpt-5.5" };
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        createdBy: "user",
+        creationSource: "web",
+        projectId: ProjectId.make(`${threadId}:project`),
+        title: "Moved waiting message",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      for (const [index, type] of [
+        [0, "start_immediately"],
+        [1, "queue_after_active"],
+      ] as const) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`${threadId}:${index}`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:${index}`),
+          text: `Prompt ${index}`,
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+          modelSelection,
+          dispatchMode: { type },
+        });
+      }
+      const [active, queued] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+      assert.isDefined(active);
+      assert.isDefined(queued);
+      const originalProviderThreadId = queued.providerThreadId;
+      yield* orchestrator.dispatch({
+        type: "queue.hold",
+        commandId: CommandId.make(`${threadId}:hold`),
+        threadId,
+      });
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make(`${threadId}:active-completed`),
+            type: "run.updated",
+            threadId,
+            runId: active.id,
+            providerInstanceId: active.providerInstanceId,
+            occurredAt: now,
+            payload: { ...active, status: "completed", completedAt: now },
+          },
+        ],
+      });
+      // "Set on all open threads" moves the waiting message along with the thread.
+      yield* orchestrator.dispatch({
+        type: "thread.model-selection.set",
+        commandId: CommandId.make(`${threadId}:move`),
+        threadId,
+        modelSelection: otherSelection,
+        includeQueuedRuns: true,
+      });
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make(`${threadId}:resume`),
+        threadId,
+      });
+
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      const started = after.runs.find((run) => run.id === queued.id);
+      assert.equal(started?.providerInstanceId, alternateInstanceId);
+      assert.notEqual(started?.providerThreadId, originalProviderThreadId);
+      // The first instance keeps its own conversation for a later switch back.
+      assert.equal(
+        after.providerThreads.find((thread) => thread.id === originalProviderThreadId)
+          ?.providerInstanceId,
+        modelSelection.instanceId,
+      );
+    }),
+  );
+
   it.effect("keeps a limited provider's queue held after another provider completes a turn", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
