@@ -2916,7 +2916,8 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     /**
      * Start this thread's next queued message even while all queues are
-     * paused. Only that one starts; the rest waits for the pause to end.
+     * paused or this thread's queue is held. Only that one starts; the rest
+     * waits for the pause or the hold to end.
      */
     startNextDespitePause: Schema.optional(Schema.Boolean),
   }),
