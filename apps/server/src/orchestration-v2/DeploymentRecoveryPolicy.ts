@@ -99,6 +99,24 @@ const decodePayload = Schema.decodeSync(Payload);
 const decode = (rows: ReadonlyArray<Row>) =>
   rows.map((row) => ({ ...row, data: decodePayload(row.payload_json) }));
 
+// A stale turn flag is history only when its entire owner chain is terminal
+// and the provider thread has moved on. Missing owners never establish this.
+export const terminalProviderTurnHistory = (sql: SqlClient.SqlClient) => sql`EXISTS (
+  SELECT 1 FROM orchestration_v2_projection_run_attempts attempt
+  JOIN orchestration_v2_projection_runs run ON run.run_id = attempt.run_id
+  JOIN orchestration_v2_projection_nodes root ON root.node_id = attempt.root_node_id
+  WHERE attempt.attempt_id = turn.run_attempt_id
+    AND attempt.thread_id = turn.thread_id AND run.thread_id = turn.thread_id
+    AND attempt.provider_thread_id = turn.provider_thread_id
+    AND root.node_id = turn.node_id AND root.root_node_id = root.node_id
+    AND root.run_id = run.run_id AND root.thread_id = turn.thread_id
+    AND attempt.status IN ('completed', 'interrupted', 'failed', 'cancelled', 'superseded')
+    AND run.status IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
+    AND root.status IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
+    AND EXISTS (SELECT 1 FROM orchestration_v2_projection_provider_turns newer
+      WHERE newer.provider_thread_id = turn.provider_thread_id AND newer.ordinal > turn.ordinal)
+)`;
+
 export const inspectRecoveryPolicy = Effect.fn("DeploymentDrain.inspectRecoveryPolicy")(function* (
   now: number,
 ) {
@@ -144,8 +162,8 @@ export const inspectRecoveryPolicy = Effect.fn("DeploymentDrain.inspectRecoveryP
       );
       const sessions = yield* sql<Row>`SELECT * FROM orchestration_v2_projection_provider_sessions
       WHERE status IN ('starting', 'running', 'waiting')`;
-      const turns = yield* sql<Row>`SELECT * FROM orchestration_v2_projection_provider_turns
-      WHERE status IN ('pending', 'running', 'waiting')`;
+      const turns = yield* sql<Row>`SELECT * FROM orchestration_v2_projection_provider_turns turn
+      WHERE status IN ('pending', 'running', 'waiting') AND NOT ${terminalProviderTurnHistory(sql)}`;
       const ownerNodeIds = [
         ...new Set(
           [...requests, ...items].flatMap((row) => (row.node_id == null ? [] : [row.node_id])),
@@ -189,17 +207,8 @@ export const inspectRecoveryPolicy = Effect.fn("DeploymentDrain.inspectRecoveryP
         now,
       );
       return {
-        allowed,
-        // A successful classification permits roster entries only when every
-        // entry names a child blocked on an old, owned human question.
-        backgroundSessionIds: allowed
-          ? providers.flatMap((provider) =>
-              provider.provider_session_id != null &&
-              (provider.data.pendingBackgroundTasks?.length ?? 0) > 0
-                ? [provider.provider_session_id]
-                : [],
-            )
-          : [],
+        allowed: allowed !== false,
+        backgroundSubagentIds: allowed ? allowed.backgroundSubagentIds : [],
       };
     }),
   );
@@ -218,7 +227,7 @@ function classify(
     activity: ReadonlyArray<{ thread_id: string; at: string | null }>;
   },
   now: number,
-): boolean {
+): false | { backgroundSubagentIds: string[] } {
   const { runs, subagents, requests, items, providers, sessions, turns } = snapshot;
   const activity = new Map(snapshot.activity.map((row) => [row.thread_id, epoch(row.at)]));
   const lastActivity = (id: string | null | undefined) =>
@@ -447,6 +456,10 @@ function classify(
         (unit.waits.length > 0
           ? unit.waits.every((wait) => Number.isFinite(wait.at) && now - wait.at >= 60 * 60_000)
           : Number.isFinite(unit.at) && now - unit.at >= 30 * 60_000),
-    )
+    ) && {
+      backgroundSubagentIds: [...subagentUnits.values()].flatMap((unit) =>
+        unit.waits.length > 0 && unit.row.subagent_id !== undefined ? [unit.row.subagent_id] : [],
+      ),
+    }
   );
 }

@@ -1,4 +1,5 @@
 import {
+  NodeId,
   ProviderSessionId,
   ServerDrainError,
   type ServerDrainInput,
@@ -12,7 +13,7 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as WorkAdmission from "./WorkAdmission.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-import { inspectRecoveryPolicy } from "./DeploymentRecoveryPolicy.ts";
+import { inspectRecoveryPolicy, terminalProviderTurnHistory } from "./DeploymentRecoveryPolicy.ts";
 import type { OrchestrationEffectRequestV2 } from "./EffectOutbox.ts";
 
 export class DeploymentDrain extends Context.Service<
@@ -49,8 +50,8 @@ const make = Effect.gen(function* () {
         WHERE status IN ('preparing', 'starting', 'running', 'waiting'))
       OR EXISTS (SELECT 1 FROM orchestration_v2_projection_provider_sessions
         WHERE status IN ('starting', 'running', 'waiting'))
-      OR EXISTS (SELECT 1 FROM orchestration_v2_projection_provider_turns
-        WHERE status IN ('pending', 'running'))
+      OR EXISTS (SELECT 1 FROM orchestration_v2_projection_provider_turns turn
+        WHERE status IN ('pending', 'running', 'waiting') AND NOT ${terminalProviderTurnHistory(sql)})
       OR EXISTS (SELECT 1 FROM orchestration_v2_projection_subagents
         WHERE status IN ('pending', 'starting', 'running', 'waiting'))
       OR EXISTS (SELECT 1 FROM orchestration_v2_projection_provider_threads
@@ -71,7 +72,7 @@ const make = Effect.gen(function* () {
     const [snapshot] = yield* checkPersistedWork;
     if (snapshot === undefined) return yield* new ServerDrainError({ reason: "inspection_failed" });
     const disposition = snapshot.busy === 0 ? "idle" : "s97-recovery";
-    let backgroundSessionIds: readonly string[] = [];
+    let backgroundSubagentIds: readonly NodeId[] = [];
     if (snapshot.busy !== 0) {
       if (snapshot.pending_effects !== 0 || recoveryPolicy !== "s97")
         return yield* new ServerDrainError({ reason: "busy" });
@@ -82,7 +83,7 @@ const make = Effect.gen(function* () {
         ),
       );
       if (!policy.allowed) return yield* new ServerDrainError({ reason: "busy" });
-      backgroundSessionIds = policy.backgroundSessionIds;
+      backgroundSubagentIds = policy.backgroundSubagentIds.map((id) => NodeId.make(id));
     }
     const liveSessions = yield* sql<{ provider_session_id: string }>`
       SELECT provider_session_id FROM orchestration_v2_projection_provider_sessions
@@ -96,14 +97,20 @@ const make = Effect.gen(function* () {
         .pipe(
           Effect.mapError((cause) => new ServerDrainError({ reason: "inspection_failed", cause })),
         );
+      if (Option.isNone(runtime)) continue;
+      const probe = runtime.value.hasPendingBackgroundWorkExceptSubagents;
+      const pending =
+        probe !== undefined
+          ? probe(backgroundSubagentIds)
+          : (runtime.value.hasPendingBackgroundWork ?? Effect.succeed(true));
       if (
-        Option.isSome(runtime) &&
-        runtime.value.hasPendingBackgroundWork !== undefined &&
-        (yield* runtime.value.hasPendingBackgroundWork) &&
-        !backgroundSessionIds.includes(row.provider_session_id)
-      ) {
+        yield* pending.pipe(
+          Effect.catchCause((cause) =>
+            Effect.fail(new ServerDrainError({ reason: "inspection_failed", cause })),
+          ),
+        )
+      )
         return yield* new ServerDrainError({ reason: "busy" });
-      }
     }
     return disposition;
   });

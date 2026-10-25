@@ -3536,6 +3536,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           const terminal = harness.terminalEvents()[0]!;
           assert.equal(terminal.status, "completed");
           assert.isTrue(yield* harness.hasPendingBackgroundWork);
+          assert.isTrue(yield* harness.runtime.hasPendingBackgroundWorkExceptSubagents!([]));
           assert.isFalse(
             yield* harness.runtime.hasPendingBackgroundWorkForThread!({
               ...harness.providerThread,
@@ -5985,6 +5986,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(DateTime.toEpochMillis(reopened!.subagent.startedAt!), 1782622470000);
         assert.isNull(reopened!.subagent.completedAt);
         assert.isTrue(yield* harness.hasPendingBackgroundWork);
+        assert.isTrue(yield* harness.runtime.hasPendingBackgroundWorkExceptSubagents!([]));
+        assert.isFalse(
+          yield* harness.runtime.hasPendingBackgroundWorkExceptSubagents!([reopened!.subagent.id]),
+        );
 
         yield* TestClock.adjust("30 seconds");
         yield* harness.until(() => {

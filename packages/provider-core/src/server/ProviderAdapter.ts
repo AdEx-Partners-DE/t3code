@@ -549,6 +549,10 @@ export interface ProviderAdapterV2SessionRuntime {
   /** Manager runtimes broadcast independent subscriptions; adapters may expose only a single-consumer stream. */
   readonly subscribeEvents?: Effect.Effect<ProviderAdapterV2EventSubscription>;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
+  /** Session-wide probe excluding only these subagents; other tasks and buffered work still count. */
+  readonly hasPendingBackgroundWorkExceptSubagents?: (
+    subagentIds: ReadonlyArray<OrchestrationV2Subagent["id"]>,
+  ) => Effect.Effect<boolean>;
   /** Overrides the session-wide probe so sibling threads cannot keep this root subscription open. */
   readonly hasPendingBackgroundWorkForThread?: (
     providerThread: OrchestrationV2ProviderThread,

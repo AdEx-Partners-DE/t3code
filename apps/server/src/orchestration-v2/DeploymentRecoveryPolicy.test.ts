@@ -209,46 +209,193 @@ it.effect.each(["silent", "event heartbeat", "item heartbeat"] as const)(
     }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect.each([false, true])(
-  "native child question with unknown extra background = %s",
-  (extraBackground) =>
-    Effect.gen(function* () {
-      yield* execution;
-      yield* question;
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`INSERT INTO orchestration_v2_projection_subagents
+it.effect.each([
+  "covered child",
+  "persisted command",
+  "fresh runtime command",
+  "buffered runtime work",
+  "missing coverage probe",
+  "missing background probe",
+] as const)("native child question with %s", (scenario) =>
+  Effect.gen(function* () {
+    yield* execution;
+    yield* question;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO orchestration_v2_projection_subagents
     (subagent_id, thread_id, parent_node_id, provider, provider_thread_id, origin, status, started_at, updated_at, payload_json)
     VALUES ('child', 'thread', 'root', 'codex', 'child-provider', 'provider_native', 'waiting', ${old}, ${old},
       '{"nativeTaskRef":{"nativeId":"native-child"}}')`;
-      yield* sql`UPDATE orchestration_v2_projection_nodes SET parent_node_id = 'child' WHERE node_id = 'question-node'`;
-      yield* sql`UPDATE orchestration_v2_projection_provider_sessions SET status = 'ready'`;
-      yield* sql`UPDATE orchestration_v2_projection_provider_threads SET payload_json = ${JSON.stringify(
-        {
-          pendingBackgroundTasks: [
-            { kind: "subagent", taskId: "native-child" },
-            ...(extraBackground ? [{ kind: "command", taskId: "unknown-command" }] : []),
-          ],
-        },
-      )}`;
-      const drain = yield* DeploymentDrain.DeploymentDrain;
-      const acquire = drain.execute({ operation: "acquire", leaseId, recoveryPolicy: "s97" });
-      if (extraBackground) assert.equal((yield* Effect.flip(acquire)).reason, "busy");
-      else assert.equal((yield* acquire).state, "held");
-    }).pipe(
-      Effect.provide(
-        DeploymentDrain.layer.pipe(
-          Layer.provide(
-            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
-              get: () =>
-                Effect.succeedSome({
-                  hasPendingBackgroundWork: Effect.succeed(true),
-                } as ProviderAdapter.ProviderAdapterV2SessionRuntime),
-            }),
-          ),
-          Layer.provideMerge(SqlitePersistence.layerMemory),
+    yield* sql`UPDATE orchestration_v2_projection_nodes SET parent_node_id = 'child' WHERE node_id = 'question-node'`;
+    yield* sql`UPDATE orchestration_v2_projection_provider_sessions SET status = 'ready'`;
+    yield* sql`UPDATE orchestration_v2_projection_provider_threads SET payload_json = ${JSON.stringify(
+      {
+        pendingBackgroundTasks: [
+          { kind: "subagent", taskId: "native-child" },
+          ...(scenario === "persisted command"
+            ? [{ kind: "command", taskId: "unknown-command" }]
+            : []),
+        ],
+      },
+    )}`;
+    const drain = yield* DeploymentDrain.DeploymentDrain;
+    const acquire = drain.execute({ operation: "acquire", leaseId, recoveryPolicy: "s97" });
+    if (scenario === "covered child") {
+      const held = yield* acquire;
+      assert.isTrue(held.state === "held" && held.disposition === "s97-recovery");
+    } else {
+      assert.equal((yield* Effect.flip(acquire)).reason, "busy");
+      assert.equal((yield* drain.execute({ operation: "status" })).state, "open");
+    }
+  }).pipe(
+    Effect.provide(
+      DeploymentDrain.layer.pipe(
+        Layer.provide(
+          Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+            get: () => {
+              const runtime: Partial<ProviderAdapter.ProviderAdapterV2SessionRuntime> = {
+                providerSessionId: ProviderSessionId.make("session"),
+                hasPendingBackgroundWorkForThread: () => Effect.succeed(false),
+                ...(scenario === "missing background probe"
+                  ? {}
+                  : { hasPendingBackgroundWork: Effect.succeed(true) }),
+                ...(scenario === "missing coverage probe" || scenario === "missing background probe"
+                  ? {}
+                  : {
+                      hasPendingBackgroundWorkExceptSubagents: (ids: readonly string[]) =>
+                        Effect.succeed(
+                          !ids.includes("child") ||
+                            scenario === "fresh runtime command" ||
+                            scenario === "buffered runtime work",
+                        ),
+                    }),
+              };
+              return Effect.succeedSome(runtime as ProviderAdapter.ProviderAdapterV2SessionRuntime);
+            },
+          }),
         ),
+        Layer.provideMerge(SqlitePersistence.layerMemory),
       ),
     ),
+  ),
+);
+
+const terminalHistory = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`INSERT INTO orchestration_v2_projection_runs
+    (run_id, thread_id, ordinal, provider, provider_thread_id, status, requested_at, payload_json)
+    VALUES ('history-run', 'history-thread', 0, 'codex', 'history-provider', 'failed', ${fresh}, '{}')`;
+  yield* sql`INSERT INTO orchestration_v2_projection_run_attempts
+    (attempt_id, thread_id, run_id, attempt_ordinal, root_node_id, provider, provider_thread_id, provider_turn_id, status, payload_json)
+    VALUES ('history-attempt', 'history-thread', 'history-run', 1, 'history-root', 'codex',
+      'history-provider', 'history-turn', 'failed', '{}')`;
+  yield* sql`INSERT INTO orchestration_v2_projection_nodes
+    (node_id, thread_id, run_id, root_node_id, kind, status, payload_json)
+    VALUES ('history-root', 'history-thread', 'history-run', 'history-root', 'root_turn', 'failed', '{}')`;
+  yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
+    (provider_thread_id, thread_id, provider, provider_session_id, status, updated_at, payload_json)
+    VALUES ('history-provider', 'history-thread', 'codex', 'history-session', 'idle', ${fresh}, '{}')`;
+  yield* sql`INSERT INTO orchestration_v2_projection_provider_sessions
+    (provider_session_id, thread_id, provider, status, updated_at, payload_json)
+    VALUES ('history-session', 'history-thread', 'codex', 'stopped', ${fresh}, '{}')`;
+  yield* sql`INSERT INTO orchestration_v2_projection_provider_turns
+    (provider_turn_id, thread_id, provider_thread_id, node_id, run_attempt_id, ordinal, status, started_at, payload_json)
+    VALUES ('history-turn', 'history-thread', 'history-provider', 'history-root', 'history-attempt', 0, 'running', ${fresh}, '{}'),
+      ('newer-history-turn', 'history-thread', 'history-provider', 'newer-root', NULL, 1348, 'completed', ${fresh}, '{}')`;
+});
+
+it.effect.each(["idle", "s97"] as const)(
+  "%s ignores proven terminal history without an age exemption",
+  (mode) =>
+    Effect.gen(function* () {
+      yield* terminalHistory;
+      if (mode === "s97") {
+        yield* execution;
+        yield* question;
+      }
+      const drain = yield* DeploymentDrain.DeploymentDrain;
+      const held = yield* drain.execute({
+        operation: "acquire",
+        leaseId,
+        ...(mode === "s97" ? { recoveryPolicy: "s97" as const } : {}),
+      });
+      assert.isTrue(
+        held.state === "held" && held.disposition === (mode === "idle" ? "idle" : "s97-recovery"),
+      );
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect.each([
+  "missing attempt",
+  "missing run",
+  "missing root",
+  "active attempt",
+  "active run",
+  "active root",
+  "mismatched owner",
+  "latest turn",
+  "background roster",
+  "background command",
+] as const)("terminal history still blocks with %s", (scenario) =>
+  Effect.gen(function* () {
+    yield* terminalHistory;
+    const sql = yield* SqlClient.SqlClient;
+    yield* TestClock.setTime(Date.parse(now));
+    yield* sql`UPDATE orchestration_v2_projection_runs SET requested_at = ${old}`;
+    yield* sql`UPDATE orchestration_v2_projection_provider_turns SET started_at = ${old}`;
+    switch (scenario) {
+      case "missing attempt":
+        yield* sql`UPDATE orchestration_v2_projection_provider_turns SET run_attempt_id = NULL WHERE provider_turn_id = 'history-turn'`;
+        break;
+      case "missing run":
+        yield* sql`UPDATE orchestration_v2_projection_run_attempts SET run_id = 'unknown'`;
+        break;
+      case "missing root":
+        yield* sql`UPDATE orchestration_v2_projection_run_attempts SET root_node_id = 'unknown'`;
+        break;
+      case "active attempt":
+        yield* sql`UPDATE orchestration_v2_projection_run_attempts SET status = 'running'`;
+        break;
+      case "active run":
+        yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'running' WHERE run_id = 'history-run'`;
+        break;
+      case "active root":
+        yield* sql`UPDATE orchestration_v2_projection_nodes SET status = 'running' WHERE node_id = 'history-root'`;
+        break;
+      case "mismatched owner":
+        yield* sql`UPDATE orchestration_v2_projection_run_attempts SET thread_id = 'other-thread'`;
+        break;
+      case "latest turn":
+        yield* sql`UPDATE orchestration_v2_projection_provider_turns SET ordinal = 1349 WHERE provider_turn_id = 'history-turn'`;
+        break;
+      case "background roster":
+        yield* sql`UPDATE orchestration_v2_projection_provider_threads SET payload_json =
+          '{"pendingBackgroundTasks":[{"kind":"command","taskId":"independent"}]}' WHERE provider_thread_id = 'history-provider'`;
+        break;
+      case "background command":
+        yield* sql`INSERT INTO orchestration_v2_projection_turn_items
+          (turn_item_id, thread_id, run_id, node_id, ordinal, type, status, updated_at, payload_json)
+          VALUES ('independent', 'history-thread', 'history-run', 'history-root', 0, 'command_execution', 'running', ${old}, '{}')`;
+        break;
+    }
+    const drain = yield* DeploymentDrain.DeploymentDrain;
+    for (const recoveryPolicy of [undefined, "s97"] as const) {
+      if (recoveryPolicy === "s97") {
+        yield* execution;
+        yield* question;
+      }
+      assert.equal(
+        (yield* Effect.flip(
+          drain.execute({
+            operation: "acquire",
+            leaseId,
+            ...(recoveryPolicy === undefined ? {} : { recoveryPolicy }),
+          }),
+        )).reason,
+        "busy",
+      );
+      assert.equal((yield* drain.execute({ operation: "status" })).state, "open");
+    }
+  }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("ready sessions and persistent tools do not block an idle lease", () =>

@@ -8377,6 +8377,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.lengthOf(harness.continuationRequests, 1);
         assert.lengthOf(harness.terminalEvents(), 1);
         assert.isTrue(yield* harness.hasPendingBackgroundWork);
+        assert.isTrue(yield* harness.runtime.hasPendingBackgroundWorkExceptSubagents!([]));
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
@@ -11054,6 +11055,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         yield* harness.awaitTerminal(1);
         assert.isTrue(yield* harness.hasPendingBackgroundWork);
+
+        const covered = [subagentEvents().at(-1)!.subagent.id];
+        assert.isTrue(yield* harness.runtime.hasPendingBackgroundWorkExceptSubagents!([]));
+        assert.isFalse(yield* harness.runtime.hasPendingBackgroundWorkExceptSubagents!(covered));
+        yield* harness.offerAndWait(wakeTaskStarted);
+        assert.isTrue(yield* harness.runtime.hasPendingBackgroundWorkExceptSubagents!(covered));
+        yield* harness.offerAndWait(wakeNotification);
+        assert.isFalse(yield* harness.runtime.hasPendingBackgroundWorkExceptSubagents!(covered));
 
         yield* Queue.offer(harness.sdkMessages, subagentStoppedNotification);
         yield* harness.awaitContinuation(1);

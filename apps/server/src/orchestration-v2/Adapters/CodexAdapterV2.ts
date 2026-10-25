@@ -6772,6 +6772,31 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           Effect.forkIn(scope),
         );
 
+        const hasPendingBackgroundWorkExceptSubagents = Effect.fn(
+          "CodexAdapterV2.hasPendingBackgroundWorkExceptSubagents",
+        )(function* (subagentIds: ReadonlyArray<OrchestrationV2Subagent["id"]>) {
+          const covered = new Set(subagentIds);
+          for (const items of (yield* Ref.get(runningCommandItemsByTurn)).values()) {
+            if (items.size > 0) {
+              return true;
+            }
+          }
+          for (const items of (yield* Ref.get(runningDynamicToolsByTurn)).values()) {
+            if (items.size > 0) {
+              return true;
+            }
+          }
+          if ((yield* Ref.get(pendingMcpAppCaptures)).size > 0) {
+            return true;
+          }
+          for (const subagent of (yield* Ref.get(subagentThreads)).values()) {
+            if (subagent.task.status === "running" && !covered.has(subagent.task.id)) {
+              return true;
+            }
+          }
+          return false;
+        });
+
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
           driver: CODEX_PROVIDER,
@@ -6780,27 +6805,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           events: Stream.fromEffectRepeat(Queue.take(events)),
           canReuseContextUsage: canReuseCodexContextUsage,
           // Idle release can beat delayed subagent resumes: Codex reports them completed between turns with no resume-expected signal.
-          hasPendingBackgroundWork: Effect.gen(function* () {
-            for (const items of (yield* Ref.get(runningCommandItemsByTurn)).values()) {
-              if (items.size > 0) {
-                return true;
-              }
-            }
-            for (const items of (yield* Ref.get(runningDynamicToolsByTurn)).values()) {
-              if (items.size > 0) {
-                return true;
-              }
-            }
-            if ((yield* Ref.get(pendingMcpAppCaptures)).size > 0) {
-              return true;
-            }
-            for (const subagent of (yield* Ref.get(subagentThreads)).values()) {
-              if (subagent.task.status === "running") {
-                return true;
-              }
-            }
-            return false;
-          }),
+          hasPendingBackgroundWork: hasPendingBackgroundWorkExceptSubagents([]),
+          hasPendingBackgroundWorkExceptSubagents,
           hasPendingBackgroundWorkForThread: Effect.fn(
             "CodexAdapterV2.hasPendingBackgroundWorkForThread",
           )(function* (providerThread) {

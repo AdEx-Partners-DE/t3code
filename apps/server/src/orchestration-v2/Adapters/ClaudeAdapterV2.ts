@@ -10221,6 +10221,43 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           },
         );
 
+        const hasPendingBackgroundWorkExceptSubagents = Effect.fn(
+          "ClaudeAdapterV2.hasPendingBackgroundWorkExceptSubagents",
+        )(function* (subagentIds: ReadonlyArray<OrchestrationV2Subagent["id"]>) {
+          const covered = new Set(subagentIds);
+          const subagents = yield* Ref.get(sessionSubagentsByTaskId);
+          for (const roster of (yield* Ref.get(pendingBackgroundTasksByNativeThread)).values()) {
+            for (const task of roster.values()) {
+              const subagent = subagents.get(task.taskId);
+              if (
+                task.kind !== "subagent" ||
+                subagent === undefined ||
+                !covered.has(subagent.task.id)
+              )
+                return true;
+            }
+          }
+          for (const subagent of subagents.values()) {
+            if (subagent.task.status === "running" && !covered.has(subagent.task.id)) {
+              return true;
+            }
+          }
+          const buffers = yield* Ref.get(wakeBuffers);
+          for (const entry of buffers.values()) {
+            if (
+              entry.messages.some(
+                (message) =>
+                  message.type === "user" ||
+                  message.type === "assistant" ||
+                  message.type === "result",
+              )
+            ) {
+              return true;
+            }
+          }
+          return false;
+        });
+
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
           driver: CLAUDE_PROVIDER,
@@ -10230,32 +10267,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, selection),
           events: Stream.fromEffectRepeat(Queue.take(events)),
           backgroundTasksEndWithProcess: true,
-          hasPendingBackgroundWork: Effect.gen(function* () {
-            for (const roster of (yield* Ref.get(pendingBackgroundTasksByNativeThread)).values()) {
-              if (roster.size > 0) {
-                return true;
-              }
-            }
-            for (const subagent of (yield* Ref.get(sessionSubagentsByTaskId)).values()) {
-              if (subagent.task.status === "running") {
-                return true;
-              }
-            }
-            const buffers = yield* Ref.get(wakeBuffers);
-            for (const entry of buffers.values()) {
-              if (
-                entry.messages.some(
-                  (message) =>
-                    message.type === "user" ||
-                    message.type === "assistant" ||
-                    message.type === "result",
-                )
-              ) {
-                return true;
-              }
-            }
-            return false;
-          }),
+          hasPendingBackgroundWork: hasPendingBackgroundWorkExceptSubagents([]),
+          hasPendingBackgroundWorkExceptSubagents,
           hasPendingBackgroundWorkForThread: Effect.fn(
             "ClaudeAdapterV2.hasPendingBackgroundWorkForThread",
           )(function* (providerThread) {
