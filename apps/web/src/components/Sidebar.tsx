@@ -18,6 +18,7 @@ import {
   resolveNextWaitingThread,
   type WaitingThreadKind,
   threadsWaitingOnAnswer,
+  sidebarProjectPriorityKey,
   summariseOpenThreads,
   filterOpenThreads,
   type OpenThreadFilter,
@@ -250,6 +251,17 @@ import {
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
 } from "./sidebar/SidebarListMarkers";
+
+const PROJECT_PRIORITY_CHOICES = [
+  { id: "project-priority:high", label: "High", value: "high" },
+  { id: "project-priority:normal", label: "Normal", value: "normal" },
+  { id: "project-priority:low", label: "Low", value: "low" },
+] as const;
+
+type ProjectPriorityMenuId = (typeof PROJECT_PRIORITY_CHOICES)[number]["id"] | "project-priority";
+function isProjectPriorityMenuId(id: string): id is ProjectPriorityMenuId {
+  return id === "project-priority" || PROJECT_PRIORITY_CHOICES.some((choice) => choice.id === id);
+}
 
 const SIDEBAR_INBOX_ORDER_LABELS: Record<SidebarInboxOrder, string> = {
   manual: "Manual",
@@ -2513,43 +2525,71 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 projectRef.projectId === thread.projectId,
             ),
           ) ?? null;
+        const priorityKey = sidebarProjectPriorityKey(thread);
+        const currentPriority = projectPriorities[priorityKey] ?? "normal";
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            buildThreadActionMenuItems({
-              canOperate: readEnvironmentScope(
-                threadRef.environmentId,
-                AuthOrchestrationOperateScope,
-              ),
-              branch: thread.branch ?? null,
-              projectFilter: threadProjectGroup
-                ? {
-                    label: threadProjectGroup.displayName,
-                    isActive: projectScopeKey === threadProjectGroup.projectKey,
-                  }
-                : null,
-              isPinned,
-              isSettled,
-              autoSettleEnabled: thread.autoSettleDisabledAt == null,
-              isSnoozed,
-              canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
-              isRegeneratingTitle,
-              isRunning: !threadRuntimeCanArchive(thread.runtime),
-              canShareWithGuest: appAtomRegistry.get(
-                canShareWithGuestAtom(threadRef.environmentId),
-              ),
-              supports: {
-                settlement: supportsSettlement,
-                autoSettleOptOut: supportsAutoSettleOptOut,
-                snooze: supportsSnooze,
-                pinning: supportsPinning,
-                titleRegeneration: supportsTitleRegeneration,
+            [
+              ...buildThreadActionMenuItems({
+                canOperate: readEnvironmentScope(
+                  threadRef.environmentId,
+                  AuthOrchestrationOperateScope,
+                ),
+                branch: thread.branch ?? null,
+                projectFilter: threadProjectGroup
+                  ? {
+                      label: threadProjectGroup.displayName,
+                      isActive: projectScopeKey === threadProjectGroup.projectKey,
+                    }
+                  : null,
+                isPinned,
+                isSettled,
+                autoSettleEnabled: thread.autoSettleDisabledAt == null,
+                isSnoozed,
+                canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
+                isRegeneratingTitle,
+                isRunning: !threadRuntimeCanArchive(thread.runtime),
+                canShareWithGuest: appAtomRegistry.get(
+                  canShareWithGuestAtom(threadRef.environmentId),
+                ),
+                supports: {
+                  settlement: supportsSettlement,
+                  autoSettleOptOut: supportsAutoSettleOptOut,
+                  snooze: supportsSnooze,
+                  pinning: supportsPinning,
+                  titleRegeneration: supportsTitleRegeneration,
+                },
+                snoozePresets,
+              }),
+              {
+                id: "project-priority" as const,
+                label: "Project priority",
+                separatorBefore: true,
+                children: PROJECT_PRIORITY_CHOICES.map((choice) => ({
+                  id: choice.id,
+                  label: choice.label,
+                  checked: choice.value === currentPriority,
+                })),
               },
-              snoozePresets,
-            }),
+            ],
             position,
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
+        if (isProjectPriorityMenuId(clicked.value)) {
+          const picked = PROJECT_PRIORITY_CHOICES.find((choice) => choice.id === clicked.value);
+          if (picked) {
+            // "normal" is the absence of an entry, so the map only holds real choices.
+            const rest = Object.fromEntries(
+              Object.entries(projectPriorities).filter(([key]) => key !== priorityKey),
+            );
+            void updateClientSettings({
+              sidebarProjectPriorities:
+                picked.value === "normal" ? rest : { ...rest, [priorityKey]: picked.value },
+            });
+          }
+          return;
+        }
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;
         if (clicked.value?.startsWith("snooze:")) {
           const preset =
