@@ -37,8 +37,7 @@ export interface DesktopSettings {
   readonly updateChannelConfiguredByUser: boolean;
   readonly wslBackendEnabled: boolean;
   readonly wslDistro: string | null;
-  // Changing this requires a desktop restart because the pool's primary spec is
-  // chosen once at layer init.
+  // Requires restart because the pool chooses its primary spec at layer initialization.
   readonly wslOnly: boolean;
 }
 
@@ -48,8 +47,8 @@ export interface DesktopSettingsChange {
 }
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
-export const MIN_MAIN_WINDOW_SIZE = {
-  width: 600,
+const MIN_MAIN_WINDOW_SIZE = {
+  width: 840,
   height: 620,
 } as const;
 export const DesktopWindowBoundsSchema = Schema.Struct({
@@ -466,7 +465,6 @@ const writeSettings = Effect.fn("desktop.settings.writeSettings")(function* (inp
 });
 
 /** @public */
-/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;

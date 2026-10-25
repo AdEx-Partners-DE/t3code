@@ -1,3 +1,5 @@
+import { useParams } from "@tanstack/react-router";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
   getAddProjectInitialQuery,
   getCloneDestinationPath,
@@ -9,18 +11,22 @@ import {
   type ScopedProjectRef,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
+import {
+  type CloneProtocol,
+  cloneUrlForProtocol,
+  cloneUrlProtocol,
+} from "@t3tools/shared/cloneUrl";
 import { ArrowRightIcon } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { create } from "zustand";
 
+import { type DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useAddProjectTargets } from "../hooks/useAddProjectTargets";
+import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import {
   COPYABLE_FILE_MAX_BYTES,
-  type CloneProtocol,
   addProjectToMachine,
-  cloneUrlForProtocol,
-  cloneUrlProtocol,
   isDefaultCopiedFile,
 } from "../lib/addProjectToMachine";
 import { formatBytes } from "../lib/formatBytes";
@@ -71,12 +77,17 @@ export function AddProjectToMachineDialogHost() {
 function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRequest }) {
   const id = useId();
   const project = useProject(request.projectRef);
+  const handleNewThread = useNewThreadHandler();
+  const { draftId: routeDraftId } = useParams({ strict: false });
   const { environments } = useEnvironments();
   const targets = useAddProjectTargets(project, useLogicalProjectEnvironments(project, false));
   const [targetId, setTargetId] = useState(request.targetEnvironmentId);
   const target = targets.find((t) => t.environmentId === targetId) ?? targets[0] ?? null;
   const source = environments.find((env) => env.environmentId === request.projectRef.environmentId);
-  const sourceUrl = project?.repositoryIdentity?.locator.remoteUrl ?? "";
+  const sourceUrl =
+    project?.repositoryIdentity?.origin?.remoteUrl ??
+    project?.repositoryIdentity?.locator.remoteUrl ??
+    "";
   const [protocol, setProtocol] = useState<CloneProtocol | null>(() => cloneUrlProtocol(sourceUrl));
   const sshUrl = cloneUrlForProtocol(sourceUrl, "ssh");
   const httpsUrl = cloneUrlForProtocol(sourceUrl, "https");
@@ -128,6 +139,30 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
     setSelected(next);
   };
 
+  // Lands the user on the new machine right away; its composer shows the clone
+  // and holds sends until it finishes. A draft open on the source project moves
+  // over with whatever was typed in it.
+  const openClonedProject = (targetRef: ScopedProjectRef) => {
+    const drafts = useComposerDraftStore.getState();
+    const draftId = routeDraftId as DraftId | undefined;
+    const draft = draftId ? drafts.getDraftSession(draftId) : null;
+    if (
+      draftId &&
+      draft &&
+      !draft.promotedTo &&
+      draft.environmentId === request.projectRef.environmentId &&
+      draft.projectId === request.projectRef.projectId
+    ) {
+      drafts.setDraftThreadContext(draftId, {
+        projectRef: targetRef,
+        environmentSelection: "manual",
+        loadBalancedEnvironmentId: null,
+      });
+      return;
+    }
+    void handleNewThread(targetRef);
+  };
+
   const submit = async () => {
     if (!project || !target || submitting) return;
     if (destinationPath.trim().length === 0) {
@@ -136,6 +171,7 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
     }
     setSubmitting(true);
     setError(null);
+    const projectId = newProjectId();
     try {
       await addProjectToMachine({
         source: { environmentId: project.environmentId, cwd: project.workspaceRoot },
@@ -144,13 +180,14 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
           project.workspaceRoot,
         ),
         target: { environmentId: target.environmentId, label: target.label },
-        projectId: newProjectId(),
+        projectId,
         title: project.title,
         remoteUrl,
         destinationPath: destinationPath.trim(),
         files: files.filter((file) => selectedFiles.has(file.path)).map((file) => file.path),
       });
       close();
+      openClonedProject(scopeProjectRef(target.environmentId, projectId));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not start the clone.");
       setSubmitting(false);

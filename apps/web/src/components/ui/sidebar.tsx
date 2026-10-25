@@ -17,7 +17,7 @@ import {
 } from "~/components/ui/sheet";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useResizeDrag } from "~/hooks/useResizeDrag";
-import { useMediaQuery } from "~/hooks/useMediaQuery";
+import { useIsMobile } from "~/hooks/useMediaQuery";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { resolveSidebarState, type ResponsiveSidebarState } from "./sidebarState";
 import * as Schema from "effect/Schema";
@@ -96,7 +96,6 @@ function useSidebarVisibility() {
 
 function SidebarProvider({
   defaultOpen = true,
-  mobileBreakpoint,
   open: openProp,
   onOpenChange: setOpenProp,
   className,
@@ -105,17 +104,11 @@ function SidebarProvider({
   ...props
 }: React.ComponentProps<"div"> & {
   defaultOpen?: boolean;
-  mobileBreakpoint?: number;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const isMobile = useMediaQuery(
-    mobileBreakpoint === undefined ? "max-md" : { max: mobileBreakpoint },
-  );
+  const isMobile = useIsMobile();
   const [openMobile, setOpenMobile] = React.useState(false);
-  if (!isMobile && openMobile) {
-    setOpenMobile(false);
-  }
   const [mobileSheetMounted, setMobileSheetMounted] = React.useState(false);
   const setMobileSheetElement = (element: HTMLDivElement | null) => {
     setMobileSheetMounted(element !== null);
@@ -165,7 +158,6 @@ function SidebarProvider({
           SIDEBAR_TITLEBAR_CONTROL_SIZE,
           className,
         )}
-        data-sidebar-mobile={isMobile}
         data-sidebar-state={state}
         data-slot="sidebar-wrapper"
         style={
@@ -306,7 +298,7 @@ function Sidebar({
     <SidebarInstanceContext value={instanceContextValue}>
       <div
         ref={desktopSidebarRef}
-        className="group peer text-sidebar-foreground"
+        className="group peer hidden text-sidebar-foreground md:block"
         data-collapsible={state === "collapsed" ? collapsible : ""}
         data-side={side}
         data-slot="sidebar"
@@ -327,7 +319,7 @@ function Sidebar({
         />
         <div
           className={cn(
-            "fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width)",
+            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) md:flex",
             "[[data-panel-animations=true]_&]:transition-[left,right,width] [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
@@ -418,9 +410,8 @@ function SidebarRail({
       sidebarContainer.getBoundingClientRect().width,
       resolvedResizable,
     );
-    // Drag frames write width to the gap and container only. Changing the
-    // inherited --sidebar-width on the wrapper restyles the whole app, so it is
-    // written once when the drag commits.
+    // Write width only to gap/container during drag; inherited --sidebar-width restyles the whole app, so
+    // update it at commit.
     const widthTargets = [
       sidebarRoot.querySelector<HTMLElement>("[data-slot='sidebar-gap']"),
       sidebarContainer,
@@ -526,7 +517,7 @@ function SidebarRail({
           <button
             aria-label={railLabel}
             className={cn(
-              /* disable pointer events only when offcanvas sidebar is collapsed, that's when the rail sits over the native scrollbar on windows and linux. icon mode stays fully clickable. */
+              /* A collapsed offcanvas rail overlaps the native scrollbar on Windows and Linux. */
               "-translate-x-1/2 group-data-[side=left]:-right-4 absolute inset-y-0 z-20 hidden w-4 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] hover:after:bg-sidebar-border group-data-[side=right]:left-0 sm:flex [[data-collapsible=offcanvas][data-state=collapsed]_&]:pointer-events-none",
               "[[data-panel-animations=true]_&]:transition-all [[data-panel-animations=true]_&]:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:ease-out",
               "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",
@@ -634,9 +625,8 @@ function SidebarContent({
         hideScrollbars
         scrollFade
         scrollFadePadding={false}
-        // Thread rows provide keyboard access to this scroll region. Keeping
-        // Base UI's viewport out of the tab order lets its presentational role
-        // flatten in WebKit instead of becoming a VoiceOver interaction group.
+        // Rows provide keyboard access; exclude the viewport from tab order to flatten VoiceOver's WebKit
+        // interaction boundary.
         viewportTabIndex={-1}
         className="h-auto min-h-0 flex-1 [&>[data-slot=scroll-area-viewport]]:[--fade-size:0.75rem]"
       >
