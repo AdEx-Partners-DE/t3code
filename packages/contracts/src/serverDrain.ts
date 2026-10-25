@@ -47,6 +47,9 @@ export class ServerDrainError extends Schema.TaggedError<ServerDrainError>()(
   { httpApiStatus: 409 },
 ) {
   override get message(): string {
+    if (this.reason === "admission_closed") {
+      return "The server is preparing to update. Your message was not sent. Try again shortly.";
+    }
     return `Server deployment drain failed: ${this.reason}.`;
   }
 }
