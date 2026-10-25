@@ -60,9 +60,9 @@ const normalize = (target: string) => {
   }
   return `/${parts.join("/")}`;
 };
-const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
+const layerWorktreeLocation = (worktreesDir = managedWorktreesDir, path?: Path.Path) =>
   Layer.mergeAll(
-    Path.layer,
+    path === undefined ? Path.layer : Layer.succeed(Path.Path, path),
     Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as ServerConfig.ServerConfig["Service"]),
     ServerSettings.layerTest(),
   );
@@ -579,6 +579,7 @@ function makeLocalCommandHarness(input: {
   readonly worktreePath?: string;
   readonly worktreesDir?: string;
   readonly fileSystem?: FileSystem.FileSystem;
+  readonly path?: Path.Path;
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
   readonly logoutFailure?: string;
@@ -1007,12 +1008,13 @@ function makeLocalCommandHarness(input: {
         }),
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
-        layerWorktreeLocation(input.worktreesDir),
+        layerWorktreeLocation(input.worktreesDir, input.path),
         input.fileSystem === undefined
           ? FileSystem.layerNoop({ exists: () => Effect.succeed(true) })
           : Layer.succeed(FileSystem.FileSystem, input.fileSystem),
         Layer.mock(GitWorkflow.GitWorkflowService)({
           pruneWorktrees: () => Effect.void,
+          listLocalBranchNames: () => Effect.succeed(["feature/restore"]),
           createWorktree,
         }),
         Layer.mock(ProjectService.ProjectService)({
@@ -1201,14 +1203,20 @@ effectIt.effect.each(["cleanup-first", "startup-first"])(
       const worktreePath = path.join(workspaceRoot, "project", "worktree");
       yield* fileSystem.makeDirectory(worktreePath, { recursive: true });
       const release = yield* Deferred.make<void>();
+      const readEntered = yield* Deferred.make<void>();
       const openEntered = yield* Deferred.make<void>();
+      const cleanupEntered = yield* Deferred.make<void>();
       const harness = makeLocalCommandHarness({
         text: "Continue",
         worktreePath,
         worktreesDir: workspaceRoot,
         fileSystem,
+        path,
         failReadsAfterRunning: true,
       });
+      harness.getThreadRecords.mockImplementationOnce(() =>
+        Deferred.succeed(readEntered, undefined).pipe(Effect.as(harness.projection())),
+      );
       harness.createWorktree.mockImplementation(() =>
         fileSystem.makeDirectory(worktreePath).pipe(Effect.as({} as never), Effect.orDie),
       );
@@ -1221,11 +1229,10 @@ effectIt.effect.each(["cleanup-first", "startup-first"])(
           return yield* open();
         }),
       );
-      let cleanupEntered = false;
       const cleanupEffect = withWorkspaceLease(
         worktreePath,
         Effect.gen(function* () {
-          cleanupEntered = true;
+          yield* Deferred.succeed(cleanupEntered, undefined);
           if (order === "cleanup-first") yield* Deferred.await(release);
           else {
             expect(harness.projection().providerSessions).toHaveLength(1);
@@ -1238,24 +1245,31 @@ effectIt.effect.each(["cleanup-first", "startup-first"])(
         order === "cleanup-first"
           ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
           : undefined;
+      if (order === "cleanup-first") yield* Deferred.await(cleanupEntered);
       const startup = yield* harness.start.pipe(Effect.forkChild({ startImmediately: true }));
-      if (order === "cleanup-first") expect(harness.open).not.toHaveBeenCalled();
+      yield* Deferred.await(readEntered);
+      if (order === "cleanup-first") {
+        expect(harness.getTurnStartContext).not.toHaveBeenCalled();
+        expect(harness.open).not.toHaveBeenCalled();
+      }
       if (order === "startup-first") yield* Deferred.await(openEntered);
       const laterCleanup =
         order === "startup-first"
           ? yield* cleanupEffect.pipe(Effect.forkChild({ startImmediately: true }))
           : undefined;
-      if (order === "startup-first") expect(cleanupEntered).toBe(false);
+      if (order === "startup-first") expect(yield* Deferred.isDone(cleanupEntered)).toBe(false);
       yield* Deferred.succeed(release, undefined);
       if (cleanup !== undefined) yield* Fiber.join(cleanup);
       yield* Fiber.join(startup);
       if (laterCleanup !== undefined) yield* Fiber.join(laterCleanup);
       if (order === "cleanup-first") {
-        expect(harness.createWorktree).toHaveBeenCalledWith({
+        expect(harness.createWorktree).toHaveBeenCalledExactlyOnceWith({
           cwd: "/tmp/native-account-project",
           refName: "feature/restore",
           path: worktreePath,
         });
+      } else {
+        expect(harness.createWorktree).not.toHaveBeenCalled();
       }
       expect(harness.resolveRuntimePolicy).toHaveBeenCalledWith(
         expect.objectContaining({
