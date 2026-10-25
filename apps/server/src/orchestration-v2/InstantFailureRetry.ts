@@ -1,18 +1,9 @@
-/**
- * Retries a turn once when it failed before it really started.
- *
- * Most failed turns die in their first seconds on something that is gone a
- * moment later: the provider session did not open, the provider process
- * exited, the connection dropped. Nothing was produced, so sending the same
- * message again loses nothing. Failures that will repeat (a usage limit, a
- * missing sign-in, a rejected request) are left alone.
- *
- * @module InstantFailureRetry
- */
+/** Retries transient start failures once, before the turn produced a response. */
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import {
   CommandId,
   MessageId,
+  ServerDrainError,
   type OrchestrationV2Command,
   type OrchestrationV2ProviderFailure,
   type OrchestrationV2ThreadProjection,
@@ -22,6 +13,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { recordDecision } from "../decisionLog.ts";
@@ -29,11 +22,24 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import * as WorkAdmission from "./WorkAdmission.ts";
 
 /** A turn that ran longer than this did real work; its failure is not a start failure. */
 export const INSTANT_FAILURE_WINDOW_MS = 15_000;
 
 const RETRY_MESSAGE_PREFIX = "message:instant-retry:";
+const isServerDrainError = Schema.is(ServerDrainError);
+
+function isAdmissionClosed(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  while (Predicate.isObject(error) && !seen.has(error)) {
+    if (isServerDrainError(error)) return error.reason === "admission_closed";
+    seen.add(error);
+    if (!("cause" in error)) return false;
+    error = error.cause;
+  }
+  return false;
+}
 
 /**
  * Provider errors carry no finer class, so the two start failures seen in
@@ -171,6 +177,7 @@ export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const admission = yield* WorkAdmission.WorkAdmission;
     const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
     const retry = Effect.fn("InstantFailureRetry.retry")(function* (input: {
       readonly threadId: OrchestrationV2ThreadProjection["thread"]["id"];
@@ -205,6 +212,10 @@ export const layer = Layer.effectDiscard(
         command.type === "message.dispatch" &&
         backTo !== null &&
         command.modelSelection === backTo;
+      if (command !== null) {
+        yield* threads.dispatch(command);
+        yield* Effect.logInfo("Retried a turn that failed to start", input);
+      }
       yield* recordDecision({
         kind: "start-failure-retry",
         threadId: input.threadId,
@@ -220,13 +231,16 @@ export const layer = Layer.effectDiscard(
           ),
         },
       });
-      if (command === null) return;
-      yield* Effect.logInfo("Retrying a turn that failed to start", input);
-      yield* threads.dispatch(command);
     });
     yield* Stream.runForEach(threads.streamDomainEvents, (event) =>
       event.type === "run.updated" && event.payload.status === "failed"
         ? retry({ threadId: event.threadId, runId: event.payload.id }).pipe(
+            // Admission may close again after reopening; re-read the setting and
+            // thread before retrying the same idempotent command.
+            Effect.retry({
+              while: (error) =>
+                isAdmissionClosed(error) ? admission.awaitOpen.pipe(Effect.as(true)) : false,
+            }),
             Effect.catchCause((cause) =>
               Effect.logWarning("Could not retry a turn that failed to start", {
                 threadId: event.threadId,
@@ -242,4 +256,4 @@ export const layer = Layer.effectDiscard(
       Effect.forkScoped,
     );
   }),
-);
+).pipe(Layer.provide(WorkAdmission.layer));

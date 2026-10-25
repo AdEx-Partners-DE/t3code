@@ -1,18 +1,41 @@
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import {
+  CommandId,
+  EventId,
   MessageId,
+  ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   RunId,
+  TurnItemId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 
 import {
   instantFailureRetryCommand,
   isTransientStartFailure,
   selectionBeforeMove,
 } from "./InstantFailureRetry.ts";
+import * as InstantFailureRetry from "./InstantFailureRetry.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
+import * as EventSink from "./EventSink.ts";
+import * as Orchestrator from "./Orchestrator.ts";
+import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ThreadManagement from "./ThreadManagementService.ts";
+import * as WorkAdmission from "./WorkAdmission.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 type Projection = Parameters<typeof instantFailureRetryCommand>[0];
 type Run = OrchestrationV2ThreadProjection["runs"][number];
@@ -71,6 +94,212 @@ const projection = (overrides: Partial<Projection> = {}): Projection => ({
   turnItems: [sessionDidNotOpen],
   ...overrides,
 });
+
+it.effect.each(["cancel", "wrapped", "archived", "disabled"] as const)(
+  "reconsiders an instant failure rejected during drain: %s",
+  (scenario) => {
+    const database = SqlitePersistence.layerMemory;
+    const settings = ServerSettings.layerTest({ retryInstantFailures: true });
+    const runtime = ProviderReplayHarness.layerWithRegistry(
+      { name: `instant-retry-drain-${scenario}` },
+      ProviderAdapterRegistry.layerFromAdapters([
+        {
+          instanceId: instance,
+          driver: ProviderDriverKind.make("codex"),
+          getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+          planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
+          openSession: () => Effect.die("This test must not start a provider process"),
+        } as ProviderAdapter.ProviderAdapterV2["Service"],
+      ]),
+      { databaseLayer: database, runEffectWorker: false },
+    );
+    const layerTest = Layer.mergeAll(
+      runtime,
+      settings,
+      WorkAdmission.layer,
+      ThreadManagement.layer.pipe(
+        Layer.provide(Layer.mergeAll(runtime, CommandReceiptStore.layer, settings)),
+      ),
+    ).pipe(Layer.provide(database));
+    return Effect.gen(function* () {
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const sink = yield* EventSink.EventSinkV2;
+      const admission = yield* WorkAdmission.WorkAdmission;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      yield* threads.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create:retry"),
+        threadId,
+        projectId: ProjectId.make("project:retry"),
+        title: "Retry during drain",
+        modelSelection: { instanceId: instance, model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* threads.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("send:retry"),
+        threadId,
+        messageId: MessageId.make("message:retry-start"),
+        text: "Fix the build.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const original = yield* threads.getThreadProjection(threadId);
+      const starting = original.runs[0]!;
+      const watching = yield* Deferred.make<void>();
+      const rejected = yield* Deferred.make<void>();
+      const consumed = yield* Deferred.make<void>();
+      const startupEntered = yield* Deferred.make<void>();
+      const failStartup = yield* Deferred.make<void>();
+      const afterSequence = yield* sink.latestSequence();
+      const dispatch = threads.dispatch;
+      const attempts: CommandId[] = [];
+      using _dispatch = vi.spyOn(threads, "dispatch").mockImplementation((command) =>
+        Effect.sync(() => attempts.push(command.commandId)).pipe(
+          Effect.andThen(dispatch(command)),
+          Effect.tapError(() => Deferred.succeed(rejected, undefined)),
+          Effect.mapError((cause) =>
+            scenario === "wrapped"
+              ? new Orchestrator.OrchestratorDispatchError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  cause,
+                })
+              : cause,
+          ),
+        ),
+      );
+      const markerId = EventId.make("event:retry-marker");
+      yield* Effect.gen(function* () {
+        yield* Deferred.await(watching);
+        const now = yield* DateTime.now;
+        const failed = { ...starting, status: "failed" as const, completedAt: now };
+        const failureCommit = sink.write({
+          events: [
+            {
+              id: EventId.make("event:retry-error"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make("item:retry-error"),
+                threadId,
+                runId: starting.id,
+                nodeId: starting.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                type: "error",
+                status: "failed",
+                title: "Could not start",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                failure: {
+                  class: "transport_error",
+                  message: "Provider disconnected",
+                  code: null,
+                  retryable: null,
+                },
+              },
+            },
+            {
+              id: EventId.make("event:retry-failed"),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: failed,
+            },
+            {
+              id: EventId.make("event:retry-failed-again"),
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: failed,
+            },
+            {
+              id: markerId,
+              type: "thread.metadata-updated",
+              threadId,
+              occurredAt: now,
+              payload: original.thread,
+            },
+          ],
+        });
+        const startup = yield* admission
+          .run(
+            Deferred.succeed(startupEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(failStartup)),
+              Effect.andThen(failureCommit),
+            ),
+          )
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(startupEntered);
+        const acquiring = yield* admission
+          .acquire("retry-drain", Effect.void)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        expect((yield* admission.status).state).toBe("acquiring");
+        yield* Deferred.succeed(failStartup, undefined);
+        yield* Fiber.join(startup);
+        yield* Fiber.join(acquiring);
+        yield* Deferred.await(rejected);
+        expect(attempts).toHaveLength(1);
+        if (scenario === "archived") {
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make("event:retry-archive"),
+                type: "thread.metadata-updated",
+                threadId,
+                occurredAt: now,
+                payload: { ...original.thread, archivedAt: now },
+              },
+            ],
+          });
+        }
+        if (scenario === "disabled")
+          yield* serverSettings.updateSettings({ retryInstantFailures: false });
+        yield* admission.cancel("retry-drain");
+        yield* Deferred.await(consumed);
+        const after = yield* threads.getThreadProjection(threadId);
+        const shouldRetry = scenario === "cancel" || scenario === "wrapped";
+        expect(
+          after.messages.filter((message) => message.id.startsWith("message:instant-retry:")),
+        ).toHaveLength(shouldRetry ? 1 : 0);
+        expect(attempts).toHaveLength(shouldRetry ? 2 : 1);
+      }).pipe(
+        Effect.provide(
+          InstantFailureRetry.layer.pipe(
+            Layer.provide(
+              Layer.succeed(ThreadManagement.ThreadManagementService, {
+                ...threads,
+                streamDomainEvents: sink.stream({ afterSequence }).pipe(
+                  Stream.map((stored) => stored.event),
+                  Stream.onStart(Deferred.succeed(watching, undefined)),
+                  Stream.mapError(
+                    (cause) => new Orchestrator.OrchestratorDomainEventStreamError({ cause }),
+                  ),
+                  Stream.tap((event) =>
+                    event.id === markerId ? Deferred.succeed(consumed, undefined) : Effect.void,
+                  ),
+                ),
+              }),
+            ),
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(layerTest));
+  },
+);
 
 describe("isTransientStartFailure", () => {
   it("accepts the start failures seen in practice", () => {

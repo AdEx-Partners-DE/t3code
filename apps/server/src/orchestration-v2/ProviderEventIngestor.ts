@@ -40,6 +40,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { makeProviderFailureTurnItem } from "@t3tools/provider-core/server/failure";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as WorkAdmission from "./WorkAdmission.ts";
 import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
 
@@ -331,6 +332,7 @@ export const layer: Layer.Layer<
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+    const admission = yield* WorkAdmission.WorkAdmission;
     const analytics = yield* ProviderTurnAnalytics;
     const agentScope = yield* AgentScope;
     const completedTurnAnalytics = new Set<string>();
@@ -879,8 +881,9 @@ export const layer: Layer.Layer<
                 input.event.type === "app_thread.created"
                   ? threadCommands.withLock(input.event.appThread.id, effect)
                   : effect,
+              admission.track,
             ),
         ),
     });
   }),
-);
+).pipe(Layer.provide(WorkAdmission.layer));

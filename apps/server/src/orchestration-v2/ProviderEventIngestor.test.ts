@@ -17,6 +17,7 @@ import {
   type OrchestrationV2TurnItem,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
@@ -35,6 +36,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { toolOutputImages } from "@t3tools/shared/toolOutput";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -46,6 +48,9 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as DeploymentDrain from "./DeploymentDrain.ts";
+import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import {
   makeProviderEventRoutingState,
@@ -216,6 +221,128 @@ function threadCreatedEvent(
 }
 
 const layer = it.layer(layerTest);
+
+it.effect("rechecks S97 after reasoning commits during the runtime session lookup", () =>
+  Effect.gen(function* () {
+    const lookupStarted = yield* Deferred.make<void>();
+    const finishLookup = yield* Deferred.make<void>();
+    const drainLayer = DeploymentDrain.layer.pipe(
+      Layer.provide(
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          get: () =>
+            Deferred.succeed(lookupStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(finishLookup)),
+              Effect.andThen(Effect.succeedNone),
+            ),
+        }),
+      ),
+      Layer.provide(layerTestDatabase),
+    );
+    yield* Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const ids = yield* IdAllocator.IdAllocatorV2;
+      const commands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+      const drain = yield* DeploymentDrain.DeploymentDrain;
+      const old = DateTime.makeUnsafe("2026-10-25T10:00:00.000Z");
+      const now = DateTime.makeUnsafe("2026-10-25T12:00:00.000Z");
+      yield* TestClock.setTime(DateTime.toEpochMillis(now));
+      const thread = yield* threadCreatedEvent(old);
+      const threadId = thread.threadId;
+      const runId = RunId.make("run:drain-heartbeat");
+      const providerSessionId = ProviderSessionId.make("session:drain-heartbeat");
+      const nodeId = NodeId.make("node:drain-heartbeat");
+      yield* sink.write({
+        events: [
+          thread,
+          {
+            id: yield* ids.allocate.event({ threadId }),
+            type: "run.created",
+            threadId,
+            occurredAt: old,
+            payload: {
+              id: runId,
+              threadId,
+              ordinal: 1,
+              providerInstanceId: modelSelection.instanceId,
+              modelSelection,
+              providerThreadId: null,
+              userMessageId: MessageId.make("message:drain-heartbeat"),
+              rootNodeId: nodeId,
+              activeAttemptId: RunAttemptId.make("attempt:drain-heartbeat"),
+              status: "running",
+              requestedAt: old,
+              startedAt: old,
+              completedAt: null,
+              checkpointId: null,
+              contextHandoffId: null,
+            },
+          },
+          {
+            id: yield* ids.allocate.event({ threadId }),
+            type: "provider-session.updated",
+            threadId,
+            occurredAt: old,
+            payload: {
+              id: providerSessionId,
+              driver: CODEX_DRIVER,
+              providerInstanceId: modelSelection.instanceId,
+              status: "ready",
+              cwd: process.cwd(),
+              model: modelSelection.model,
+              capabilities: CodexProviderCapabilitiesV2,
+              createdAt: old,
+              updatedAt: old,
+              lastError: null,
+            },
+          },
+        ],
+      });
+      const leaseId = "bb379c6e-bede-41f2-8dd3-7977b0a41385";
+      const acquiring = yield* drain
+        .execute({ operation: "acquire", leaseId, recoveryPolicy: "s97" })
+        .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(lookupStarted);
+      const heartbeat = ingestor.ingestNormalized({
+        threadId,
+        runId,
+        providerSessionId,
+        providerInstanceId: modelSelection.instanceId,
+        event: {
+          type: "turn_item.updated",
+          driver: CODEX_DRIVER,
+          turnItem: {
+            id: TurnItemId.make("item:drain-heartbeat"),
+            threadId,
+            runId,
+            nodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            type: "reasoning",
+            status: "running",
+            title: "Thinking",
+            text: "Still working",
+            streaming: true,
+            startedAt: now,
+            updatedAt: now,
+            completedAt: null,
+          },
+        },
+      });
+      const committed = yield* heartbeat;
+      assert.equal(committed.length, 1);
+      yield* Deferred.succeed(finishLookup, undefined);
+      const result = yield* Fiber.join(acquiring);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") assert.equal(result.failure.reason, "busy");
+      assert.equal((yield* drain.execute({ operation: "status" })).state, "open");
+      assert.equal((yield* commands.withLock(threadId, heartbeat)).length, 1);
+    }).pipe(Effect.provide(Layer.merge(layerTest, drainLayer)));
+  }),
+);
 
 it.effect("records accepted billed turn usage once without billing the context window", () => {
   const recorded: Array<Readonly<Record<string, unknown>>> = [];
