@@ -58,6 +58,7 @@ import {
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
+import { ServerDrainError, ServerDrainInput, ServerDrainState } from "./serverDrain.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -855,7 +856,17 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
   .add(HttpApiEndpoint.patch("webhookPatch", WEBHOOK_PATH, webhookEndpoint))
   .add(HttpApiEndpoint.get("webhookGet", WEBHOOK_PATH, webhookEndpoint)) {}
 
+class EnvironmentMaintenanceHttpApi extends HttpApiGroup.make("maintenance").add(
+  HttpApiEndpoint.post("drain", "/api/maintenance/drain", {
+    headers: OptionalBearerHeaders,
+    payload: ServerDrainInput,
+    success: ServerDrainState,
+    error: [ServerDrainError, EnvironmentScopeRequiredError],
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
+  .add(EnvironmentMaintenanceHttpApi)
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentMcpOAuthHttpApi)

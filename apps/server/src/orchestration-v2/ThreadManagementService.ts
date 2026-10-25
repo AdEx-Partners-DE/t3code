@@ -63,6 +63,8 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as WorkAdmission from "./WorkAdmission.ts";
+import { requiresWorkAdmission } from "./commandAdmission.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
@@ -572,6 +574,7 @@ function latestSteerableRun(
 const SETTLE_AFTER_RUN_WAIT_MS = 24 * 60 * 60 * 1_000;
 
 const make = Effect.gen(function* () {
+  const admission = yield* WorkAdmission.WorkAdmission;
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
@@ -876,6 +879,7 @@ const make = Effect.gen(function* () {
       // Checked on the routed command: an account switch may have changed the instance.
       Effect.tap(assertDispatchTargetEnabled),
       Effect.flatMap((routed) => orchestrator.dispatch(routed)),
+      (effect) => (requiresWorkAdmission(command) ? admission.run(effect) : effect),
     );
 
   const clearAllQueues: ThreadManagementServiceShape["clearAllQueues"] = (input) =>

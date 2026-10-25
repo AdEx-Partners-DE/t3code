@@ -7,6 +7,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
+import * as WorkAdmission from "./WorkAdmission.ts";
 
 const CONTINUATION_MESSAGE_TEXT = "Background task completed.";
 
@@ -55,6 +56,7 @@ export const layer = Layer.effectDiscard(
     const ids = yield* IdAllocator.IdAllocatorV2;
     const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
     const threads = yield* ThreadManagementService.ThreadManagementService;
+    const admission = yield* WorkAdmission.WorkAdmission;
     const retryAttempts = yield* Ref.make(new Map<string, number>());
 
     const clearRetryAttempt = (key: string) =>
@@ -236,7 +238,11 @@ export const layer = Layer.effectDiscard(
 
     yield* requests.take.pipe(
       Effect.flatMap((request) =>
-        dispatchContinuation(request).pipe(
+        admission.run(dispatchContinuation(request)).pipe(
+          Effect.catchTags({
+            ServerDrainError: () =>
+              admission.awaitOpen.pipe(Effect.andThen(requests.offer(request))),
+          }),
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
               yield* Effect.logWarning("orchestration-v2.provider-continuation.dispatch-failed", {
@@ -284,4 +290,4 @@ export const layer = Layer.effectDiscard(
       Effect.forkScoped,
     );
   }),
-);
+).pipe(Layer.provide(WorkAdmission.layer));

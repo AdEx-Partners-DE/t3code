@@ -50,6 +50,7 @@ import type * as Orchestrator from "./Orchestrator.ts";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import * as WorkAdmission from "./WorkAdmission.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
   | { readonly type: "root"; readonly branch?: string | undefined }
@@ -194,6 +195,7 @@ function failureDetail(error: unknown): string {
 }
 
 const make = Effect.gen(function* () {
+  const admission = yield* WorkAdmission.WorkAdmission;
   const projects = yield* ProjectService.ProjectService;
   const setupTracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
   const cloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
@@ -545,7 +547,9 @@ const make = Effect.gen(function* () {
               cause,
             }),
           ),
-          Effect.forkIn(preparationScope),
+          admission.run,
+          Effect.ignore({ log: true }),
+          Effect.forkIn(preparationScope, { startImmediately: true }),
         );
       }
 
@@ -788,7 +792,7 @@ const make = Effect.gen(function* () {
         );
       yield* Effect.raceFirst(prepare, interruption);
     });
-    yield* preparation.pipe(
+    yield* admission.run(preparation).pipe(
       Effect.onError((cause) =>
         failPreparedRun(
           input,
@@ -799,7 +803,7 @@ const make = Effect.gen(function* () {
       ),
       Effect.ignoreCause,
       Effect.ensuring(releasePreparation(input.commandId)),
-      Effect.forkIn(preparationScope),
+      Effect.forkIn(preparationScope, { startImmediately: true }),
     );
   });
 
@@ -1042,21 +1046,31 @@ const make = Effect.gen(function* () {
 
   const prepareRun: ThreadLaunchService["Service"]["prepareRun"] = Effect.fn(
     "ThreadLaunchService.prepareRun",
-  )(function* (input) {
-    const scheduled = yield* Effect.gen(function* () {
-      const projection = yield* threads.getThreadProjection(input.threadId);
-      const run = projection.runs.find((candidate) => candidate.id === input.runId);
-      const workspacePreparation = run?.workspacePreparation;
-      if (run?.status !== "preparing" || workspacePreparation === undefined) return;
-      if (!(yield* reservePreparation(input.commandId))) return;
-      yield* scheduleRunPreparation(input, projection, run, workspacePreparation).pipe(
-        Effect.onError(() => releasePreparation(input.commandId)),
-      );
-    }).pipe(Effect.exit);
-    if (Exit.isFailure(scheduled)) {
-      yield* failPreparedRun(input, input.threadId, input.runId, Cause.squash(scheduled.cause));
-    }
-  });
+  )(
+    function* (input) {
+      const scheduled = yield* Effect.gen(function* () {
+        const projection = yield* threads.getThreadProjection(input.threadId);
+        const run = projection.runs.find((candidate) => candidate.id === input.runId);
+        const workspacePreparation = run?.workspacePreparation;
+        if (run?.status !== "preparing" || workspacePreparation === undefined) return;
+        if (!(yield* reservePreparation(input.commandId))) return;
+        yield* scheduleRunPreparation(input, projection, run, workspacePreparation).pipe(
+          Effect.onError(() => releasePreparation(input.commandId)),
+        );
+      }).pipe(Effect.exit);
+      if (Exit.isFailure(scheduled)) {
+        yield* failPreparedRun(input, input.threadId, input.runId, Cause.squash(scheduled.cause));
+      }
+    },
+    (effect, input) =>
+      admission.run(effect).pipe(
+        Effect.catchTags({
+          // Delegation commits its preparing run before calling this method. A drain
+          // between those calls must defer preparation, not fail the accepted task.
+          ServerDrainError: () => admission.awaitOpen.pipe(Effect.andThen(prepareRun(input))),
+        }),
+      ),
+  );
 
   const retryPreparation: ThreadLaunchService["Service"]["retryPreparation"] = Effect.fn(
     "ThreadLaunchService.retryPreparation",
@@ -1112,7 +1126,19 @@ const make = Effect.gen(function* () {
     );
   };
 
-  return ThreadLaunchService.of({ launch, checkWorktreeBase, retryPreparation, prepareRun });
+  return ThreadLaunchService.of({
+    launch: (input) =>
+      admission.run(launch(input)).pipe(
+        Effect.catchTags({
+          ServerDrainError: (cause) => Effect.fail(mapError(input, "create-thread")(cause)),
+        }),
+      ),
+    checkWorktreeBase,
+    retryPreparation: (input) => admission.run(retryPreparation(input)),
+    prepareRun,
+  });
 });
 
-export const layer = Layer.effect(ThreadLaunchService, make);
+export const layer = Layer.effect(ThreadLaunchService, make).pipe(
+  Layer.provide(WorkAdmission.layer),
+);

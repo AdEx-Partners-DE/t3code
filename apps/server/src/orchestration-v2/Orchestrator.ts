@@ -147,6 +147,9 @@ import * as RunExecutionService from "./RunExecutionService.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import { ServerDrainError } from "@t3tools/contracts";
+import * as WorkAdmission from "./WorkAdmission.ts";
+import { requiresWorkAdmission } from "./commandAdmission.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   endOrphanedNativeSubagent,
@@ -296,6 +299,7 @@ function canReplayCommandReceipt(receiptThreadId: ThreadId, commandThreadId: Thr
 }
 
 export const OrchestratorV2Error = Schema.Union([
+  ServerDrainError,
   OrchestratorDispatchError,
   OrchestratorThreadAlreadyExistsError,
   OrchestratorCommandRejectedError,
@@ -1032,6 +1036,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const runtimePolicy = yield* RuntimePolicyV2;
   const threadForkService = yield* ThreadForkServiceV2;
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+  const admission = yield* WorkAdmission.WorkAdmission;
 
   const mapDispatchError =
     (command: OrchestrationV2ServerCommand) =>
@@ -2248,8 +2253,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     },
     (effect, threadId, options?) =>
-      effect.pipe(
-        Effect.catch((cause) => failQueuedRunStart(threadId, cause, options?.queuedRunId)),
+      admission.whenOpen(
+        effect.pipe(
+          Effect.catch((cause) => failQueuedRunStart(threadId, cause, options?.queuedRunId)),
+        ),
       ),
   );
 
@@ -2283,6 +2290,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause,
         }),
     ),
+  );
+
+  yield* admission.reopened.pipe(
+    Stream.runForEach(() => resumeQueuedRuns.pipe(Effect.ignore({ log: true }))),
+    Effect.forkScoped,
   );
 
   const queuedThreadCandidates = Effect.gen(function* () {
@@ -12628,26 +12640,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   // dispatchWithReceiptEffect owns the dispatch span; this wrapper selects the thread locks.
-  const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
-    const dispatch = threadDispatch.withLock(
-      commandThreadId(command),
-      dispatchWithReceiptEffect(command),
-    );
-    if (
-      command.type !== "message.dispatch" ||
-      (command.createdBy !== "user" && command.creationSource !== "mcp")
-    )
-      return yield* dispatch;
-    const parentThreadId = yield* appOwnedSubagentParentThreadId(command.threadId).pipe(
-      Effect.mapError(
-        (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-      ),
-    );
-    // Follow-up intake and Stop serialize on the parent before taking the child lock.
-    return yield* parentThreadId === undefined
-      ? dispatch
-      : threadDispatch.withLock(parentThreadId, dispatch);
-  });
+  const dispatchWithReceipt = Effect.fnUntraced(
+    function* (command: OrchestrationV2ServerCommand) {
+      const dispatch = threadDispatch.withLock(
+        commandThreadId(command),
+        dispatchWithReceiptEffect(command),
+      );
+      if (
+        command.type !== "message.dispatch" ||
+        (command.createdBy !== "user" && command.creationSource !== "mcp")
+      )
+        return yield* dispatch;
+      const parentThreadId = yield* appOwnedSubagentParentThreadId(command.threadId).pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+      // Follow-up intake and Stop serialize on the parent before taking the child lock.
+      return yield* parentThreadId === undefined
+        ? dispatch
+        : threadDispatch.withLock(parentThreadId, dispatch);
+    },
+    (effect, command) => (requiresWorkAdmission(command) ? admission.run(effect) : effect),
+  );
 
   const handleRunUpdate = Effect.fn("Orchestrator.handleRunUpdate")(
     function* (stored: OrchestrationV2StoredEvent) {

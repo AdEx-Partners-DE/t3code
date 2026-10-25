@@ -30,6 +30,7 @@ import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -58,6 +59,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
+import * as WorkAdmission from "./WorkAdmission.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
@@ -276,6 +278,7 @@ function makeHarness(options: HarnessOptions = {}) {
       layerOutbox,
       layerDatabase,
       layerExternalServices,
+      WorkAdmission.layer,
     ),
     createWorktree,
     removeWorktree,
@@ -522,6 +525,43 @@ it.effect("retains automation and sender attribution while a message waits in th
     assert.equal(message?.text, "Run the audit");
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect("drain counts detached workspace setup even when the thread has no run", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const finish = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      runSetup: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(finish)),
+          Effect.as({ status: "no-script" as const }),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const admission = yield* WorkAdmission.WorkAdmission;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "drain-setup",
+          thread: "drain-setup",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      assert.isEmpty(launched.projection.runs);
+      yield* Deferred.await(entered);
+      const acquiring = yield* admission
+        .acquire("bb379c6e-bede-41f2-8dd3-7977b0a41385", Effect.void)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      assert.equal((yield* admission.status).state, "acquiring");
+      const refused = yield* Effect.flip(
+        launches.launch(launchInput({ command: "late", thread: "late" })),
+      );
+      assert.equal(refused._tag, "ThreadLaunchError");
+      yield* Deferred.succeed(finish, undefined);
+      assert.equal((yield* Fiber.join(acquiring)).state, "held");
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
 
 it.effect("provisions independent launches concurrently instead of behind a global semaphore", () =>
   Effect.gen(function* () {

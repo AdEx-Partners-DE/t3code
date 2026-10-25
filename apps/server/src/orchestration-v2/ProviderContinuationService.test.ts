@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import {
   MessageId,
   ProjectId,
@@ -24,6 +25,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ProviderContinuationService from "./ProviderContinuationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as WorkAdmission from "./WorkAdmission.ts";
 
 const threadId = ThreadId.make("thread-provider-continuation");
 const providerThreadId = ProviderThreadId.make("provider-thread-continuation");
@@ -103,10 +105,56 @@ function layerTest(input: {
       Layer.mergeAll(IdAllocator.layer, ProviderContinuationRequests.layer, layerThreads),
     ),
   );
-  return Layer.merge(ProviderContinuationRequests.layer, layerWorker);
+  return Layer.mergeAll(ProviderContinuationRequests.layer, layerWorker, WorkAdmission.layer);
 }
 
 describe("ProviderContinuationService", () => {
+  it.effect(
+    "holds a native wake without clearing its adapter guard and retries after cancellation",
+    () =>
+      Effect.gen(function* () {
+        const dispatched = yield* Queue.unbounded<unknown>();
+        const refused = yield* Deferred.make<void>();
+        let guards = 0;
+        let cleared = false;
+        yield* Effect.gen(function* () {
+          const admission = yield* WorkAdmission.WorkAdmission;
+          const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+          const leaseId = "bb379c6e-bede-41f2-8dd3-7977b0a41385";
+          yield* admission.acquire(leaseId, Effect.void);
+          const original = admission.run;
+          using _run = vi
+            .spyOn(admission, "run")
+            .mockImplementation(<A, E, R>(effect: Effect.Effect<A, E, R>) =>
+              original(effect).pipe(Effect.tapError(() => Deferred.succeed(refused, undefined))),
+            );
+          yield* requests.offer({
+            ...request(<A, E, R>(effect: Effect.Effect<A, E, R>) =>
+              Effect.suspend(() => {
+                guards += 1;
+                return Effect.asSome(effect);
+              }),
+            ),
+            clearIfCurrent: () =>
+              Effect.sync(() => {
+                cleared = true;
+              }),
+          });
+          yield* Deferred.await(refused);
+          assert.equal(guards, 0);
+          assert.isFalse(cleared);
+          yield* admission.cancel(leaseId);
+          yield* Queue.take(dispatched);
+          assert.equal(guards, 1);
+          assert.isFalse(cleared);
+        }).pipe(
+          Effect.provide(
+            layerTest({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
+          ),
+        );
+      }),
+  );
+
   it.effect("recovers an unaccepted persisted steer using the same delivery identity", () =>
     Effect.gen(function* () {
       const dispatched = yield* Queue.unbounded<unknown>();

@@ -28,6 +28,7 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
+import * as WorkAdmission from "./WorkAdmission.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedError<OrchestrationEffectExecutionError>()(
   "OrchestrationEffectExecutionError",
@@ -606,6 +607,7 @@ export const layerWithOptions = (
     OrchestrationEffectWorkerV2,
     Effect.gen(function* () {
       const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const admission = yield* WorkAdmission.WorkAdmission;
       const executor = yield* OrchestrationEffectExecutorV2;
       const workerId = options.workerId ?? `orchestration-v2:${process.pid}`;
       const leaseDurationMs = Math.max(1, options.leaseDurationMs ?? 30_000);
@@ -702,9 +704,14 @@ export const layerWithOptions = (
 
       // The worker probes for work repeatedly, including when the outbox is empty.
       const runOnce = Effect.fnUntraced(
-        function* (excludeRestartContinuations = false) {
+        function* (excludeRestartContinuations = false, cleanupOnly = false) {
           const claimExit = yield* Effect.exit(
-            outbox.claimNext({ workerId, leaseDurationMs, excludeRestartContinuations }),
+            outbox.claimNext({
+              workerId,
+              leaseDurationMs,
+              excludeRestartContinuations,
+              cleanupOnly,
+            }),
           );
           yield* increment(orchestrationEffectClaimsTotal, {
             result: Exit.isFailure(claimExit)
@@ -804,7 +811,7 @@ export const layerWithOptions = (
           }
           return true;
         },
-        (effect, _excludeRestartContinuations?: boolean) =>
+        (effect, _excludeRestartContinuations?: boolean, _cleanupOnly?: boolean) =>
           effect.pipe(
             Effect.mapError((cause) =>
               isOrchestrationEffectWorkerError(cause)
@@ -814,10 +821,23 @@ export const layerWithOptions = (
           ),
       );
 
+      // Claiming and executing a start share one permit. After closure only
+      // cleanup may claim new rows; existing executions remain counted to settle.
+      const admittedRunOnce = (excludeRestartContinuations = false) =>
+        admission
+          .whenOpen(runOnce(excludeRestartContinuations))
+          .pipe(
+            Effect.flatMap((result) =>
+              result === undefined
+                ? admission.track(runOnce(excludeRestartContinuations, true))
+                : Effect.succeed(result),
+            ),
+          );
+
       return OrchestrationEffectWorkerV2.of({
         awaitWork: outbox.awaitAvailable,
-        runOnce: runOnce(),
-        runRecoveryOnce: runOnce(true),
+        runOnce: admittedRunOnce(),
+        runRecoveryOnce: admittedRunOnce(true),
         nextClaimableAt: outbox.nextClaimableAt.pipe(
           Effect.mapError(
             (cause) =>
@@ -829,14 +849,14 @@ export const layerWithOptions = (
         ),
         drain: Effect.fn("EffectWorker.drain")(function* (maxEffects = Number.MAX_SAFE_INTEGER) {
           let completed = 0;
-          while (completed < maxEffects && (yield* runOnce())) {
+          while (completed < maxEffects && (yield* admittedRunOnce())) {
             completed += 1;
           }
           return completed;
         }),
       });
     }),
-  );
+  ).pipe(Layer.provide(WorkAdmission.layer));
 
 export const layer = layerWithOptions();
 
