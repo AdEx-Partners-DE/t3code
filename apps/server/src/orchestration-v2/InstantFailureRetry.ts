@@ -21,6 +21,7 @@ import { recordDecision } from "../decisionLog.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
+import * as EventSink from "./EventSink.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as WorkAdmission from "./WorkAdmission.ts";
 
@@ -176,6 +177,7 @@ export function instantFailureRetryCommand(
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
+    const sink = yield* EventSink.EventSinkV2;
     const settings = yield* ServerSettings.ServerSettingsService;
     const admission = yield* WorkAdmission.WorkAdmission;
     const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
@@ -232,7 +234,15 @@ export const layer = Layer.effectDiscard(
         },
       });
     });
-    yield* Stream.runForEach(threads.streamDomainEvents, (event) =>
+    // Admission can block this consumer, so exclude turn-item payloads before buffering.
+    const runUpdates = Stream.unwrap(
+      sink
+        .latestSequence()
+        .pipe(
+          Effect.map((afterSequence) => sink.stream({ afterSequence, eventType: "run.updated" })),
+        ),
+    ).pipe(Stream.map((stored) => stored.event));
+    yield* Stream.runForEach(runUpdates, (event) =>
       event.type === "run.updated" && event.payload.status === "failed"
         ? retry({ threadId: event.threadId, runId: event.payload.id }).pipe(
             // Admission may close again after reopening; re-read the setting and

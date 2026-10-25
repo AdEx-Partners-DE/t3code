@@ -96,7 +96,7 @@ const projection = (overrides: Partial<Projection> = {}): Projection => ({
 });
 
 it.effect.each(["cancel", "wrapped", "archived", "disabled"] as const)(
-  "reconsiders an instant failure rejected during drain: %s",
+  "filters unrelated events while reconsidering an instant failure rejected during drain: %s",
   (scenario) => {
     const database = SqlitePersistence.layerMemory;
     const settings = ServerSettings.layerTest({ retryInstantFailures: true });
@@ -158,7 +158,6 @@ it.effect.each(["cancel", "wrapped", "archived", "disabled"] as const)(
       const consumed = yield* Deferred.make<void>();
       const startupEntered = yield* Deferred.make<void>();
       const failStartup = yield* Deferred.make<void>();
-      const afterSequence = yield* sink.latestSequence();
       const dispatch = threads.dispatch;
       const attempts: CommandId[] = [];
       using _dispatch = vi.spyOn(threads, "dispatch").mockImplementation((command) =>
@@ -177,10 +176,48 @@ it.effect.each(["cancel", "wrapped", "archived", "disabled"] as const)(
         ),
       );
       const markerId = EventId.make("event:retry-marker");
+      const observedEvents: EventId[] = [];
+      const stream = sink.stream;
+      using _stream = vi.spyOn(sink, "stream").mockImplementation((input) =>
+        stream(input).pipe(
+          Stream.onStart(Deferred.succeed(watching, undefined)),
+          Stream.takeUntil((stored) => stored.event.id === markerId),
+          Stream.tap((stored) =>
+            Effect.sync(() => observedEvents.push(stored.event.id)).pipe(
+              Effect.andThen(
+                stored.event.id === markerId ? Deferred.succeed(consumed, undefined) : Effect.void,
+              ),
+            ),
+          ),
+        ),
+      );
       yield* Effect.gen(function* () {
         yield* Deferred.await(watching);
         const now = yield* DateTime.now;
         const failed = { ...starting, status: "failed" as const, completedAt: now };
+        const errorItem = {
+          id: TurnItemId.make("item:retry-error"),
+          threadId,
+          runId: starting.id,
+          nodeId: starting.rootNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          type: "error",
+          status: "failed",
+          title: "Could not start",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          failure: {
+            class: "transport_error",
+            message: "Provider disconnected",
+            code: null,
+            retryable: null,
+          },
+        } satisfies TurnItem;
         const failureCommit = sink.write({
           events: [
             {
@@ -188,29 +225,7 @@ it.effect.each(["cancel", "wrapped", "archived", "disabled"] as const)(
               type: "turn-item.updated",
               threadId,
               occurredAt: now,
-              payload: {
-                id: TurnItemId.make("item:retry-error"),
-                threadId,
-                runId: starting.id,
-                nodeId: starting.rootNodeId,
-                providerThreadId: null,
-                providerTurnId: null,
-                nativeItemRef: null,
-                parentItemId: null,
-                ordinal: 1,
-                type: "error",
-                status: "failed",
-                title: "Could not start",
-                startedAt: now,
-                completedAt: now,
-                updatedAt: now,
-                failure: {
-                  class: "transport_error",
-                  message: "Provider disconnected",
-                  code: null,
-                  retryable: null,
-                },
-              },
+              payload: errorItem,
             },
             {
               id: EventId.make("event:retry-failed"),
@@ -225,13 +240,6 @@ it.effect.each(["cancel", "wrapped", "archived", "disabled"] as const)(
               threadId,
               occurredAt: now,
               payload: failed,
-            },
-            {
-              id: markerId,
-              type: "thread.metadata-updated",
-              threadId,
-              occurredAt: now,
-              payload: original.thread,
             },
           ],
         });
@@ -268,6 +276,24 @@ it.effect.each(["cancel", "wrapped", "archived", "disabled"] as const)(
         }
         if (scenario === "disabled")
           yield* serverSettings.updateSettings({ retryInstantFailures: false });
+        yield* sink.write({
+          events: [
+            ...Array.from({ length: 8 }, (_, index) => ({
+              id: EventId.make(`event:unrelated-item:${index}`),
+              type: "turn-item.updated" as const,
+              threadId,
+              occurredAt: now,
+              payload: { ...errorItem, title: `Unrelated update ${index}` },
+            })),
+            {
+              id: markerId,
+              type: "run.updated",
+              threadId,
+              occurredAt: now,
+              payload: failed,
+            },
+          ],
+        });
         yield* admission.cancel("retry-drain");
         yield* Deferred.await(consumed);
         const after = yield* threads.getThreadProjection(threadId);
@@ -276,27 +302,12 @@ it.effect.each(["cancel", "wrapped", "archived", "disabled"] as const)(
           after.messages.filter((message) => message.id.startsWith("message:instant-retry:")),
         ).toHaveLength(shouldRetry ? 1 : 0);
         expect(attempts).toHaveLength(shouldRetry ? 2 : 1);
-      }).pipe(
-        Effect.provide(
-          InstantFailureRetry.layer.pipe(
-            Layer.provide(
-              Layer.succeed(ThreadManagement.ThreadManagementService, {
-                ...threads,
-                streamDomainEvents: sink.stream({ afterSequence }).pipe(
-                  Stream.map((stored) => stored.event),
-                  Stream.onStart(Deferred.succeed(watching, undefined)),
-                  Stream.mapError(
-                    (cause) => new Orchestrator.OrchestratorDomainEventStreamError({ cause }),
-                  ),
-                  Stream.tap((event) =>
-                    event.id === markerId ? Deferred.succeed(consumed, undefined) : Effect.void,
-                  ),
-                ),
-              }),
-            ),
-          ),
-        ),
-      );
+        expect(observedEvents).toEqual([
+          EventId.make("event:retry-failed"),
+          EventId.make("event:retry-failed-again"),
+          markerId,
+        ]);
+      }).pipe(Effect.provide(InstantFailureRetry.layer));
     }).pipe(Effect.provide(layerTest));
   },
 );
