@@ -47,21 +47,9 @@ export function makeUnavailableUsageLimits(input: {
   };
 }
 
-/**
- * Fold a sparse runtime update into the limits a provider currently
- * publishes. Windows upsert by `id`; a window the update omits keeps its
- * previous values, and a window that arrives without `resetsAt` or
- * `windowDurationMins` keeps whatever the last probe resolved for it.
- * Credit-only updates can change the balance without changing any window.
- *
- * An `unsupported` snapshot stays unsupported: an account that cannot have
- * subscription windows will not start reporting them mid-turn.
- *
- * An update never completes a read. Merged onto a failed probe, or onto no
- * probe at all, it keeps the windows it names but leaves the snapshot
- * `probeFailed`. Otherwise one streamed window would read as the account's
- * full list, and the next failed probe would keep it as the last good one.
- */
+// Sparse updates preserve omitted windows and metadata, including credit-only updates.
+// They cannot make an unsupported account supported or turn an incomplete probe
+// into a complete snapshot.
 export function applyUsageLimitsUpdate(input: {
   readonly previous: ServerProviderUsageLimits | undefined;
   readonly update: ProviderUsageLimitsUpdate;
@@ -128,16 +116,8 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
   );
 }
 
-/**
- * Choose what to publish after a status probe finishes. A probe that failed
- * this time must not wipe bars a previous probe or a turn already
- * established, so the last good snapshot stays; `unsupported` is
- * authoritative and replaces them.
- *
- * A successful probe replaces the published windows only when its read is
- * at least as recent. Finishing a probe does not make its usage read newer;
- * an older probe still contributes its metadata.
- */
+// Failed probes preserve known windows; unsupported probes replace them.
+// Probe completion time must not overwrite a newer usage reading.
 export function resolveUsageLimitsAfterProbe(input: {
   readonly published: ServerProviderUsageLimits | undefined;
   readonly probed: ServerProviderUsageLimits | undefined;

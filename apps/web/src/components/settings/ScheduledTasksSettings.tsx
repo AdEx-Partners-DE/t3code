@@ -359,8 +359,7 @@ function relativeLabelAt(value: string | null, nowMs: number): string {
   return `in ${Math.round(hours / 24)}d`;
 }
 
-// The clock is the label's own minute tick: the React Compiler caches a
-// `Date.now()` read in render on the timestamp alone.
+// Use the label's minute tick because the compiler caches render-time Date.now() on the timestamp.
 export function ScheduledRelativeLabel(props: { value: string | null }) {
   const nowMinute = useNowMinute();
   return relativeLabelAt(props.value, Date.parse(`${nowMinute}:00.000Z`));
@@ -424,9 +423,9 @@ export function ScheduledTasksSettings(target: {
     environmentId: EnvironmentId;
     task: ScheduledTask | null;
   } | null>(null);
-  const openForEdit = useCallback((environmentId: EnvironmentId, task: ScheduledTask) => {
+  const openForEdit = (environmentId: EnvironmentId, task: ScheduledTask) => {
     setEditor({ environmentId, task });
-  }, []);
+  };
   const defaultEnvironment = environment ?? connectedEnvironments[0];
   const canCreate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(defaultEnvironment?.environmentId ?? null),
@@ -514,32 +513,28 @@ function ScheduledTaskEnvironmentList({
 }) {
   const { scope, environments } = useSettingsScope();
   const states = useAtomValue(
-    useMemo(
-      () =>
-        Atom.make((get) =>
-          environments.map((environment) => {
-            const connected =
-              environment.connection.phase === "connected" && environment.serverConfig !== null;
-            const query = connected
-              ? get(
-                  serverEnvironment.scheduledTasksLive({
-                    environmentId: environment.environmentId,
-                    input: {},
-                  }),
-                )
-              : null;
-            const data = query === null ? null : Option.getOrNull(AsyncResult.value(query));
-            return {
-              environment,
-              connected,
-              tasks: data?.tasks.filter((task) =>
-                matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
-              ),
-              error: query?._tag === "Failure" ? formatEnvironmentQueryError(query.cause) : null,
-            };
-          }),
-        ),
-      [environments, scope],
+    Atom.make((get) =>
+      environments.map((environment) => {
+        const connected =
+          environment.connection.phase === "connected" && environment.serverConfig !== null;
+        const query = connected
+          ? get(
+              serverEnvironment.scheduledTasksLive({
+                environmentId: environment.environmentId,
+                input: {},
+              }),
+            )
+          : null;
+        const data = query === null ? null : Option.getOrNull(AsyncResult.value(query));
+        return {
+          environment,
+          connected,
+          tasks: data?.tasks.filter((task) =>
+            matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
+          ),
+          error: query?._tag === "Failure" ? formatEnvironmentQueryError(query.cause) : null,
+        };
+      }),
     ),
   );
   const linkedState = states.find((state) => state.environment.environmentId === environmentId);
@@ -1235,14 +1230,10 @@ function ScheduledTaskEditorDialog({
     connected ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} }) : null,
   );
   const allProjects = useProjects();
-  const projects = useMemo(
-    () =>
-      allProjects.filter(
-        (project) =>
-          project.environmentId === environmentId &&
-          matchesScheduledTaskScope(scope, environmentId, project.id),
-      ),
-    [allProjects, environmentId, scope],
+  const projects = allProjects.filter(
+    (project) =>
+      project.environmentId === environmentId &&
+      matchesScheduledTaskScope(scope, environmentId, project.id),
   );
   const settings = useEnvironmentSettings(environmentId);
   const providers =
@@ -1270,71 +1261,46 @@ function ScheduledTaskEditorDialog({
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   // Threads an all-threads task can leave out: the open threads it would
   // otherwise cover, plus any it already leaves out.
-  const excludableThreads = useMemo(
-    () =>
-      draft.scheduleMode !== "idle" || !draft.idleAllOpenThreads
-        ? []
-        : allThreadShells
-            .filter(
-              (thread) =>
-                thread.environmentId === environmentId &&
-                (draft.idleExcludeThreadIds.includes(thread.id) ||
-                  (thread.archivedAt === null &&
-                    // Open as the server counts it: not settled, or taken up again.
-                    thread.lineage.relationshipToParent !== "subagent" &&
-                    thread.settledOverride !== "settled" &&
-                    (thread.settledAt === null || thread.settledOverride === "active") &&
-                    (!draft.idleProjectOnly || thread.projectId === selectedProjectId))),
-            )
-            .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-    [
-      allThreadShells,
-      draft.idleAllOpenThreads,
-      draft.idleExcludeThreadIds,
-      draft.idleProjectOnly,
-      draft.scheduleMode,
-      environmentId,
-      selectedProjectId,
-    ],
-  );
+  const excludableThreads =
+    draft.scheduleMode !== "idle" || !draft.idleAllOpenThreads
+      ? []
+      : allThreadShells
+          .filter(
+            (thread) =>
+              thread.environmentId === environmentId &&
+              (draft.idleExcludeThreadIds.includes(thread.id) ||
+                (thread.archivedAt === null &&
+                  // Open as the server counts it: not settled, or taken up again.
+                  thread.lineage.relationshipToParent !== "subagent" &&
+                  thread.settledOverride !== "settled" &&
+                  (thread.settledAt === null || thread.settledOverride === "active") &&
+                  (!draft.idleProjectOnly || thread.projectId === selectedProjectId))),
+          )
+          .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   // Threads an idle task can post to or wait for: this environment's open
   // threads of the chosen project, most recently active first.
-  const idleThreads = useMemo(
-    () =>
-      draft.scheduleMode !== "idle"
-        ? []
-        : allThreadShells
-            .filter(
-              (thread) =>
-                thread.environmentId === environmentId &&
-                thread.archivedAt === null &&
-                (thread.projectId === selectedProjectId ||
-                  thread.id === draft.threadId ||
-                  thread.id === draft.idleWatchThreadId),
-            )
-            .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-            .slice(0, 100),
-    [
-      allThreadShells,
-      draft.idleWatchThreadId,
-      draft.scheduleMode,
-      draft.threadId,
-      environmentId,
-      selectedProjectId,
-    ],
-  );
+  const idleThreads =
+    draft.scheduleMode !== "idle"
+      ? []
+      : allThreadShells
+          .filter(
+            (thread) =>
+              thread.environmentId === environmentId &&
+              thread.archivedAt === null &&
+              (thread.projectId === selectedProjectId ||
+                thread.id === draft.threadId ||
+                thread.id === draft.idleWatchThreadId),
+          )
+          .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .slice(0, 100);
   // The task runs in selectedProject, so its model picker should reflect that
   // project's effective enablement, not just the machine's.
-  const instanceEntries = useMemo(
-    () =>
-      sortProviderInstanceEntries(
-        applyProviderInstanceSettings(
-          deriveProviderInstanceEntries(providers),
-          settings,
-          selectedProject?.id ?? null,
-        ),
-      ),
-    [providers, settings, selectedProject?.id],
+  const instanceEntries = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(
+      deriveProviderInstanceEntries(providers),
+      settings,
+      selectedProject?.id ?? null,
+    ),
   );
 
   const firstInstance = instanceEntries[0];
@@ -1347,9 +1313,11 @@ function ScheduledTaskEditorDialog({
   const activeInstanceId =
     activeSelection?.instanceId ?? firstInstance?.instanceId ?? ("" as ProviderInstanceId);
   const activeModel = activeSelection?.model ?? "";
-  const modelOptionsByInstance = useMemo(
-    () => getCustomModelOptionsByInstance(settings, providers, activeInstanceId, activeModel),
-    [settings, providers, activeInstanceId, activeModel],
+  const modelOptionsByInstance = getCustomModelOptionsByInstance(
+    settings,
+    providers,
+    activeInstanceId,
+    activeModel,
   );
 
   const reportFailure = (title: string, error: unknown) => {
@@ -1474,518 +1442,616 @@ function ScheduledTaskEditorDialog({
   };
 
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !saving) onClose();
-      }}
-    >
-      <DialogPopup className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>{draft.editingId ? "Edit task" : "New task"}</DialogTitle>
-          <DialogDescription>
-            Run a prompt automatically — on an interval, at a fixed time, or when a webhook is
-            called.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <DialogHeader>
+        <DialogTitle>{draft.editingId ? "Edit task" : "New task"}</DialogTitle>
+        <DialogDescription>
+          Run a prompt automatically on an interval, at a fixed time, or when a webhook is called.
+        </DialogDescription>
+      </DialogHeader>
 
-        <DialogPanel>
-          {/* Fieldsets default to min-width: min-content, which lets one wide control widen the form past the dialog. */}
-          <fieldset disabled={saving} className="min-w-0 space-y-5">
-            {!connected ? (
-              <p className="text-sm text-destructive">Reconnect this environment before saving.</p>
-            ) : null}
-            <Field label="Runs on" htmlFor="scheduled-task-environment">
+      <DialogPanel>
+        {/* Fieldsets default to min-width: min-content, which lets one wide control widen the form past the dialog. */}
+        <fieldset disabled={saving} className="min-w-0 space-y-5">
+          {!connected ? (
+            <p className="text-sm text-destructive">Reconnect this environment before saving.</p>
+          ) : null}
+          <Field label="Runs on" htmlFor="scheduled-task-environment">
+            <Select
+              value={environmentId}
+              disabled={task !== null || saving}
+              onValueChange={(id) => {
+                const next = connectedEnvironments.find((entry) => entry.environmentId === id);
+                if (!next) return;
+                setEnvironmentId(next.environmentId);
+                setDraft((current) => ({
+                  ...current,
+                  projectId: "",
+                  modelKey: "",
+                  baseModelSelection: null,
+                  baseRef: "main",
+                  startFromOrigin: true,
+                  existingWorktreePath: "",
+                }));
+              }}
+            >
+              <SelectTrigger id="scheduled-task-environment" size="sm">
+                <SelectValue>
+                  <span className="flex items-center gap-2">
+                    <EnvironmentMachineIcon
+                      kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
+                      className="size-4"
+                    />
+                    {environment?.label ?? "Unavailable environment"}
+                  </span>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                {connectedEnvironments.map((entry) => {
+                  const { secondary } = settingsScopeEnvironmentLabels(
+                    entry,
+                    connectedEnvironments,
+                  );
+                  return (
+                    <SelectItem
+                      key={entry.environmentId}
+                      value={entry.environmentId}
+                      label={entry.label}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <EnvironmentMachineIcon
+                          kind={resolveEnvironmentMachineKind(entry.serverConfig)}
+                          className="size-4"
+                        />
+                        <span className="min-w-0">
+                          <span className="block truncate">{entry.label}</span>
+                          {secondary ? (
+                            <span className="block max-w-72 truncate text-xs text-muted-foreground">
+                              {secondary}
+                            </span>
+                          ) : null}
+                        </span>
+                      </span>
+                    </SelectItem>
+                  );
+                })}
+              </SelectPopup>
+            </Select>
+          </Field>
+          {tasksQuery.error ? (
+            <p className="text-sm text-destructive" role="status">
+              {tasksQuery.error}
+            </p>
+          ) : null}
+          {editingTaskMissing ? (
+            <p className="text-xs text-destructive" role="status">
+              This scheduled task no longer exists.
+            </p>
+          ) : null}
+          <Field label="Name" htmlFor="scheduled-task-title">
+            <Input
+              id="scheduled-task-title"
+              placeholder="e.g. Check for Sentry issues"
+              value={draft.title}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, title: event.target.value }))
+              }
+            />
+          </Field>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Project" htmlFor="scheduled-task-project">
               <Select
-                value={environmentId}
-                disabled={task !== null || saving}
-                onValueChange={(id) => {
-                  const next = connectedEnvironments.find((entry) => entry.environmentId === id);
-                  if (!next) return;
-                  setEnvironmentId(next.environmentId);
-                  setDraft((current) => ({
-                    ...current,
-                    projectId: "",
-                    modelKey: "",
-                    baseModelSelection: null,
-                    baseRef: "main",
-                    startFromOrigin: true,
-                    existingWorktreePath: "",
-                  }));
-                }}
+                value={selectedProjectId}
+                onValueChange={(projectId) =>
+                  setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
+                }
               >
-                <SelectTrigger id="scheduled-task-environment" size="sm">
-                  <SelectValue>
-                    <span className="flex items-center gap-2">
-                      <EnvironmentMachineIcon
-                        kind={resolveEnvironmentMachineKind(environment?.serverConfig ?? null)}
-                        className="size-4"
-                      />
-                      {environment?.label ?? "Unavailable environment"}
-                    </span>
-                  </SelectValue>
+                <SelectTrigger size="sm" id="scheduled-task-project">
+                  <SelectValue placeholder="Select a project">{selectedProject?.title}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
-                  {connectedEnvironments.map((entry) => {
-                    const { secondary } = settingsScopeEnvironmentLabels(
-                      entry,
-                      connectedEnvironments,
-                    );
-                    return (
-                      <SelectItem
-                        key={entry.environmentId}
-                        value={entry.environmentId}
-                        label={entry.label}
-                      >
-                        <span className="flex min-w-0 items-center gap-2">
-                          <EnvironmentMachineIcon
-                            kind={resolveEnvironmentMachineKind(entry.serverConfig)}
-                            className="size-4"
-                          />
-                          <span className="min-w-0">
-                            <span className="block truncate">{entry.label}</span>
-                            {secondary ? (
-                              <span className="block max-w-72 truncate text-xs text-muted-foreground">
-                                {secondary}
-                              </span>
-                            ) : null}
-                          </span>
+                  {projects.map((project) => (
+                    <SelectItem key={project.id} value={project.id} label={project.title}>
+                      <span className="block truncate">{project.title}</span>
+                      {allProjects.some(
+                        (other) =>
+                          other.title === project.title &&
+                          (other.environmentId !== project.environmentId ||
+                            other.id !== project.id),
+                      ) ? (
+                        <span className="block max-w-72 truncate text-xs text-muted-foreground">
+                          {project.workspaceRoot}
                         </span>
-                      </SelectItem>
-                    );
-                  })}
+                      ) : null}
+                    </SelectItem>
+                  ))}
                 </SelectPopup>
               </Select>
             </Field>
-            {tasksQuery.error ? (
-              <p className="text-sm text-destructive" role="status">
-                {tasksQuery.error}
-              </p>
-            ) : null}
-            {editingTaskMissing ? (
-              <p className="text-xs text-destructive" role="status">
-                This scheduled task no longer exists.
-              </p>
-            ) : null}
-            <Field label="Name" htmlFor="scheduled-task-title">
-              <Input
-                id="scheduled-task-title"
-                placeholder="e.g. Check for Sentry issues"
-                value={draft.title}
-                onChange={(event) =>
-                  setDraft((current) => ({ ...current, title: event.target.value }))
-                }
-              />
-            </Field>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Project" htmlFor="scheduled-task-project">
+            {draft.scheduleMode === "idle" ? null : (
+              <Field label="Workspace" htmlFor="scheduled-task-workspace">
                 <Select
-                  value={selectedProjectId}
-                  onValueChange={(projectId) =>
-                    setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
+                  value={draft.workspaceMode}
+                  onValueChange={(value) =>
+                    setDraft((current) => ({ ...current, workspaceMode: value as WorkspaceMode }))
                   }
                 >
-                  <SelectTrigger size="sm" id="scheduled-task-project">
-                    <SelectValue placeholder="Select a project">
-                      {selectedProject?.title}
-                    </SelectValue>
+                  <SelectTrigger size="sm" id="scheduled-task-workspace">
+                    <SelectValue>{WORKSPACE_MODE_LABELS[draft.workspaceMode]}</SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
-                    {projects.map((project) => (
-                      <SelectItem key={project.id} value={project.id} label={project.title}>
-                        <span className="block truncate">{project.title}</span>
-                        {allProjects.some(
-                          (other) =>
-                            other.title === project.title &&
-                            (other.environmentId !== project.environmentId ||
-                              other.id !== project.id),
-                        ) ? (
-                          <span className="block max-w-72 truncate text-xs text-muted-foreground">
-                            {project.workspaceRoot}
-                          </span>
-                        ) : null}
-                      </SelectItem>
-                    ))}
+                    <SelectItem value="worktree">Create a new worktree</SelectItem>
+                    <SelectItem value="root">Use the project checkout</SelectItem>
+                    <SelectItem value="existing_worktree">Use a specific checkout</SelectItem>
                   </SelectPopup>
                 </Select>
               </Field>
+            )}
+          </div>
 
-              {draft.scheduleMode === "idle" ? null : (
-                <Field label="Workspace" htmlFor="scheduled-task-workspace">
-                  <Select
-                    value={draft.workspaceMode}
-                    onValueChange={(value) =>
-                      setDraft((current) => ({ ...current, workspaceMode: value as WorkspaceMode }))
-                    }
-                  >
-                    <SelectTrigger size="sm" id="scheduled-task-workspace">
-                      <SelectValue>{WORKSPACE_MODE_LABELS[draft.workspaceMode]}</SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup>
-                      <SelectItem value="worktree">Create a new worktree</SelectItem>
-                      <SelectItem value="root">Use the project checkout</SelectItem>
-                      <SelectItem value="existing_worktree">Use a specific checkout</SelectItem>
-                    </SelectPopup>
-                  </Select>
-                </Field>
-              )}
-            </div>
-
-            {draft.scheduleMode !== "idle" && draft.workspaceMode === "worktree" ? (
-              <Field label="Base branch" htmlFor="scheduled-task-base-ref">
-                <WorktreeBaseBranchPicker
-                  key={`${environmentId}:${selectedProjectId}`}
-                  id="scheduled-task-base-ref"
-                  environmentId={environmentId}
-                  cwd={selectedProject?.workspaceRoot ?? null}
-                  value={draft.baseRef}
-                  onValueChange={(baseRef) => setDraft((current) => ({ ...current, baseRef }))}
-                  startFromOrigin={draft.startFromOrigin}
-                  onStartFromOriginChange={(startFromOrigin) =>
-                    setDraft((current) => ({ ...current, startFromOrigin }))
-                  }
-                  disabled={saving || !connected}
-                />
-              </Field>
-            ) : null}
-            {draft.scheduleMode !== "idle" && draft.workspaceMode === "existing_worktree" ? (
-              <Field label="Checkout path" htmlFor="scheduled-task-checkout">
-                <Input
-                  id="scheduled-task-checkout"
-                  value={draft.existingWorktreePath}
-                  placeholder="/path/to/checkout"
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      existingWorktreePath: event.target.value,
-                    }))
-                  }
-                />
-              </Field>
-            ) : null}
-
-            <Field label="Prompt" htmlFor="scheduled-task-prompt">
-              <Textarea
-                id="scheduled-task-prompt"
-                className="max-h-64 overflow-y-auto"
-                placeholder="What should the agent do each time this runs?"
-                value={draft.prompt}
+          {draft.scheduleMode !== "idle" && draft.workspaceMode === "worktree" ? (
+            <Field label="Base branch" htmlFor="scheduled-task-base-ref">
+              <WorktreeBaseBranchPicker
+                key={`${environmentId}:${selectedProjectId}`}
+                id="scheduled-task-base-ref"
+                environmentId={environmentId}
+                cwd={selectedProject?.workspaceRoot ?? null}
+                value={draft.baseRef}
+                onValueChange={(baseRef) => setDraft((current) => ({ ...current, baseRef }))}
+                startFromOrigin={draft.startFromOrigin}
+                onStartFromOriginChange={(startFromOrigin) =>
+                  setDraft((current) => ({ ...current, startFromOrigin }))
+                }
+                disabled={saving || !connected}
+              />
+            </Field>
+          ) : null}
+          {draft.scheduleMode !== "idle" && draft.workspaceMode === "existing_worktree" ? (
+            <Field label="Checkout path" htmlFor="scheduled-task-checkout">
+              <Input
+                id="scheduled-task-checkout"
+                value={draft.existingWorktreePath}
+                placeholder="/path/to/checkout"
                 onChange={(event) =>
-                  setDraft((current) => ({ ...current, prompt: event.target.value }))
+                  setDraft((current) => ({
+                    ...current,
+                    existingWorktreePath: event.target.value,
+                  }))
                 }
               />
             </Field>
+          ) : null}
 
-            {draft.scheduleMode === "idle" ? (
-              <p className="text-sm text-muted-foreground">
-                Runs in the chosen thread, on the model and in the workspace that thread uses.
+          <Field label="Prompt" htmlFor="scheduled-task-prompt">
+            <Textarea
+              id="scheduled-task-prompt"
+              className="max-h-64 overflow-y-auto"
+              placeholder="What should the agent do each time this runs?"
+              value={draft.prompt}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, prompt: event.target.value }))
+              }
+            />
+          </Field>
+
+          {draft.scheduleMode === "idle" ? (
+            <p className="text-sm text-muted-foreground">
+              Runs in the chosen thread, on the model and in the workspace that thread uses.
+            </p>
+          ) : (
+            <Field label="Model">
+              <div>
+                <ProviderModelPicker
+                  environmentId={environmentId}
+                  disabled={saving || !connected}
+                  activeInstanceId={activeInstanceId}
+                  model={activeModel}
+                  lockedProvider={null}
+                  instanceEntries={instanceEntries}
+                  modelOptionsByInstance={modelOptionsByInstance}
+                  isComposerOwned={false}
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  onInstanceModelChange={(instanceId, model) =>
+                    setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
+                  }
+                />
+              </div>
+            </Field>
+          )}
+
+          <div className="space-y-3">
+            {task?.schedule.type === "interval" &&
+            task.schedule.everyMs < MIN_SCHEDULED_TASK_INTERVAL_MS ? (
+              <p className="text-sm text-muted-foreground" role="status">
+                This task uses a legacy interval below one minute. Saving updates it to at least one
+                minute.
               </p>
-            ) : (
-              <Field label="Model">
-                <div>
-                  <ProviderModelPicker
-                    environmentId={environmentId}
-                    disabled={saving || !connected}
-                    activeInstanceId={activeInstanceId}
-                    model={activeModel}
-                    lockedProvider={null}
-                    instanceEntries={instanceEntries}
-                    modelOptionsByInstance={modelOptionsByInstance}
-                    isComposerOwned={false}
-                    triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                    onInstanceModelChange={(instanceId, model) =>
-                      setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
+            ) : null}
+            <div className="flex items-center justify-between gap-2">
+              <Label>Schedule</Label>
+              <ToggleGroup
+                aria-label="Schedule type"
+                value={[draft.scheduleMode]}
+                onValueChange={(values) => {
+                  const mode = values[0] as ScheduleMode | undefined;
+                  if (
+                    mode === "fixed" ||
+                    mode === "interval" ||
+                    mode === "webhook" ||
+                    mode === "idle"
+                  )
+                    setDraft((current) => ({
+                      ...current,
+                      scheduleMode: mode,
+                      prompt:
+                        mode === "webhook" && !current.prompt.trim()
+                          ? DEFAULT_WEBHOOK_PROMPT
+                          : current.prompt,
+                    }));
+                }}
+              >
+                <Toggle value="fixed">At a time</Toggle>
+                <Toggle value="interval">Every interval</Toggle>
+                <Toggle value="webhook">On webhook</Toggle>
+                <Toggle value="idle">When idle</Toggle>
+              </ToggleGroup>
+            </div>
+
+            {draft.scheduleMode === "webhook" ? (
+              <div className="space-y-4">
+                <WebhookEndpointField environmentId={environmentId} task={liveTask} />
+                <p className="text-xs text-muted-foreground">
+                  {
+                    "Each request runs the prompt. Use {{body.path}}, {{headers.name}}, {{query.name}}, {{body}} or {{request}} in the prompt; only what it names reaches the agent."
+                  }
+                </p>
+                <Field
+                  label="Skip requests older than"
+                  hint="minutes, optional"
+                  htmlFor="scheduled-task-max-age"
+                >
+                  <Input
+                    id="scheduled-task-max-age"
+                    type="number"
+                    nativeInput
+                    min={1}
+                    max={MAX_WEBHOOK_DELIVERY_AGE_MINUTES}
+                    placeholder="Run every request"
+                    value={draft.maxDeliveryAgeMinutes}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        maxDeliveryAgeMinutes: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+                <WebhookFiltersField
+                  filters={draft.filters}
+                  onChange={(filters) => setDraft((current) => ({ ...current, filters }))}
+                />
+                <Field
+                  label="Replay key"
+                  hint="template, optional"
+                  htmlFor="scheduled-task-replay-key"
+                >
+                  <Input
+                    id="scheduled-task-replay-key"
+                    placeholder="{{headers.delivery-id}}"
+                    value={draft.replayKey}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, replayKey: event.target.value }))
+                    }
+                  />
+                </Field>
+                <Field
+                  label="Coalesce key"
+                  hint="template, optional"
+                  htmlFor="scheduled-task-coalesce-key"
+                >
+                  <Input
+                    id="scheduled-task-coalesce-key"
+                    placeholder="{{body.id}}"
+                    value={draft.coalesceKey}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, coalesceKey: event.target.value }))
+                    }
+                  />
+                </Field>
+                <Field
+                  label="Coalesce window"
+                  hint="seconds, 10–3600"
+                  htmlFor="scheduled-task-coalesce-window"
+                >
+                  <Input
+                    id="scheduled-task-coalesce-window"
+                    type="number"
+                    nativeInput
+                    min={10}
+                    max={3600}
+                    placeholder="120"
+                    value={draft.coalesceWindowSeconds}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        coalesceWindowSeconds: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+                <p className="text-xs text-muted-foreground">
+                  Replay keys suppress repeat deliveries for 7 days. Coalescing runs the latest
+                  payload once when the window from the first delivery closes. Empty keys run
+                  normally.
+                </p>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 space-y-1">
+                    <Label htmlFor="scheduled-task-signature">Require signature</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Reject requests without a valid HMAC-SHA256 signature of the body.
+                    </p>
+                  </div>
+                  <Switch
+                    id="scheduled-task-signature"
+                    checked={draft.signatureEnabled}
+                    onCheckedChange={(signatureEnabled) =>
+                      setDraft((current) => ({ ...current, signatureEnabled }))
                     }
                   />
                 </div>
-              </Field>
-            )}
-
-            <div className="space-y-3">
-              {task?.schedule.type === "interval" &&
-              task.schedule.everyMs < MIN_SCHEDULED_TASK_INTERVAL_MS ? (
-                <p className="text-sm text-muted-foreground" role="status">
-                  This task uses a legacy interval below one minute. Saving updates it to at least
-                  one minute.
-                </p>
-              ) : null}
-              <div className="flex items-center justify-between gap-2">
-                <Label>Schedule</Label>
+                {draft.signatureEnabled ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="Header" htmlFor="scheduled-task-signature-header">
+                      <Input
+                        id="scheduled-task-signature-header"
+                        value={draft.signatureHeader}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            signatureHeader: event.target.value,
+                          }))
+                        }
+                      />
+                    </Field>
+                    <Field label="Prefix" htmlFor="scheduled-task-signature-prefix">
+                      <Input
+                        id="scheduled-task-signature-prefix"
+                        value={draft.signaturePrefix}
+                        placeholder="None"
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            signaturePrefix: event.target.value,
+                          }))
+                        }
+                      />
+                    </Field>
+                    <Field label="Encoding" htmlFor="scheduled-task-signature-encoding">
+                      <Select
+                        value={draft.signatureEncoding}
+                        onValueChange={(value) =>
+                          setDraft((current) => ({
+                            ...current,
+                            signatureEncoding: value === "base64" ? "base64" : "hex",
+                          }))
+                        }
+                      >
+                        <SelectTrigger size="sm" id="scheduled-task-signature-encoding">
+                          <SelectValue>{draft.signatureEncoding}</SelectValue>
+                        </SelectTrigger>
+                        <SelectPopup>
+                          <SelectItem value="hex">hex</SelectItem>
+                          <SelectItem value="base64">base64</SelectItem>
+                        </SelectPopup>
+                      </Select>
+                    </Field>
+                    <Field label="Secret" htmlFor="scheduled-task-signature-secret">
+                      <Input
+                        id="scheduled-task-signature-secret"
+                        type="password"
+                        autoComplete="off"
+                        value={draft.signatureSecret}
+                        placeholder={
+                          liveTask?.schedule.type === "webhook" && liveTask.webhook?.hasSecret
+                            ? "Unchanged"
+                            : "Shared secret"
+                        }
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            signatureSecret: event.target.value,
+                          }))
+                        }
+                      />
+                    </Field>
+                  </div>
+                ) : null}
+              </div>
+            ) : draft.scheduleMode === "fixed" ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="scheduled-task-time">Run at</Label>
+                  <Input
+                    type="time"
+                    id="scheduled-task-time"
+                    nativeInput
+                    className="w-32"
+                    value={draft.timeOfDay}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, timeOfDay: event.target.value }))
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">on</span>
+                </div>
                 <ToggleGroup
-                  aria-label="Schedule type"
-                  value={[draft.scheduleMode]}
+                  multiple
+                  variant="outline"
+                  size="sm"
+                  aria-label="Days to run"
+                  value={[...draft.weekdays].map(String)}
                   onValueChange={(values) => {
-                    const mode = values[0] as ScheduleMode | undefined;
-                    if (
-                      mode === "fixed" ||
-                      mode === "interval" ||
-                      mode === "webhook" ||
-                      mode === "idle"
-                    )
-                      setDraft((current) => ({
-                        ...current,
-                        scheduleMode: mode,
-                        prompt:
-                          mode === "webhook" && !current.prompt.trim()
-                            ? DEFAULT_WEBHOOK_PROMPT
-                            : current.prompt,
-                      }));
+                    if (values.length === 0) return;
+                    setDraft((current) => ({
+                      ...current,
+                      weekdays: new Set(values.map(Number)),
+                    }));
                   }}
                 >
-                  <Toggle value="fixed">At a time</Toggle>
-                  <Toggle value="interval">Every interval</Toggle>
-                  <Toggle value="webhook">On webhook</Toggle>
-                  <Toggle value="idle">When idle</Toggle>
+                  {WEEKDAY_ORDER.map((day) => (
+                    <Toggle key={day} value={String(day)} aria-label={WEEKDAY_LABELS[day]}>
+                      {WEEKDAY_SHORT[day]}
+                    </Toggle>
+                  ))}
                 </ToggleGroup>
               </div>
-
-              {draft.scheduleMode === "webhook" ? (
-                <div className="space-y-4">
-                  <WebhookEndpointField environmentId={environmentId} task={liveTask} />
-                  <p className="text-xs text-muted-foreground">
-                    {
-                      "Each request runs the prompt. Use {{body.path}}, {{headers.name}}, {{query.name}}, {{body}} or {{request}} in the prompt; only what it names reaches the agent."
+            ) : draft.scheduleMode === "idle" ? (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Label htmlFor="scheduled-task-idle-thread">Send to</Label>
+                  <Select
+                    value={
+                      draft.idleAllOpenThreads
+                        ? draft.idleProjectOnly
+                          ? PROJECT_OPEN_THREADS
+                          : ALL_OPEN_THREADS
+                        : draft.threadId
                     }
-                  </p>
-                  <Field
-                    label="Skip requests older than"
-                    hint="minutes, optional"
-                    htmlFor="scheduled-task-max-age"
-                  >
-                    <Input
-                      id="scheduled-task-max-age"
-                      type="number"
-                      nativeInput
-                      min={1}
-                      max={MAX_WEBHOOK_DELIVERY_AGE_MINUTES}
-                      placeholder="Run every request"
-                      value={draft.maxDeliveryAgeMinutes}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          maxDeliveryAgeMinutes: event.target.value,
-                        }))
-                      }
-                    />
-                  </Field>
-                  <WebhookFiltersField
-                    filters={draft.filters}
-                    onChange={(filters) => setDraft((current) => ({ ...current, filters }))}
-                  />
-                  <Field
-                    label="Replay key"
-                    hint="template, optional"
-                    htmlFor="scheduled-task-replay-key"
-                  >
-                    <Input
-                      id="scheduled-task-replay-key"
-                      placeholder="{{headers.delivery-id}}"
-                      value={draft.replayKey}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...current, replayKey: event.target.value }))
-                      }
-                    />
-                  </Field>
-                  <Field
-                    label="Coalesce key"
-                    hint="template, optional"
-                    htmlFor="scheduled-task-coalesce-key"
-                  >
-                    <Input
-                      id="scheduled-task-coalesce-key"
-                      placeholder="{{body.id}}"
-                      value={draft.coalesceKey}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...current, coalesceKey: event.target.value }))
-                      }
-                    />
-                  </Field>
-                  <Field
-                    label="Coalesce window"
-                    hint="seconds, 10–3600"
-                    htmlFor="scheduled-task-coalesce-window"
-                  >
-                    <Input
-                      id="scheduled-task-coalesce-window"
-                      type="number"
-                      nativeInput
-                      min={10}
-                      max={3600}
-                      placeholder="120"
-                      value={draft.coalesceWindowSeconds}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          coalesceWindowSeconds: event.target.value,
-                        }))
-                      }
-                    />
-                  </Field>
-                  <p className="text-xs text-muted-foreground">
-                    Replay keys suppress repeat deliveries for 7 days. Coalescing runs the latest
-                    payload once when the window from the first delivery closes. Empty keys run
-                    normally.
-                  </p>
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="min-w-0 space-y-1">
-                      <Label htmlFor="scheduled-task-signature">Require signature</Label>
-                      <p className="text-sm text-muted-foreground">
-                        Reject requests without a valid HMAC-SHA256 signature of the body.
-                      </p>
-                    </div>
-                    <Switch
-                      id="scheduled-task-signature"
-                      checked={draft.signatureEnabled}
-                      onCheckedChange={(signatureEnabled) =>
-                        setDraft((current) => ({ ...current, signatureEnabled }))
-                      }
-                    />
-                  </div>
-                  {draft.signatureEnabled ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <Field label="Header" htmlFor="scheduled-task-signature-header">
-                        <Input
-                          id="scheduled-task-signature-header"
-                          value={draft.signatureHeader}
-                          onChange={(event) =>
-                            setDraft((current) => ({
-                              ...current,
-                              signatureHeader: event.target.value,
-                            }))
-                          }
-                        />
-                      </Field>
-                      <Field label="Prefix" htmlFor="scheduled-task-signature-prefix">
-                        <Input
-                          id="scheduled-task-signature-prefix"
-                          value={draft.signaturePrefix}
-                          placeholder="None"
-                          onChange={(event) =>
-                            setDraft((current) => ({
-                              ...current,
-                              signaturePrefix: event.target.value,
-                            }))
-                          }
-                        />
-                      </Field>
-                      <Field label="Encoding" htmlFor="scheduled-task-signature-encoding">
-                        <Select
-                          value={draft.signatureEncoding}
-                          onValueChange={(value) =>
-                            setDraft((current) => ({
-                              ...current,
-                              signatureEncoding: value === "base64" ? "base64" : "hex",
-                            }))
-                          }
-                        >
-                          <SelectTrigger size="sm" id="scheduled-task-signature-encoding">
-                            <SelectValue>{draft.signatureEncoding}</SelectValue>
-                          </SelectTrigger>
-                          <SelectPopup>
-                            <SelectItem value="hex">hex</SelectItem>
-                            <SelectItem value="base64">base64</SelectItem>
-                          </SelectPopup>
-                        </Select>
-                      </Field>
-                      <Field label="Secret" htmlFor="scheduled-task-signature-secret">
-                        <Input
-                          id="scheduled-task-signature-secret"
-                          type="password"
-                          autoComplete="off"
-                          value={draft.signatureSecret}
-                          placeholder={
-                            liveTask?.schedule.type === "webhook" && liveTask.webhook?.hasSecret
-                              ? "Unchanged"
-                              : "Shared secret"
-                          }
-                          onChange={(event) =>
-                            setDraft((current) => ({
-                              ...current,
-                              signatureSecret: event.target.value,
-                            }))
-                          }
-                        />
-                      </Field>
-                    </div>
-                  ) : null}
-                </div>
-              ) : draft.scheduleMode === "fixed" ? (
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor="scheduled-task-time">Run at</Label>
-                    <Input
-                      type="time"
-                      id="scheduled-task-time"
-                      nativeInput
-                      className="w-32"
-                      value={draft.timeOfDay}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...current, timeOfDay: event.target.value }))
-                      }
-                    />
-                    <span className="text-xs text-muted-foreground">on</span>
-                  </div>
-                  <ToggleGroup
-                    multiple
-                    variant="outline"
-                    size="sm"
-                    aria-label="Days to run"
-                    value={[...draft.weekdays].map(String)}
-                    onValueChange={(values) => {
-                      if (values.length === 0) return;
+                    onValueChange={(threadId) =>
                       setDraft((current) => ({
                         ...current,
-                        weekdays: new Set(values.map(Number)),
-                      }));
-                    }}
+                        idleAllOpenThreads:
+                          threadId === ALL_OPEN_THREADS || threadId === PROJECT_OPEN_THREADS,
+                        idleProjectOnly: threadId === PROJECT_OPEN_THREADS,
+                        threadId:
+                          threadId === ALL_OPEN_THREADS || threadId === PROJECT_OPEN_THREADS
+                            ? ""
+                            : (threadId ?? ""),
+                      }))
+                    }
                   >
-                    {WEEKDAY_ORDER.map((day) => (
-                      <Toggle key={day} value={String(day)} aria-label={WEEKDAY_LABELS[day]}>
-                        {WEEKDAY_SHORT[day]}
-                      </Toggle>
-                    ))}
-                  </ToggleGroup>
-                </div>
-              ) : draft.scheduleMode === "idle" ? (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Label htmlFor="scheduled-task-idle-thread">Send to</Label>
-                    <Select
-                      value={
-                        draft.idleAllOpenThreads
+                    <SelectTrigger size="sm" id="scheduled-task-idle-thread" className="w-56">
+                      <SelectValue placeholder="Choose a thread">
+                        {draft.idleAllOpenThreads
                           ? draft.idleProjectOnly
-                            ? PROJECT_OPEN_THREADS
-                            : ALL_OPEN_THREADS
-                          : draft.threadId
-                      }
+                            ? "Open threads of this project"
+                            : "All open threads"
+                          : idleThreads.find((thread) => thread.id === draft.threadId)?.title}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup>
+                      <SelectItem value={ALL_OPEN_THREADS}>All open threads</SelectItem>
+                      <SelectItem value={PROJECT_OPEN_THREADS}>
+                        Open threads of this project
+                      </SelectItem>
+                      {idleThreads.map((thread) => (
+                        <SelectItem key={thread.id} value={thread.id}>
+                          {thread.title}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  {draft.idleAllOpenThreads ? (
+                    <>
+                      <Label htmlFor="scheduled-task-idle-parallel">
+                        that stand still, while fewer than
+                      </Label>
+                      <Input
+                        id="scheduled-task-idle-parallel"
+                        type="number"
+                        nativeInput
+                        min={1}
+                        max={10}
+                        step={1}
+                        className="w-20"
+                        value={draft.idleMaxParallel}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            idleMaxParallel: event.target.value,
+                          }))
+                        }
+                      />
+                      <span className="text-xs text-muted-foreground">are at work</span>
+                      <Menu>
+                        <MenuTrigger
+                          render={
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              aria-label="Threads this task leaves out"
+                            />
+                          }
+                        >
+                          {draft.idleExcludeThreadIds.length === 0
+                            ? "Leaves out no thread"
+                            : `Leaves out ${draft.idleExcludeThreadIds.length} ${draft.idleExcludeThreadIds.length === 1 ? "thread" : "threads"}`}
+                        </MenuTrigger>
+                        <MenuPopup align="start">
+                          {excludableThreads.length === 0 ? (
+                            <MenuItem disabled>No open threads</MenuItem>
+                          ) : (
+                            excludableThreads.map((thread) => (
+                              <MenuCheckboxItem
+                                key={thread.id}
+                                checked={draft.idleExcludeThreadIds.includes(thread.id)}
+                                closeOnClick={false}
+                                onCheckedChange={(checked) =>
+                                  setDraft((current) => ({
+                                    ...current,
+                                    idleExcludeThreadIds: checked
+                                      ? [...current.idleExcludeThreadIds, thread.id]
+                                      : current.idleExcludeThreadIds.filter(
+                                          (id) => id !== thread.id,
+                                        ),
+                                  }))
+                                }
+                              >
+                                {thread.title}
+                              </MenuCheckboxItem>
+                            ))
+                          )}
+                        </MenuPopup>
+                      </Menu>
+                      <div className="flex w-full items-center gap-2">
+                        <Switch
+                          checked={draft.idleSupervise}
+                          onCheckedChange={(checked) =>
+                            setDraft((current) => ({
+                              ...current,
+                              idleSupervise: Boolean(checked),
+                            }))
+                          }
+                          aria-label="Only send on threads that do not need me"
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          Only send on threads that do not need me: a model reads each last reply
+                          and tells the agent to go on where it merely asked for leave. The prompt
+                          above is not sent. At most twice per thread until you write in it again.
+                        </span>
+                      </div>
+                    </>
+                  ) : null}
+                  {draft.idleAllOpenThreads ? null : (
+                    <Label htmlFor="scheduled-task-idle-watch">when</Label>
+                  )}
+                  {draft.idleAllOpenThreads ? null : (
+                    <Select
+                      value={draft.idleWatchThreadId}
                       onValueChange={(threadId) =>
-                        setDraft((current) => ({
-                          ...current,
-                          idleAllOpenThreads:
-                            threadId === ALL_OPEN_THREADS || threadId === PROJECT_OPEN_THREADS,
-                          idleProjectOnly: threadId === PROJECT_OPEN_THREADS,
-                          threadId:
-                            threadId === ALL_OPEN_THREADS || threadId === PROJECT_OPEN_THREADS
-                              ? ""
-                              : (threadId ?? ""),
-                        }))
+                        setDraft((current) => ({ ...current, idleWatchThreadId: threadId ?? "" }))
                       }
                     >
-                      <SelectTrigger size="sm" id="scheduled-task-idle-thread" className="w-56">
-                        <SelectValue placeholder="Choose a thread">
-                          {draft.idleAllOpenThreads
-                            ? draft.idleProjectOnly
-                              ? "Open threads of this project"
-                              : "All open threads"
-                            : idleThreads.find((thread) => thread.id === draft.threadId)?.title}
+                      <SelectTrigger size="sm" id="scheduled-task-idle-watch" className="w-56">
+                        <SelectValue>
+                          {draft.idleWatchThreadId === ""
+                            ? "that thread finishes"
+                            : `"${idleThreads.find((thread) => thread.id === draft.idleWatchThreadId)?.title ?? "another thread"}" finishes`}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectPopup>
-                        <SelectItem value={ALL_OPEN_THREADS}>All open threads</SelectItem>
-                        <SelectItem value={PROJECT_OPEN_THREADS}>
-                          Open threads of this project
-                        </SelectItem>
+                        <SelectItem value="">that thread finishes</SelectItem>
                         {idleThreads.map((thread) => (
                           <SelectItem key={thread.id} value={thread.id}>
                             {thread.title}
@@ -1993,248 +2059,137 @@ function ScheduledTaskEditorDialog({
                         ))}
                       </SelectPopup>
                     </Select>
-                    {draft.idleAllOpenThreads ? (
-                      <>
-                        <Label htmlFor="scheduled-task-idle-parallel">
-                          that stand still, while fewer than
-                        </Label>
-                        <Input
-                          id="scheduled-task-idle-parallel"
-                          type="number"
-                          nativeInput
-                          min={1}
-                          max={10}
-                          step={1}
-                          className="w-20"
-                          value={draft.idleMaxParallel}
-                          onChange={(event) =>
-                            setDraft((current) => ({
-                              ...current,
-                              idleMaxParallel: event.target.value,
-                            }))
-                          }
-                        />
-                        <span className="text-xs text-muted-foreground">are at work</span>
-                        <Menu>
-                          <MenuTrigger
-                            render={
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                aria-label="Threads this task leaves out"
-                              />
-                            }
-                          >
-                            {draft.idleExcludeThreadIds.length === 0
-                              ? "Leaves out no thread"
-                              : `Leaves out ${draft.idleExcludeThreadIds.length} ${draft.idleExcludeThreadIds.length === 1 ? "thread" : "threads"}`}
-                          </MenuTrigger>
-                          <MenuPopup align="start">
-                            {excludableThreads.length === 0 ? (
-                              <MenuItem disabled>No open threads</MenuItem>
-                            ) : (
-                              excludableThreads.map((thread) => (
-                                <MenuCheckboxItem
-                                  key={thread.id}
-                                  checked={draft.idleExcludeThreadIds.includes(thread.id)}
-                                  closeOnClick={false}
-                                  onCheckedChange={(checked) =>
-                                    setDraft((current) => ({
-                                      ...current,
-                                      idleExcludeThreadIds: checked
-                                        ? [...current.idleExcludeThreadIds, thread.id]
-                                        : current.idleExcludeThreadIds.filter(
-                                            (id) => id !== thread.id,
-                                          ),
-                                    }))
-                                  }
-                                >
-                                  {thread.title}
-                                </MenuCheckboxItem>
-                              ))
-                            )}
-                          </MenuPopup>
-                        </Menu>
-                        <div className="flex w-full items-center gap-2">
-                          <Switch
-                            checked={draft.idleSupervise}
-                            onCheckedChange={(checked) =>
-                              setDraft((current) => ({
-                                ...current,
-                                idleSupervise: Boolean(checked),
-                              }))
-                            }
-                            aria-label="Only send on threads that do not need me"
-                          />
-                          <span className="text-xs text-muted-foreground">
-                            Only send on threads that do not need me: a model reads each last reply
-                            and tells the agent to go on where it merely asked for leave. The prompt
-                            above is not sent. At most twice per thread until you write in it again.
-                          </span>
-                        </div>
-                      </>
-                    ) : null}
-                    {draft.idleAllOpenThreads ? null : (
-                      <Label htmlFor="scheduled-task-idle-watch">when</Label>
-                    )}
-                    {draft.idleAllOpenThreads ? null : (
-                      <Select
-                        value={draft.idleWatchThreadId}
-                        onValueChange={(threadId) =>
-                          setDraft((current) => ({ ...current, idleWatchThreadId: threadId ?? "" }))
-                        }
-                      >
-                        <SelectTrigger size="sm" id="scheduled-task-idle-watch" className="w-56">
-                          <SelectValue>
-                            {draft.idleWatchThreadId === ""
-                              ? "that thread finishes"
-                              : `"${idleThreads.find((thread) => thread.id === draft.idleWatchThreadId)?.title ?? "another thread"}" finishes`}
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectPopup>
-                          <SelectItem value="">that thread finishes</SelectItem>
-                          {idleThreads.map((thread) => (
-                            <SelectItem key={thread.id} value={thread.id}>
-                              {thread.title}
-                            </SelectItem>
-                          ))}
-                        </SelectPopup>
-                      </Select>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Label htmlFor="scheduled-task-idle-runs">Run up to</Label>
-                    <Input
-                      type="number"
-                      id="scheduled-task-idle-runs"
-                      nativeInput
-                      min={1}
-                      max={500}
-                      step={1}
-                      className="w-20"
-                      value={draft.idleMaxRuns}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...current, idleMaxRuns: event.target.value }))
-                      }
-                    />
-                    <span className="text-xs text-muted-foreground">times, waiting at least</span>
-                    <Input
-                      type="number"
-                      aria-label="Minutes to wait after a run ends"
-                      nativeInput
-                      min={0}
-                      step="any"
-                      className="w-20"
-                      value={draft.idlePauseMinutes}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          idlePauseMinutes: event.target.value,
-                        }))
-                      }
-                    />
-                    <span className="text-xs text-muted-foreground">minutes after each run</span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Label htmlFor="scheduled-task-idle-stop">Stop when the reply contains</Label>
-                    <Input
-                      id="scheduled-task-idle-stop"
-                      nativeInput
-                      maxLength={80}
-                      placeholder="Optional, e.g. ALL DONE"
-                      className="w-56"
-                      value={draft.idleStopPhrase}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...current, idleStopPhrase: event.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Label htmlFor="scheduled-task-idle-budget">
-                      Stop when the account has under
-                    </Label>
-                    <Input
-                      type="number"
-                      id="scheduled-task-idle-budget"
-                      nativeInput
-                      min={1}
-                      max={99}
-                      step={1}
-                      placeholder="off"
-                      className="w-20"
-                      value={draft.idleMinRemainingPercent}
-                      onChange={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          idleMinRemainingPercent: event.target.value,
-                        }))
-                      }
-                    />
-                    <span className="text-xs text-muted-foreground">
-                      percent of its tightest usage window left
-                    </span>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    {draft.idleAllOpenThreads
-                      ? "Sends the prompt to open threads that stand still, most recently finished first, once per finished run. Runs count over all threads."
-                      : "Sends the prompt each time the chosen thread finishes and nothing waits on you. Needs a thread."}{" "}
-                    The task turns itself off after the last run; saving or enabling it starts the
-                    count again.
-                  </p>
+                  )}
                 </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <Label htmlFor="scheduled-task-interval">Run every</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Label htmlFor="scheduled-task-idle-runs">Run up to</Label>
                   <Input
                     type="number"
-                    id="scheduled-task-interval"
+                    id="scheduled-task-idle-runs"
                     nativeInput
                     min={1}
-                    step="any"
-                    className="w-24"
-                    value={draft.intervalMinutes}
+                    max={500}
+                    step={1}
+                    className="w-20"
+                    value={draft.idleMaxRuns}
                     onChange={(event) =>
-                      setDraft((current) => ({ ...current, intervalMinutes: event.target.value }))
+                      setDraft((current) => ({ ...current, idleMaxRuns: event.target.value }))
                     }
                   />
-                  <span className="text-xs text-muted-foreground">minutes</span>
+                  <span className="text-xs text-muted-foreground">times, waiting at least</span>
+                  <Input
+                    type="number"
+                    aria-label="Minutes to wait after a run ends"
+                    nativeInput
+                    min={0}
+                    step="any"
+                    className="w-20"
+                    value={draft.idlePauseMinutes}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        idlePauseMinutes: event.target.value,
+                      }))
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">minutes after each run</span>
                 </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0 space-y-1">
-                <Label htmlFor="scheduled-task-enabled">Enabled</Label>
-                <p
-                  id="scheduled-task-enabled-description"
-                  className="text-sm text-muted-foreground"
-                >
-                  Disabled tasks stay saved but do not run.
+                <div className="flex flex-wrap items-center gap-2">
+                  <Label htmlFor="scheduled-task-idle-stop">Stop when the reply contains</Label>
+                  <Input
+                    id="scheduled-task-idle-stop"
+                    nativeInput
+                    maxLength={80}
+                    placeholder="Optional, e.g. ALL DONE"
+                    className="w-56"
+                    value={draft.idleStopPhrase}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, idleStopPhrase: event.target.value }))
+                    }
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Label htmlFor="scheduled-task-idle-budget">
+                    Stop when the account has under
+                  </Label>
+                  <Input
+                    type="number"
+                    id="scheduled-task-idle-budget"
+                    nativeInput
+                    min={1}
+                    max={99}
+                    step={1}
+                    placeholder="off"
+                    className="w-20"
+                    value={draft.idleMinRemainingPercent}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        idleMinRemainingPercent: event.target.value,
+                      }))
+                    }
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    percent of its tightest usage window left
+                  </span>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {draft.idleAllOpenThreads
+                    ? "Sends the prompt to open threads that stand still, most recently finished first, once per finished run. Runs count over all threads."
+                    : "Sends the prompt each time the chosen thread finishes and nothing waits on you. Needs a thread."}{" "}
+                  The task turns itself off after the last run; saving or enabling it starts the
+                  count again.
                 </p>
               </div>
-              <Switch
-                id="scheduled-task-enabled"
-                aria-describedby="scheduled-task-enabled-description"
-                checked={draft.enabled}
-                onCheckedChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
-              />
-            </div>
-          </fieldset>
-        </DialogPanel>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Label htmlFor="scheduled-task-interval">Run every</Label>
+                <Input
+                  type="number"
+                  id="scheduled-task-interval"
+                  nativeInput
+                  min={1}
+                  step="any"
+                  className="w-24"
+                  value={draft.intervalMinutes}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, intervalMinutes: event.target.value }))
+                  }
+                />
+                <span className="text-xs text-muted-foreground">minutes</span>
+              </div>
+            )}
+          </div>
 
-        <DialogFooter>
-          <DialogClose render={<Button variant="outline" size="sm" disabled={saving} />}>
-            Cancel
-          </DialogClose>
-          <Button
-            size="sm"
-            disabled={!canOperate || saving || editingTaskMissing || !connected || !tasksQuery.data}
-            onClick={() => void submit()}
-          >
-            {draft.editingId ? "Save task" : "Create task"}
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0 space-y-1">
+              <Label htmlFor="scheduled-task-enabled">Enabled</Label>
+              <p id="scheduled-task-enabled-description" className="text-sm text-muted-foreground">
+                Disabled tasks stay saved but do not run.
+              </p>
+            </div>
+            <Switch
+              id="scheduled-task-enabled"
+              aria-describedby="scheduled-task-enabled-description"
+              checked={draft.enabled}
+              onCheckedChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
+            />
+          </div>
+        </fieldset>
+      </DialogPanel>
+
+      <DialogFooter>
+        <DialogClose render={<Button variant="outline" size="sm" disabled={saving} />}>
+          Cancel
+        </DialogClose>
+        <Button
+          size="sm"
+          disabled={!canOperate || saving || editingTaskMissing || !connected || !tasksQuery.data}
+          onClick={() => void submit()}
+        >
+          {draft.editingId ? "Save task" : "Create task"}
+        </Button>
+      </DialogFooter>
+    </>
   );
 }

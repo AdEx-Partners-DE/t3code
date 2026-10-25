@@ -129,13 +129,17 @@ function RecoveryActions({
 
   const scheduled =
     recovery?.runId === runId && recovery.resetAt === resetAt && recovery.autoResume;
+  // The server leaves snoozedUntil in place after the timer wakes the thread,
+  // so a snooze whose reset has passed is no longer active.
+  const resetPassed = Date.parse(resetAt ?? "") <= nowMs;
   const snoozed =
     recovery?.snooze === true &&
     recovery.runId === runId &&
     recovery.resetAt === resetAt &&
     resetAt !== null &&
     snoozedUntil !== null &&
-    Date.parse(snoozedUntil) === Date.parse(resetAt);
+    Date.parse(snoozedUntil) === Date.parse(resetAt) &&
+    !resetPassed;
   async function run(change: () => Promise<void>, title: string) {
     setPending(true);
     try {
@@ -170,8 +174,7 @@ function RecoveryActions({
       action === "resume" ? "Could not change auto-resume" : "Could not snooze thread",
     );
   }
-  // Failures go to a toast: the actions column is auto-sized, so inline error
-  // text would widen it and crush the title.
+  // Inline errors would widen the actions column and crush the title.
   return (
     <>
       {switchTargets.map((target) => (
@@ -192,14 +195,14 @@ function RecoveryActions({
           {pending ? "Saving..." : scheduled ? "Cancel auto-resume" : "Resume at reset"}
         </Button>
       ) : null}
-      {canSchedule && !snoozed ? (
+      {canSchedule ? (
         <Button
           size="xs"
           variant="ghost"
-          disabled={pending || Date.parse(resetAt!) <= nowMs}
+          disabled={pending || (!snoozed && resetPassed)}
           onClick={() => void toggle("snooze")}
         >
-          {pending ? "Saving..." : "Snooze until reset"}
+          {pending ? "Saving..." : snoozed ? "Wake now" : "Snooze until reset"}
         </Button>
       ) : null}
     </>

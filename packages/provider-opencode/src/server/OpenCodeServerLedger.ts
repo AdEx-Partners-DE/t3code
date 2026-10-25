@@ -44,14 +44,8 @@ class WindowsProcessQueryError extends Schema.TaggedError<WindowsProcessQueryErr
   }
 }
 
-/**
- * Local `opencode serve` processes run in their own process group so T3 can
- * stop the whole group, which also means they outlive a T3 server that is
- * SIGKILLed or crashes. On Windows they are not detached, but a killed
- * process takes no children with it there either. Each spawn is recorded
- * under the state directory and removed on a graceful stop; the next server
- * start stops whatever a dead server left behind.
- */
+// Server crashes can leave provider descendants alive on both POSIX and Windows.
+// Record ownership at spawn so the next server can reclaim only its own processes.
 export class OpenCodeServerLedger extends Context.Service<
   OpenCodeServerLedger,
   {
@@ -78,7 +72,7 @@ interface ObservedProcess {
   readonly zombie: boolean;
 }
 
-// `ps -o lstart` prints e.g. `Sat Sep  6 20:51:57 2026`; C locale and UTC keep it stable.
+// ps lstart needs C locale and UTC for stable parsing.
 const DARWIN_PS_LINE =
   /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(\w{3} \w{3} +\d{1,2} \d{2}:\d{2}:\d{2} \d{4})\s+(.*)$/;
 

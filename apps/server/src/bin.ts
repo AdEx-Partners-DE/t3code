@@ -1,11 +1,8 @@
 /**
- * Thin CLI entry.
- *
- * Every ACP agent spawns `t3 acp-mcp-bridge` while opening its session, and
- * terminal-fallback agents run `t3 acp-mcp-call` per tool call, so their
- * startup sits on first-message latency. Those commands and the argument-free
- * service launcher dispatch before the full CLI module graph loads. Other
- * invocations defer to the real CLI in ./binCli.ts.
+ * Every ACP agent spawns `t3 acp-mcp-bridge` while opening its session, and terminal-fallback
+ * agents run `t3 acp-mcp-call` per tool call, so their startup sits on first-message latency.
+ * They, the service launcher and Codex's managed-token helper dispatch before the full CLI module graph (seconds
+ * of evaluation) loads; everything else defers to the real CLI in ./binCli.ts.
  */
 import { isEntrypoint } from "./entrypoint.ts";
 
@@ -29,12 +26,14 @@ if (
       process.stderr.write(`[service-launcher] ${error.message}\n`);
       process.exitCode = 1;
     });
+  } else if (command === "__managed-chatgpt-token") {
+    const { runManagedChatGptTokenCli } = await import("./cli/managedChatGptToken.ts");
+    await runManagedChatGptTokenCli(process.argv.slice(3));
   } else if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
     const { runAcpMcpCliFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
     await runAcpMcpCliFastPath(command, process.argv.slice(3));
   } else {
-    // Before anything reads stdin: the desktop app's Windows launcher starts
-    // the CLI without one. Never for the fast paths, whose stdin is a pipe.
+    // Windows desktop launches without stdin; attach before reading, except on fast paths using pipes.
     const { attachConsoleStdin } = await import("./cli/consoleStdin.ts");
     attachConsoleStdin();
     const { runCli } = await import("./binCli.ts");

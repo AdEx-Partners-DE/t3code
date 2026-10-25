@@ -18,7 +18,6 @@ export function useAssistantCitationTarget({
   rows,
   listRef,
   viewport,
-  listLoaded,
   historyLoading,
   loadEarlier,
   getTurnFoldRunId,
@@ -30,7 +29,6 @@ export function useAssistantCitationTarget({
   rows: ReadonlyArray<MessagesTimelineRow>;
   listRef: RefObject<LegendListRef | null>;
   viewport: HTMLElement | null;
-  listLoaded: boolean;
   historyLoading: boolean;
   loadEarlier: CitationHistoryPage | null;
   getTurnFoldRunId: (entryId: string) => RunId | undefined;
@@ -39,13 +37,14 @@ export function useAssistantCitationTarget({
 }) {
   const [ready, setReady] = useState<AssistantCitationTarget | null>(null);
   const [finishedKey, setFinishedKey] = useState<string | null>(null);
+  const [listLoaded, setListLoaded] = useState(false);
+  const onListLoad = () => setListLoaded(true);
   const navigationRef = useRef<{
     target: AssistantCitationTarget;
     requestedPages: Set<string>;
     done: boolean;
   } | null>(null);
 
-  // A target belongs to one request, so returning to an earlier key never reuses it.
   if (ready !== null && ready.key !== request?.key) {
     setReady(null);
   }
@@ -193,6 +192,7 @@ export function useAssistantCitationTarget({
   return {
     target,
     positioning,
+    onListLoad,
     alwaysRender: sourceRow ? { keys: [sourceRow.id] } : undefined,
   };
 }

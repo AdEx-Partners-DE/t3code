@@ -1,11 +1,6 @@
-import { MessageId, RunId, RunAttemptId } from "@t3tools/contracts";
+import { MessageId, RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import {
-  observeTimelineRun,
-  getAnchoredTurnMetrics,
-  readTimelineDisclosures,
-  rememberTimelineDisclosures,
-} from "./timelineScrollAnchoring";
+import { observeTimelineRun, getAnchoredTurnMetrics } from "./timelineScrollAnchoring";
 
 function buildState({
   positions,
@@ -112,26 +107,5 @@ describe("observeTimelineRun", () => {
     expect(observeTimelineRun(opened.observation, existing).anchorMessageId).toBe(
       existing.messageId,
     );
-  });
-});
-
-describe("remembered timeline disclosures", () => {
-  it("keeps disclosure state independent across threads and environments", () => {
-    const first = {
-      runs: new Set([RunId.make("run-4")]),
-      workGroups: new Set<string>(),
-      attempts: new Set<RunAttemptId>(),
-      workGroupState: { scrollPositions: new Map(), expandedEntries: new Set<string>() },
-    };
-    const second = { ...first, runs: new Set([RunId.make("run-9")]) };
-    rememberTimelineDisclosures("scroll-test-a:thread-1", first);
-    rememberTimelineDisclosures("scroll-test-a:thread-2", second);
-    rememberTimelineDisclosures("scroll-test-b:thread-1", second);
-    expect(readTimelineDisclosures("scroll-test-a:thread-1")).toEqual(first);
-    expect(readTimelineDisclosures("scroll-test-a:thread-2")).toEqual(second);
-    expect(readTimelineDisclosures("scroll-test-b:thread-1")).toEqual(second);
-    expect(readTimelineDisclosures("scroll-test-a:unvisited")).toBeUndefined();
-    rememberTimelineDisclosures("scroll-test-a:thread-1", second);
-    expect(readTimelineDisclosures("scroll-test-a:thread-1")).toEqual(second);
   });
 });

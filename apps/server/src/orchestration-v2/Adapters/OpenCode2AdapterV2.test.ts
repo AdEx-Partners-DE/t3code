@@ -572,6 +572,71 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  // OpenCode types an empty balance as provider.quota too, but answers it with
+  // HTTP 402 and it never resets. Usage windows and budgets arrive as 429.
+  it.effect.each([
+    {
+      name: "an out-of-funds provider.quota (402)",
+      failureClass: "provider_error",
+      error: {
+        type: "provider.quota",
+        message: "Upstream request failed: Insufficient account funds",
+        status: 402,
+      },
+    },
+    {
+      name: "a provider.quota usage window (429)",
+      failureClass: "usage_limit",
+      error: {
+        type: "provider.quota",
+        message: "Subscription quota exceeded.",
+        status: 429,
+        response: {
+          body: JSON.stringify({
+            type: "error",
+            error: { type: "GoUsageLimitError", message: "Subscription quota exceeded." },
+          }),
+        },
+      },
+    },
+    {
+      name: "a provider.quota account budget (429)",
+      failureClass: "usage_limit",
+      error: {
+        type: "provider.quota",
+        message: "Upstream request failed: Account budget exceeded",
+        status: 429,
+      },
+    },
+    {
+      name: "a provider.rate-limit failure (429)",
+      failureClass: "usage_limit",
+      error: {
+        type: "provider.rate-limit",
+        message: "Rate limit exceeded: free-models-per-min.",
+        status: 429,
+      },
+    },
+  ] as const)("classifies $name as $failureClass", ({ error, failureClass }) =>
+    Effect.gen(function* () {
+      const { runtime, thread } = yield* resumed([
+        out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        promptAccepted,
+        event("session.execution.failed", { sessionID: SESSION, error }),
+      ]);
+      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      yield* runtime.startTurn(turnInput(thread));
+      const ended = yield* Fiber.join(terminal);
+      assert.equal(ended?.status, "failed");
+      assert.deepEqual(ended?.failure, {
+        class: failureClass,
+        code: error.type,
+        message: error.message,
+        retryable: null,
+      });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("ends the turn when its terminal event is one this build cannot decode", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
@@ -1939,8 +2004,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
 
   it.effect("reads the agents again while a fresh server still lists none", () =>
     Effect.gen(function* () {
-      // 2.0.18 answers `/api/agent` with `[]` for a moment after it starts;
-      // rules written from that would drop the agents' own paths.
+      // OpenCode 2.0.18 briefly returns no agents on startup; using that response drops agent paths.
       const runtime = yield* openCode2ReplayRuntime([
         ...opening,
         out("agent.list", "<any>"),
@@ -1977,7 +2041,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     out("message.list", { sessionID: SESSION, order: "desc", limit: "50" }),
     reply("message.list", {
       data: [
-        // OpenCode appends an `idle` item after each execution it ends.
         ...(ended === undefined
           ? []
           : [{ id: "msg_idle_gap", time: { created: 3 }, type: "idle", outcome: ended }]),
@@ -2101,8 +2164,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
 
   it.effect("finishes a workspace command whose stream dropped before its inbox event", () =>
     Effect.gen(function* () {
-      // `session.command` answers 204 without the inbox item's id, and the
-      // stream drops before `session.inbox.enqueued` would have named it.
+      // session.command returns 204 without an inbox id; the stream drops before session.inbox.enqueued provides it.
       const { runtime, thread } = yield* resumed([
         out("command.list", "<any>"),
         reply("command.list", { location: { directory: WORK }, data: [{ name: "hello" }] }),
@@ -3176,9 +3238,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           status: 500,
           body: { _tag: "UnknownError", message: "disk I/O error" },
         }),
-        // Uncleared, OpenCode would commit the stage on the next prompt. The
-        // clear wakes the session into an empty execution of its own, with no
-        // turn of T3's running: it is no subagent's follow-up.
+        // Uncleared stages commit on the next prompt; clearing triggers an empty execution without a T3 turn.
         out("session.revert.clear", { sessionID: SESSION }),
         reply("session.revert.clear", null),
         event("session.revert.cleared", { sessionID: SESSION }),
@@ -3226,11 +3286,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
 
   it.effect("prompts under ids no other session on the server can hold", () =>
     Effect.gen(function* () {
-      // Two T3 databases on one external server repeat thread ids and run
-      // ordinals, so their turns can share an attempt id and their steers a
-      // message id. OpenCode refuses a prompt id another session already
-      // holds with 409 ConflictError; the replay refuses a client id it
-      // already gave another recorded message.
+      // Separate databases can repeat prompt ids on one server; OpenCode rejects cross-session duplicates with 409.
       const OTHER = "ses_f148ca2deffeOtherSession000";
       const steerInto = (session: string, recorded: string): ReadonlyArray<ProviderReplayEntry> => [
         out("session.prompt", {
@@ -3376,7 +3432,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       );
       yield* runtime.startTurn(turnInput(thread));
       yield* runtime.startTurn(turnInput(other));
-      // The second turn starts and the first ends while the session stays running.
       assert.deepEqual(
         [...(yield* Fiber.join(collected))].flatMap((event) =>
           event.type === "provider_session.updated" ? [event.providerSession.status] : [],

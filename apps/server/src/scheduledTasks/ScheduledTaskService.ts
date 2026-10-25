@@ -30,6 +30,7 @@ import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Exit from "effect/Exit";
 import * as Duration from "effect/Duration";
 import * as Metric from "effect/Metric";
@@ -93,7 +94,7 @@ const WEBHOOK_FILTERED_LOG_PER_MINUTE = 10;
 const WEBHOOK_DELIVERY_LOG_BODY_LIMIT = 64 * 1024;
 const WEBHOOK_DELIVERY_LOG_PROMPT_LIMIT = 64 * 1024;
 const WEBHOOK_MAX_QUEUED_PER_TASK = 20;
-/** Accepted deliveries per task per minute, enforced here as well as on the relay because the tunnel hostname is public too. */
+// Enforce the relay's per-task/minute limit here too; tunnel hostnames are public.
 const WEBHOOK_RATE_LIMIT_PER_MINUTE = 60;
 const LEGACY_DELIVERY_OUTCOMES: ReadonlySet<string> = new Set([
   "accepted",
@@ -273,11 +274,7 @@ export class ScheduledTaskService extends Context.Service<
     readonly getWebhookDelivery: (
       input: ScheduledTaskGetWebhookDeliveryInput,
     ) => Effect.Effect<ScheduledTaskGetWebhookDeliveryResult, ScheduledTaskError>;
-    /**
-     * Verifies, logs and dispatches one webhook request. Returns as soon as the
-     * delivery is logged; the run itself continues in the background so senders
-     * with short timeouts get their answer immediately.
-     */
+    /** Verifies, logs and dispatches; returns after logging while the run continues in the background. */
     readonly triggerWebhook: (
       request: WebhookTriggerRequest,
     ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError>;
@@ -303,8 +300,7 @@ function nextRunAt(
   from: DateTime.DateTime,
 ): string | null {
   if (!task.enabled) return null;
-  // A stored interval can decode yet overflow the representable DateTime
-  // range; an unrepresentable occurrence means the task has no next run.
+  // Decoded intervals can overflow DateTime; unrepresentable occurrences have no next run.
   try {
     const next = nextScheduledRunAt(task.schedule, from);
     return next !== null && Number.isFinite(DateTime.toEpochMillis(next)) ? iso(next) : null;
@@ -320,13 +316,8 @@ export const TASK_START_GAP_MS = 20_000;
 /** From this many tasks due at once they count as a pile and start one by one. */
 export const TASK_PILE_SIZE = 3;
 
-/**
- * Which of the due tasks start in this pass. Tasks that fall due together,
- * after a pause, an update or a restart, would otherwise all start in the same
- * second and stay in step from then on, with their load and their usage in one
- * burst. A pile starts one task at a time, the longest due first, and the rest
- * stay due; one or two due tasks start as they always did.
- */
+// Stagger a backlog of overdue tasks to avoid synchronized load after a restart.
+// One or two due tasks retain normal scheduling.
 export function dueTasksToStartNow<T>(
   due: ReadonlyArray<T>,
   lastPileStartMs: number | null,
@@ -441,15 +432,13 @@ export const listDueTasks = Effect.fn("ScheduledTaskService.listDueTasks")(funct
     WHERE enabled = 1 AND next_run_at IS NOT NULL
       AND next_run_at <= ${iso(now)} AND last_run_status <> 'running'
     ORDER BY next_run_at ASC, task_id ASC
-  `;
+  `.pipe(NodeSqliteClient.readOnly);
   const tasks: ScheduledTask[] = [];
   for (const row of rows) {
     const decoded = yield* Effect.result(decodeRow(row));
     if (Result.isSuccess(decoded)) {
       const task = decoded.success;
-      // next_run_at is a freeform string at the schema level; a stored value
-      // that cannot parse as a DateTime would defect the poll below, so the
-      // row is skipped here like any other corrupt row.
+      // next_run_at is freeform; skip unparseable values before they defect the poll.
       if (task.nextRunAt === null || Option.isSome(DateTime.make(task.nextRunAt))) {
         tasks.push(task);
       } else {
@@ -519,10 +508,11 @@ export const layer = Layer.effect(
       }
       return holding;
     });
-    const startsByItself = (taskId: string) =>
-      Effect.gen(function* () {
-        return !(yield* isHeldByPause(taskId)) && !(yield* isHeldForUpdate);
-      });
+    const startsByItself = Effect.fn("ScheduledTaskService.startsByItself")(function* (
+      taskId: string,
+    ) {
+      return !(yield* isHeldByPause(taskId)) && !(yield* isHeldForUpdate);
+    });
     // Switching a held task on is the user resuming that one task. The pause
     // is over when the last task it still held has been switched on again,
     // or when the user resumes all at once.
@@ -576,8 +566,7 @@ export const layer = Layer.effect(
     const webhookPermits = yield* Ref.make<ReadonlyMap<ScheduledTaskId, Semaphore.Semaphore>>(
       new Map(),
     );
-    // Keyed by task id and creation time, so deliveries of a deleted task that
-    // finish late release their own count, never a recreated task's.
+    // Include creation time so late deliveries cannot decrement a recreated task's count.
     const webhookQueued = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
     const webhookRateWindows = yield* Ref.make<ReadonlyMap<ScheduledTaskId, RateWindow>>(new Map());
     const webhookRejectedRateWindows = yield* Ref.make<ReadonlyMap<ScheduledTaskId, RateWindow>>(
@@ -591,13 +580,12 @@ export const layer = Layer.effect(
       ReadonlyMap<ScheduledTaskId, ReadonlyArray<number>>
     >(new Map());
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
-    // Sliding(1) coalesces the dirty-signal: every notification triggers a
-    // full list() re-emit anyway, so a slow subscriber only ever needs the
-    // latest signal — an unbounded backlog would just grow memory.
+    // Notifications re-emit the full list; slow subscribers need only the newest dirty signal.
     const changesPubSub = yield* PubSub.sliding<void>(1);
     const notifyChanged = PubSub.publish(changesPubSub, undefined).pipe(Effect.asVoid);
 
-    const selectAllRows = () => sql<ScheduledTaskRow>`
+    const selectAllRows = () =>
+      sql<ScheduledTaskRow>`
       SELECT
         task_id,
         title,
@@ -622,8 +610,10 @@ export const layer = Layer.effect(
         webhook_token,
         webhook_secret
       FROM scheduled_tasks
-      ORDER BY updated_at DESC, task_id ASC
-    `;
+      -- Not updated_at: toggles, runs and edits rewrite it, and clients render
+      -- this order as-is, so rows would move under the pointer.
+      ORDER BY created_at DESC, task_id ASC
+    `.pipe(NodeSqliteClient.readOnly);
 
     const listRows = Effect.fn("ScheduledTaskService.listRows")(function* () {
       const rows = yield* selectAllRows();
@@ -631,7 +621,8 @@ export const layer = Layer.effect(
       return yield* Effect.forEach(rows, (row) => decodeRow(row, origin), { concurrency: 1 });
     });
 
-    const getRows = (id: ScheduledTaskId) => sql<ScheduledTaskRow>`
+    const getRows = (id: ScheduledTaskId) =>
+      sql<ScheduledTaskRow>`
       SELECT
         task_id,
         title,
@@ -657,7 +648,7 @@ export const layer = Layer.effect(
         webhook_secret
       FROM scheduled_tasks
       WHERE task_id = ${id}
-    `;
+    `.pipe(NodeSqliteClient.readOnly);
 
     const findTask = Effect.fn("ScheduledTaskService.findTask")(function* (id: ScheduledTaskId) {
       const rows = yield* getRows(id).pipe(
@@ -695,11 +686,8 @@ export const layer = Layer.effect(
       return task;
     });
 
-    // Run-state columns (last_run_*, run_count) are intentionally absent from
-    // the conflict clause: they are owned by the run transitions below, and a
-    // concurrent settings save must not overwrite an in-flight increment.
-    // Check existence in the write itself so an edit cannot undo a deletion
-    // that landed after upsert loaded the previous task.
+    // Run transitions own run-state columns; settings saves must not overwrite them.
+    // Check existence in the write so edits cannot undo concurrent deletion.
     const saveTask = (
       task: ScheduledTask,
       requireExisting: boolean,
@@ -852,12 +840,9 @@ export const layer = Layer.effect(
         ),
       );
 
-    // Best-effort escape hatch: if anything fails between markRunning and
-    // markCompleted, write a full terminal record so runDueTasks neither skips
-    // the task forever (it filters out 'running' rows) nor re-fires it
-    // immediately: the dispatch may already have gone out, so next_run_at must
-    // advance. Pending webhook attempts count only with their completion state;
-    // other attempts count here.
+    // A failure between markRunning and markCompleted must still write a terminal record:
+    // runDueTasks skips 'running' rows forever, and the dispatch may already have gone out,
+    // so next_run_at must advance. Pending webhook attempts count only with their completion.
     const releaseStuckRun = Effect.fn("ScheduledTaskService.releaseStuckRun")(
       function* (task: ScheduledTask, message: string, pendingDeliveryId?: string) {
         const now = yield* localNow;
@@ -974,8 +959,9 @@ export const layer = Layer.effect(
         }
         if (
           webhook !== undefined &&
-          (yield* sql`SELECT 1 FROM scheduled_task_webhook_pending WHERE delivery_id = ${webhook.deliveryId} AND state = 'completed'`)
-            .length > 0
+          (yield* sql`SELECT 1 FROM scheduled_task_webhook_pending WHERE delivery_id = ${webhook.deliveryId} AND state = 'completed'`.pipe(
+            NodeSqliteClient.readOnly,
+          )).length > 0
         )
           return { task: { ...active, lastRunStatus: "succeeded" as const }, threadId: null };
         const parsedNextRunAt =
@@ -988,9 +974,7 @@ export const layer = Layer.effect(
         ) {
           return { task: active, threadId: null };
         }
-        // A queued delivery must not run a task that was paused, deleted and
-        // recreated under the same id, or switched to another trigger while
-        // it waited for its turn.
+        // Reject queued deliveries after pause, same-id recreation or trigger changes.
         if (webhook !== undefined) {
           const reason =
             active.createdAt !== task.createdAt
@@ -1015,16 +999,19 @@ export const layer = Layer.effect(
           ).pipe(
             Effect.map(
               (records) =>
-                records._tag === "Success" &&
+                records._tag === "Failure" ||
                 hasPendingScheduledPrompt(active.id, records.value.runs),
             ),
           );
           if (pending) {
             const next = nextRunAt(active, startedAt);
-            yield* Effect.logInfo("Skipping schedule task run: its last prompt still waits", {
-              taskId: active.id,
-              rescheduledTo: next,
-            });
+            yield* Effect.logInfo(
+              "Skipping schedule task run: its queue is occupied or could not be read",
+              {
+                taskId: active.id,
+                rescheduledTo: next,
+              },
+            );
             yield* sql`
               UPDATE scheduled_tasks
               SET next_run_at = ${next}
@@ -1068,9 +1055,7 @@ export const layer = Layer.effect(
         // from the row when the request arrived.
         const prompt = webhook?.prompt ?? active.prompt;
 
-        // Effect.exit (not Effect.result) so defects and interruptions in the
-        // dispatch are also captured and recorded as a failed run instead of
-        // aborting before markCompleted.
+        // Capture defects and interrupts too so dispatch failures still reach markCompleted.
         const result =
           active.threadId === null
             ? yield* Effect.exit(
@@ -1106,12 +1091,8 @@ export const layer = Layer.effect(
                     scheduledTaskId: active.id,
                     text: prompt,
                     attachments: [],
-                    // A task bound to a thread carries on that thread's work, so it
-                    // runs on whatever the thread runs on. Sending the task's own
-                    // model would move the thread to it, account and all, and undo
-                    // a model the user set on the thread since. The task's model is
-                    // for the threads it launches.
-                    // Scheduled prompts must not interrupt tools in the bound thread.
+                    // Bound tasks inherit the thread's current model and queue behind its tools.
+                    // The task's stored model only seeds newly launched threads.
                     mode: "queue",
                     createdBy: active.createdBy,
                     creationSource: active.creationSource,
@@ -1262,8 +1243,7 @@ export const layer = Layer.effect(
       );
     });
 
-    // Recover from a crash or hard shutdown mid-run: rows stuck in 'running'
-    // would otherwise be skipped by the due-task filter forever.
+    // Recover crash-left running rows that the due-task filter would otherwise skip forever.
     yield* Effect.gen(function* () {
       const rows = yield* selectAllRows();
       const stuck = rows.filter((row) => row.last_run_status === "running");
@@ -1665,8 +1645,7 @@ export const layer = Layer.effect(
     const subscribeList: ScheduledTaskService["Service"]["subscribeList"] = () =>
       Stream.unwrap(
         Effect.gen(function* () {
-          // Subscribe before taking the snapshot so a change landing between
-          // the two is buffered by the subscription rather than dropped.
+          // Subscribe before reading to buffer concurrent changes.
           const subscription = yield* PubSub.subscribe(changesPubSub);
           return Stream.concat(
             Stream.fromEffect(list()),
@@ -2020,6 +1999,7 @@ export const layer = Layer.effect(
         FROM scheduled_task_webhook_deliveries d WHERE task_id = ${input.id}
         ORDER BY received_at DESC, rowid DESC
       `.pipe(
+        NodeSqliteClient.readOnly,
         Effect.map((rows) => ({
           deliveries: rows
             .filter(
@@ -2040,6 +2020,7 @@ export const layer = Layer.effect(
             WHERE p.delivery_id = d.delivery_id AND p.state IN ('pending', 'dispatching')) AS pending_window
           FROM scheduled_task_webhook_deliveries d WHERE task_id = ${input.id} AND delivery_id = ${input.deliveryId}
         `.pipe(
+        NodeSqliteClient.readOnly,
         Effect.mapError((cause) =>
           taskError("Could not load webhook delivery.", { taskId: input.id, cause }),
         ),
@@ -2096,8 +2077,7 @@ export const layer = Layer.effect(
       return sql
         .withTransaction(
           Effect.gen(function* () {
-            // Conditional on the task existing, so a delivery racing a delete
-            // cannot leave rows that a recreated task with the same id would show.
+            // Require the task to exist so deletes cannot leave deliveries for a recreated task.
             yield* sql`
               INSERT INTO scheduled_task_webhook_deliveries (
                 delivery_id, task_id, received_at, method, query, headers_json, body,
@@ -2736,7 +2716,7 @@ export const layer = Layer.effect(
       yield* sql`UPDATE scheduled_task_webhook_pending SET state = 'dispatching' WHERE state = 'pending' AND due_at <= ${now}`;
       const tasks = yield* sql<{ task_id: ScheduledTaskId }>`
         SELECT DISTINCT task_id FROM scheduled_task_webhook_pending WHERE state IN ('dispatching', 'running', 'completed', 'failed')
-      `;
+      `.pipe(NodeSqliteClient.readOnly);
       yield* Effect.forEach(
         tasks,
         ({ task_id: taskId }) =>
@@ -2760,7 +2740,7 @@ export const layer = Layer.effect(
                 }>`
               SELECT delivery_id, task_json, request_json, state FROM scheduled_task_webhook_pending
               WHERE task_id = ${taskId} AND state IN ('dispatching', 'running', 'completed', 'failed') ORDER BY due_at, rowid LIMIT 1
-            `;
+            `.pipe(NodeSqliteClient.readOnly);
                 if (entry === undefined) return;
                 const remove = sql`DELETE FROM scheduled_task_webhook_pending WHERE delivery_id = ${entry.delivery_id}`;
                 if (entry.state === "completed" || entry.state === "failed") {

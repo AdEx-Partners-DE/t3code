@@ -126,6 +126,7 @@ it.effect.each([
                     isScratchProject: () => Effect.succeed(false),
                   }),
                   Layer.mock(ThreadManagementService.ThreadManagementService)({
+                    getProjectThreadRecords: () => Effect.succeed({ runs: [] } as never),
                     sendToThread: (input) => {
                       sends.push(input);
                       return Effect.succeed({} as never);
@@ -301,8 +302,6 @@ it.effect(
         yield* insertRow(sql, { ...row, enabled: 1 }, now);
       }
 
-      // it.effect freezes the clock; pin it just past the seeded due time so
-      // the poll sees the rows as due.
       yield* TestClock.setTime(Date.parse(now) + 1_000);
       const dispatched = yield* Ref.make(0);
       const lastDispatched = yield* Deferred.make<void>();
@@ -337,8 +336,7 @@ it.effect(
               ),
             ),
           );
-          // The poll loop delays before its first pass, so the frozen test
-          // clock must advance once to trigger it.
+          // The poll delays before its first pass; advance the frozen clock once.
           yield* TestClock.adjust("6 seconds");
           // Four tasks due at once are a pile and start one at a time with a
           // gap, so the clock is moved on until the fourth has gone out.
@@ -604,7 +602,7 @@ it.effect("does not queue another prompt while the task's last one still waits i
 
     const sent = yield* Ref.make(0);
     const delivered = yield* Deferred.make<void>();
-    const serviceWith = (pendingMessageId: string | null) =>
+    const serviceWith = (pendingMessageId: string | null, readFails = false) =>
       Layer.provideMerge(
         ScheduledTaskService.layer,
         Layer.mergeAll(
@@ -615,12 +613,14 @@ it.effect("does not queue another prompt while the task's last one still waits i
           }),
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getProjectThreadRecords: (() =>
-              Effect.succeed({
-                runs:
-                  pendingMessageId === null
-                    ? []
-                    : [{ status: "queued", userMessageId: pendingMessageId }],
-              })) as never,
+              readFails
+                ? Effect.fail({ _tag: "ThreadRecordsUnavailable" as const })
+                : Effect.succeed({
+                    runs:
+                      pendingMessageId === null
+                        ? []
+                        : [{ status: "queued", userMessageId: pendingMessageId }],
+                  })) as never,
             sendToThread: () =>
               Ref.update(sent, (n) => n + 1).pipe(
                 Effect.andThen(Deferred.succeed(delivered, undefined)),
@@ -642,6 +642,21 @@ it.effect("does not queue another prompt while the task's last one still waits i
             SELECT run_count, next_run_at FROM scheduled_tasks WHERE task_id = 'bound'
           `;
         // Skipped, not run: nothing counted, and the next tick is a full interval away.
+        assert.equal(rows[0]?.run_count, 0);
+        assert.isTrue((rows[0]?.next_run_at ?? "") > now);
+      }),
+    );
+
+    // A failed records read must defer the timer without admitting another prompt.
+    yield* sql`UPDATE scheduled_tasks SET next_run_at = ${now} WHERE task_id = 'bound'`;
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Layer.build(serviceWith(null, true));
+        yield* TestClock.adjust("6 seconds");
+        assert.equal(yield* Ref.get(sent), 0);
+        const rows = yield* sql<{ run_count: number; next_run_at: string | null }>`
+          SELECT run_count, next_run_at FROM scheduled_tasks WHERE task_id = 'bound'
+        `;
         assert.equal(rows[0]?.run_count, 0);
         assert.isTrue((rows[0]?.next_run_at ?? "") > now);
       }),

@@ -92,6 +92,7 @@ export function QueuedRunsControl({
   )?.projection;
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
+  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
   const editQueued = useAtomCommand(threadEnvironment.editQueuedRun, "merge queued messages");
   const holdQueue = useAtomCommand(threadEnvironment.holdThreadQueue, "pause queue");
@@ -105,13 +106,10 @@ export function QueuedRunsControl({
     readonly runId: RunId;
     readonly insertIndex: number | null;
   } | null>(null);
-  // Drags must start from the grip, not from an accidental text-drag on the
-  // row. The grip arms its run id on pointerdown; dragstart verifies it.
+  // Arm from the grip to prevent accidental text drags from reordering queued runs.
   const dragArmedRunIdRef = useRef<RunId | null>(null);
   const steerInFlightRef = useRef(false);
-  // Once the projection holds the message the optimistic copy is stale no
-  // matter what happened to its run — keying on still-queued runs alone would
-  // resurrect a phantom "pending" row after the run is cancelled or started.
+  // Run-only acknowledgements can resurrect pending rows after cancellation or startup.
   const acknowledgedMessageIds = new Set((projection?.messages ?? []).map((message) => message.id));
   const queuedImageAttachmentResources = queuedImageResources(projection);
   // The environment-wide pause holds this queue too, whatever the thread says.
@@ -128,6 +126,7 @@ export function QueuedRunsControl({
   const activeRun = workflow?.activeRun ?? null;
   const canReorder = workflow?.canReorder === true;
   const queueHeld = workflow?.isHeld === true;
+  const canSend = workflow?.canSendNow === true || workflow?.canPromoteToSteer === true;
   const queuedImageUrlById = new Map(
     queuedImageAttachmentUrls.flatMap((url, index) => {
       const resource = queuedImageAttachmentResources[index];
@@ -138,12 +137,15 @@ export function QueuedRunsControl({
     (message) => message.inputIntent === "queued_turn" && !acknowledgedMessageIds.has(message.id),
   );
   const items = [
-    ...queued.map(({ run, text, attachments }, serverIndex) => ({
+    ...queued.map(({ run, text, attachments, context }, serverIndex) => ({
       key: run.id,
       runId: run.id,
       messageId: run.userMessageId,
       serverIndex,
       text,
+      // A guest's message keeps the guest's words; the owner can cancel it, not rewrite it.
+      editable: context?.guest === undefined,
+      guestName: context?.guest?.name,
       attachments,
       thumbnails: attachments
         .filter((attachment) => attachment.type === "image")
@@ -160,6 +162,8 @@ export function QueuedRunsControl({
       messageId: null,
       serverIndex: null,
       text: message.text,
+      editable: true,
+      guestName: undefined,
       attachments: [] as ReadonlyArray<ContractChatAttachment>,
       thumbnails: (message.attachments ?? [])
         .filter(isImageAttachment)
@@ -191,32 +195,21 @@ export function QueuedRunsControl({
     void move(runId, queued[insertIndex]?.run.id ?? null);
   };
 
-  const steer = async (queuedRunId: RunId) => {
-    if (activeRun === null || !workflow?.canPromoteToSteer || steerInFlightRef.current) return;
+  const sendQueuedMessage = async (queuedRunId: RunId) => {
+    if (!canSend || steerInFlightRef.current) return;
     steerInFlightRef.current = true;
     setBusyRunId(queuedRunId);
-    await promote({
-      environmentId: props.environmentId,
-      input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
-    });
-    steerInFlightRef.current = false;
-    setBusyRunId(null);
-  };
-
-  // With no run under way there is nothing to steer: the message starts as
-  // the thread's next turn instead, also while the queue is held or all queues
-  // are paused. Whatever else waits stays under the global pause.
-  const sendNow = async (queuedRunId: RunId) => {
-    if (activeRun !== null || steerInFlightRef.current) return;
-    steerInFlightRef.current = true;
-    // The commands settle into results instead of throwing, so no `try` is needed.
-    const first = queued[0]?.run.id;
-    if (first !== undefined && first !== queuedRunId) await move(queuedRunId, first);
-    setBusyRunId(queuedRunId);
-    await resumeQueue({
-      environmentId: props.environmentId,
-      input: { threadId: props.threadId, startNextDespitePause: true },
-    });
+    if (workflow?.canSendNow) {
+      await resume({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId, runId: queuedRunId },
+      });
+    } else if (activeRun !== null) {
+      await promote({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
+      });
+    }
     steerInFlightRef.current = false;
     setBusyRunId(null);
   };
@@ -224,20 +217,21 @@ export function QueuedRunsControl({
   useImperativeHandle(ref, () => ({
     steerNext(repeat) {
       const next = queued[0];
-      if (!next) return false;
-      if (activeRun === null) {
-        if (!repeat && busyRunId === null) void sendNow(next.run.id);
-        return true;
-      }
-      if (!workflow?.canPromoteToSteer) return false;
-      if (!repeat && busyRunId === null) void steer(next.run.id);
+      if (!next || !canSend) return false;
+      if (!repeat && busyRunId === null) void sendQueuedMessage(next.run.id);
       return true;
     },
-    // Declines while a queued message is already being edited so the key keeps
-    // moving the caret inside that draft.
+    // Leave the key to caret navigation while editing.
     editLatest(repeat) {
       const latest = queued.at(-1);
-      if (!latest || props.editingRunId !== null || busyRunId !== null) return false;
+      if (
+        !latest ||
+        latest.context?.guest !== undefined ||
+        props.editingRunId !== null ||
+        busyRunId !== null
+      ) {
+        return false;
+      }
       if (!repeat) {
         setExpanded(true);
         props.onEditQueuedRun({
@@ -253,8 +247,6 @@ export function QueuedRunsControl({
 
   if (items.length === 0) return null;
 
-  // The first message takes every text in queue order and the others leave the
-  // queue, so they run as one turn. Nothing is removed unless the edit landed.
   const merge = async () => {
     const [first, ...rest] = queued;
     if (first === undefined || busyRunId !== null || !canMergeQueuedMessages(queued)) return;
@@ -554,6 +546,9 @@ export function QueuedRunsControl({
                         ))}
                       </span>
                     ) : null}
+                    {item.guestName === undefined ? null : (
+                      <span className="shrink-0 text-guest-foreground">{item.guestName}</span>
+                    )}
                     <Tooltip>
                       <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
                         {previewText}
@@ -582,7 +577,9 @@ export function QueuedRunsControl({
                                 size="icon-xs"
                                 variant="ghost-muted"
                                 aria-label="Edit queued message"
-                                disabled={item.runId === null || busyRunId !== null}
+                                disabled={
+                                  item.runId === null || !item.editable || busyRunId !== null
+                                }
                                 onClick={() => {
                                   if (item.runId !== null && item.messageId !== null) {
                                     props.onEditQueuedRun({
@@ -607,23 +604,19 @@ export function QueuedRunsControl({
                             <Button
                               size="xs"
                               variant="ghost-muted"
-                              disabled={
-                                item.runId === null ||
-                                busyRunId !== null ||
-                                (activeRun !== null && !workflow?.canPromoteToSteer)
-                              }
+                              disabled={item.runId === null || busyRunId !== null || !canSend}
                               onClick={() => {
                                 if (item.runId !== null) {
-                                  void (activeRun === null ? sendNow : steer)(item.runId);
+                                  void sendQueuedMessage(item.runId);
                                 }
                               }}
                             >
                               <CornerUpRightIcon />
-                              {activeRun === null ? "Send now" : "Steer"}
+                              {workflow?.canSendNow ? "Send now" : "Steer"}
                             </Button>
                           </TooltipTrigger>
                           <TooltipPopup>
-                            {activeRun === null
+                            {workflow?.canSendNow
                               ? allQueuesPaused
                                 ? "Start this message now. The rest waits while all queues are paused."
                                 : "Start this message now"

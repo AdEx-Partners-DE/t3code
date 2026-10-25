@@ -26,7 +26,7 @@ const SCENARIO = "queued_turn";
  * it) with every queue paused: the second message waits after the first turn
  * ends, until the user starts it on purpose.
  */
-const runWithQueuesPaused = Effect.fn("runWithQueuesPaused")(function* () {
+const runWithQueuesPaused = Effect.fn("runWithQueuesPaused")(function* (targeted: boolean) {
   const recorded = yield* readProviderReplayTranscript(
     new URL(`./fixtures/${SCENARIO}/codex_transcript.ndjson`, import.meta.url),
   ).pipe(Effect.provide(NodeServices.layer));
@@ -88,12 +88,21 @@ const runWithQueuesPaused = Effect.fn("runWithQueuesPaused")(function* () {
     const afterPlainResume = yield* runStatuses();
 
     // "Send now" starts this thread's next message despite the pause.
-    yield* orchestrator.dispatch({
-      type: "queue.resume",
-      commandId: CommandId.make("queue-pause:send-now"),
-      threadId,
-      startNextDespitePause: true,
-    });
+    yield* orchestrator.dispatch(
+      targeted
+        ? {
+            type: "queued-run.start",
+            commandId: CommandId.make("queue-pause:send-selected"),
+            threadId,
+            runId: second!.id,
+          }
+        : {
+            type: "queue.resume",
+            commandId: CommandId.make("queue-pause:send-now"),
+            threadId,
+            startNextDespitePause: true,
+          },
+    );
     yield* awaitRun(second!.id, "completed");
     return { afterFirstTurn, afterPlainResume, afterSendNow: yield* runStatuses() };
   }).pipe(
@@ -104,14 +113,16 @@ const runWithQueuesPaused = Effect.fn("runWithQueuesPaused")(function* () {
 });
 
 describe("pause of all queues", () => {
-  it.effect("holds a queued message after the turn ends until the user sends it now", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const statuses = yield* runWithQueuesPaused();
-        assert.deepEqual(statuses.afterFirstTurn, ["completed", "queued"]);
-        assert.deepEqual(statuses.afterPlainResume, ["completed", "queued"]);
-        assert.deepEqual(statuses.afterSendNow, ["completed", "completed"]);
-      }).pipe(provideDeterministicTestRuntime),
-    ),
+  it.effect.each([false, true])(
+    "holds a queued message until explicit send (selected run: %s)",
+    (targeted) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const statuses = yield* runWithQueuesPaused(targeted);
+          assert.deepEqual(statuses.afterFirstTurn, ["completed", "queued"]);
+          assert.deepEqual(statuses.afterPlainResume, ["completed", "queued"]);
+          assert.deepEqual(statuses.afterSendNow, ["completed", "completed"]);
+        }).pipe(provideDeterministicTestRuntime),
+      ),
   );
 });

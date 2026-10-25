@@ -146,7 +146,11 @@ function EnvironmentNotifications({
       let status = resolveSidebarThreadStatus(thread);
       if (status === "ready" && thread.latestRun?.status === "failed") status = "failed";
       const attention =
-        status === "input" || status === "approval" || status === "failed" || status === "limited"
+        status === "input" ||
+        status === "request" ||
+        status === "approval" ||
+        status === "failed" ||
+        status === "limited"
           ? `${thread.latestRun?.runId ?? ""}:${status}`
           : null;
       const completedAt = Date.parse(thread.latestRun?.completedAt ?? "");
@@ -162,6 +166,7 @@ function EnvironmentNotifications({
         attention && attention !== prior.attention
           ? "input"
           : !rawThread.latestRunStopRequested &&
+              !rawThread.latestRunSilent &&
               completion !== null &&
               (prior.completion === null || completion > prior.completion)
             ? "completion"
@@ -176,7 +181,9 @@ function EnvironmentNotifications({
               ? "Usage limit reached"
               : status === "failed"
                 ? "Thread failed"
-                : "Input needed";
+                : status === "request"
+                  ? "Guest request"
+                  : "Input needed";
       // Several threads often share a title pattern; the project says which one this is.
       const project = projects?.find((candidate) => candidate.id === thread.projectId) ?? null;
       if (hasNotificationSound(mode)) {

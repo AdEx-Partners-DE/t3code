@@ -10,10 +10,7 @@ import type {
 import { EMPTY_TOTALS, type UsageRecord } from "@t3tools/provider-core/server/usage";
 import { cacheSavingsUsd, priceUsage, type RateTable } from "./usagePricing.ts";
 
-/**
- * `en-CA` yields ISO-ordered parts, which is why it is used here rather than
- * assembling the day from `Date` getters (those are host-local only).
- */
+// en-CA gives ISO-ordered parts in the requested zone; Date getters are host-local.
 function makeDayFormatter(timeZone: string): (timestampMs: number) => string {
   let format: Intl.DateTimeFormat;
   try {
@@ -31,10 +28,7 @@ function makeDayFormatter(timeZone: string): (timestampMs: number) => string {
       day: "2-digit",
     });
   }
-  // Formatting once per quarter-hour slot keeps `Intl` (about 2µs a call) off
-  // the per-record path. Named zones put midnight on a quarter hour, so their
-  // slots never split; a fixed offset such as `+00:01` can, and records in a
-  // split slot are formatted exactly.
+  // Cache quarter-hour slots to avoid per-record Intl calls; fixed-offset midnight can split slots and needs exact formatting.
   const days = new Map<number, string | null>();
   return (timestampMs) => {
     const slot = Math.floor(timestampMs / QUARTER_HOUR_MS);
@@ -102,13 +96,8 @@ export interface AggregateResult {
   readonly outOfWindow: number;
 }
 
-/**
- * Copies sharing a `dedupeKey` are one billed message, but an early copy can
- * carry partial counts on any channel, so each channel's maximum is the
- * complete count whichever copy is read first. Every other field (time,
- * model, session, speed) stays with the held copy, so merging never moves
- * usage to another bucket. Returns `held` itself when `copy` adds nothing.
- */
+// Transcript copies may contain partial counts; merge per-channel maxima.
+// Keep the original bucket and object identity when the copy adds nothing.
 export function mergeUsageCopies(held: UsageRecord, copy: UsageRecord): UsageRecord {
   const a = held.totals;
   const b = copy.totals;
@@ -147,13 +136,8 @@ interface Contribution {
   readonly bucket: MutableBucket | null;
 }
 
-/**
- * De-duplication is global across the whole scan, not per file: Claude Code
- * copies a message's records forward when a session is resumed or forked, so
- * the same `dedupeKey` legitimately appears in several transcripts. A replayed
- * copy can be partial or zeroed, so a richer copy read later replaces the held
- * copy's contribution instead of being dropped.
- */
+// Resumed and forked transcripts share billed messages across files.
+// Replace a partial copy's contribution when a richer duplicate arrives.
 export class UsageAggregator {
   readonly #buckets = new Map<string, MutableBucket>();
   readonly #seen = new Map<string, Contribution>();
@@ -274,7 +258,7 @@ export class UsageAggregator {
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += sign;
   }
 
-  /** The target's own rate applies, so a provider-specific `rateModel` is dropped. */
+  // Aliases use the target's rate, replacing provider-specific rateModel.
   #mapModel(record: UsageRecord): UsageRecord {
     const model = this.#options.modelAliases?.get(record.model);
     if (model === undefined) return record;
@@ -282,11 +266,7 @@ export class UsageAggregator {
     return { ...rest, model };
   }
 
-  /**
-   * Records arrive file by file in time order, so most land in the bucket the
-   * previous record used. Checking that first skips building and hashing a
-   * key string per record.
-   */
+  // Time-ordered records usually reuse the previous bucket; avoid rebuilding its key.
   #bucketFor(
     day: string,
     hourIndex: number,

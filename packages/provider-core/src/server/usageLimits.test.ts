@@ -53,8 +53,6 @@ describe("applyUsageLimitsUpdate", () => {
   });
 
   it("returns the published object itself when no window moved", () => {
-    // Codex repeats the same numbers beside every token-usage tick; the
-    // ingestion path relies on identity to skip the publish.
     const next = applyUsageLimitsUpdate({
       previous: published,
       checkedAt: "2026-09-03T12:00:05.000Z",

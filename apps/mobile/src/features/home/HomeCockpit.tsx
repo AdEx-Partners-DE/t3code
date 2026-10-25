@@ -20,14 +20,8 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { openSettings } from "../settings/settings-navigation";
 
-/**
- * The web sidebar's cockpit lines for one environment, above the thread list:
- * questions waiting for the user, runs gone silent, waiting queues, threads
- * with a heavy context, whether queues are paused, and how many automations
- * are on and which starts next (tap for the task list). Shows nothing when
- * there is nothing to say.
- */
 export function HomeCockpit({
   environmentId,
   nowMs,
@@ -93,12 +87,7 @@ export function HomeCockpit({
       {automations === null ? null : (
         <Pressable
           accessibilityRole="button"
-          onPress={() =>
-            navigation.navigate("SettingsSheet", {
-              screen: "SettingsContent",
-              params: { screen: "SettingsScheduledTasks" },
-            })
-          }
+          onPress={() => openSettings(navigation, "SettingsScheduledTasks")}
           className="active:opacity-70"
         >
           <Text className="text-sm text-foreground-muted">{automations}</Text>

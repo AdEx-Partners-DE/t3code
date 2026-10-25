@@ -177,20 +177,9 @@ type LinkState =
       readonly target: string;
     };
 
-/**
- * How shared entries reach a shadow home. `junction` is the fallback for a
- * Windows process that may not create symlinks: directories are linked with
- * junctions, which need no privilege, and no file is linked, so Codex keeps
- * its own copy of each in the shadow home. File links made earlier stay.
- * The only unprivileged file link Windows has is a hard link, and that stops
- * tracking the shared file the first time either copy is replaced by rename,
- * which is how Codex rewrites `config.toml`.
- *
- * The fallback is recorded in the shadow home and kept. Codex creates its own
- * top-level files in a home that has none linked, and each of them would
- * conflict with the shared home if a later pass went back to symlinks because
- * Developer Mode had been switched on.
- */
+// Unprivileged Windows homes use junctions for directories and keep local files.
+// Hard links break on atomic replacement; remember this mode so later symlink
+// privileges do not conflict with files Codex has already created.
 type LinkMode = "symlink" | "junction";
 
 function systemErrorCode(error: PlatformError.PlatformError): unknown {
