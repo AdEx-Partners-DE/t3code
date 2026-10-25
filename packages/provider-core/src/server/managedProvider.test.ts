@@ -19,7 +19,6 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ProviderHost from "./ProviderHost.ts";
 import { makeManagedServerProvider } from "./managedProvider.ts";
 import * as Queue from "effect/Queue";
-import * as TestClock from "effect/testing/TestClock";
 
 const emptyCapabilities = createModelCapabilities({ optionDescriptors: [] });
 const fastModeCapabilities = createModelCapabilities({

@@ -382,7 +382,9 @@ export const layerProduction = Layer.mergeAll(
       ),
     ),
   ),
-  InstantFailureRetry.layer.pipe(Layer.provide(layerThreadManagementProvided)),
+  InstantFailureRetry.layer.pipe(
+    Layer.provide(Layer.merge(layerThreadManagementProvided, layerEventSinkProvided)),
+  ),
   layerProviderContinuationWorkerProvided,
   layerAgentSessionImporterProvided,
   EffectOutbox.layerPruneWorker.pipe(Layer.provide(EffectOutbox.layer)),
