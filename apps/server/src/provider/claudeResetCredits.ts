@@ -87,11 +87,10 @@ class ClaudeResetCreditError extends Schema.TaggedError<ClaudeResetCreditError>(
 
 const isClaudeResetCreditError = Schema.is(ClaudeResetCreditError);
 
-/** Retry unanswered or unconfirmed claims with the same request ID. */
+/** Login failures cannot settle an earlier unconfirmed claim. */
 export const isSettledClaudeResetCreditFailure = (error: unknown) =>
   isClaudeResetCreditError(error) &&
-  error.reason !== "requestFailed" &&
-  error.reason !== "unconfirmed";
+  (error.reason === "rateLimited" || error.reason === "coolingDown");
 
 const isFutureTimestamp = (value: string, nowMs: number) => {
   if (!COMPLETE_TIMESTAMP.test(value)) return false;
