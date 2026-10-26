@@ -2,7 +2,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -231,13 +230,11 @@ effectIt.layer(NodeServices.layer)("consumeClaudeResetCredit", (it) => {
       );
       yield* coordinator.readClaudeCredits(
         "account-a",
-        Effect.succeed(
-          Option.some({
-            eligible: true,
-            next_grant_id: "grant_a",
-            grants: [grant({})],
-          }),
-        ),
+        Effect.succeedSome({
+          eligible: true,
+          next_grant_id: "grant_a",
+          grants: [grant({})],
+        }),
       );
       const claim = (expectedAccountKey?: string) =>
         coordinator
