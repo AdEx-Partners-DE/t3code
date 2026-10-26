@@ -53,12 +53,7 @@ export class ResetCreditCoordinator extends Context.Service<
       ) => Effect.Effect<ProviderConsumeResetCreditOutcome, E, R>,
       isSettled: (error: E) => boolean,
     ) => Effect.Effect<ProviderConsumeResetCreditOutcome, E | PlatformError.PlatformError, R>;
-    /**
-     * The key is cleared when the provider reports an outcome, or when
-     * `isSettled` says a failure was a final answer (such as a cooldown). Any
-     * other failure (timeout included) keeps it so the next attempt is the same
-     * attempt.
-     */
+    /** Reuse the idempotency key until an outcome or settled failure; timeouts keep it for retry. */
     readonly redeem: <E, R>(
       accountKey: string,
       consume: (idempotencyKey: string) => Effect.Effect<ProviderConsumeResetCreditOutcome, E, R>,
@@ -67,7 +62,6 @@ export class ResetCreditCoordinator extends Context.Service<
   }
 >()("t3/provider/resetCreditCoordinator") {}
 
-/** @public */
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
@@ -93,7 +87,7 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const redeemLocked = Effect.fnUntraced(function* <E, R>(
+  const redeemLocked = Effect.fn("ResetCreditCoordinator.redeemLocked")(function* <E, R>(
     state: AccountRedemptionState,
     consume: (idempotencyKey: string) => Effect.Effect<ProviderConsumeResetCreditOutcome, E, R>,
     isSettled?: (error: E) => boolean,
@@ -110,85 +104,80 @@ export const make = Effect.gen(function* () {
     return outcome;
   });
 
-  const redeem: ResetCreditCoordinator["Service"]["redeem"] = (accountKey, consume, isSettled) =>
-    Effect.gen(function* () {
-      const state = yield* stateFor(accountKey);
-      return yield* state.lock.withPermits(1)(redeemLocked(state, consume, isSettled));
-    });
+  const redeem: ResetCreditCoordinator["Service"]["redeem"] = Effect.fn(
+    "resetCreditCoordinator.redeem",
+  )(function* (accountKey, consume, isSettled) {
+    const state = yield* stateFor(accountKey);
+    return yield* state.lock.withPermits(1)(redeemLocked(state, consume, isSettled));
+  });
 
-  const readClaudeCredits: ResetCreditCoordinator["Service"]["readClaudeCredits"] = (
-    accountKey,
-    read,
-  ) =>
-    Effect.gen(function* () {
-      const state = yield* stateFor(accountKey);
-      return yield* state.lock.withPermits(1)(
-        Effect.uninterruptibleMask((restore) =>
-          Effect.gen(function* () {
-            const known = yield* Ref.get(state.claudeRead);
-            const now = yield* Clock.currentTimeMillis;
-            if (now < known.nextAttemptAt) return claudeResetCreditsToContract(known.block, now);
-            // Cancellation after dispatch still spends the account's regular read budget.
-            yield* Ref.set(state.claudeRead, { ...known, nextAttemptAt: now + READ_INTERVAL });
-            const result = yield* Effect.result(restore(read));
-            if (result._tag === "Success" && Option.isNone(result.success)) {
-              yield* Ref.set(state.claudeRead, known);
-              return claudeResetCreditsToContract(known.block, yield* Clock.currentTimeMillis);
-            }
-            const interval =
-              result._tag === "Success"
-                ? READ_INTERVAL
-                : Math.min(known.interval * 2, MAX_READ_INTERVAL);
-            const block =
-              result._tag === "Success" ? Option.getOrUndefined(result.success) : known.block;
-            yield* Ref.set(state.claudeRead, { nextAttemptAt: now + interval, interval, block });
-            return claudeResetCreditsToContract(block, yield* Clock.currentTimeMillis);
-          }),
-        ),
-      );
-    });
+  const readClaudeCredits: ResetCreditCoordinator["Service"]["readClaudeCredits"] = Effect.fn(
+    "ResetCreditCoordinator.readClaudeCredits",
+  )(function* (accountKey, read) {
+    const state = yield* stateFor(accountKey);
+    return yield* state.lock.withPermits(1)(
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const known = yield* Ref.get(state.claudeRead);
+          const now = yield* Clock.currentTimeMillis;
+          if (now < known.nextAttemptAt) return claudeResetCreditsToContract(known.block, now);
+          // Cancellation after dispatch still spends the account's regular read budget.
+          yield* Ref.set(state.claudeRead, { ...known, nextAttemptAt: now + READ_INTERVAL });
+          const result = yield* Effect.result(restore(read));
+          if (result._tag === "Success" && Option.isNone(result.success)) {
+            yield* Ref.set(state.claudeRead, known);
+            return claudeResetCreditsToContract(known.block, yield* Clock.currentTimeMillis);
+          }
+          const interval =
+            result._tag === "Success"
+              ? READ_INTERVAL
+              : Math.min(known.interval * 2, MAX_READ_INTERVAL);
+          const block =
+            result._tag === "Success" ? Option.getOrUndefined(result.success) : known.block;
+          yield* Ref.set(state.claudeRead, { nextAttemptAt: now + interval, interval, block });
+          return claudeResetCreditsToContract(block, yield* Clock.currentTimeMillis);
+        }),
+      ),
+    );
+  });
 
-  const redeemClaudeCredit: ResetCreditCoordinator["Service"]["redeemClaudeCredit"] = (
-    accountKey,
-    consume,
-    isSettled,
-  ) =>
-    Effect.gen(function* () {
-      const state = yield* stateFor(accountKey);
-      return yield* state.lock.withPermits(1)(
-        // Record confirmed outcomes before cancellation can restore the pre-claim answer.
-        Effect.uninterruptibleMask((restore) =>
-          Effect.gen(function* () {
-            const known = yield* Ref.get(state.claudeRead);
-            const grantId =
-              (yield* Ref.get(state.pendingClaudeGrant)) ??
-              claudeResetCreditsToContract(known.block, yield* Clock.currentTimeMillis)
-                ?.nextCreditId;
-            if (!grantId) return "noCredit" as const;
-            yield* Ref.set(state.pendingClaudeGrant, grantId);
-            yield* Ref.set(state.claudeRead, EMPTY_CLAUDE_READ);
-            return yield* redeemLocked(
-              state,
-              (requestId) =>
-                restore(consume(grantId, requestId)).pipe(
-                  Effect.tapError((error) =>
-                    isSettled(error) ? Ref.set(state.claudeRead, known) : Effect.void,
-                  ),
+  const redeemClaudeCredit: ResetCreditCoordinator["Service"]["redeemClaudeCredit"] = Effect.fn(
+    "ResetCreditCoordinator.redeemClaudeCredit",
+  )(function* (accountKey, consume, isSettled) {
+    const state = yield* stateFor(accountKey);
+    return yield* state.lock.withPermits(1)(
+      // Record confirmed outcomes before cancellation can restore the pre-claim answer.
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const known = yield* Ref.get(state.claudeRead);
+          const grantId =
+            (yield* Ref.get(state.pendingClaudeGrant)) ??
+            claudeResetCreditsToContract(known.block, yield* Clock.currentTimeMillis)?.nextCreditId;
+          if (!grantId) return "noCredit" as const;
+          yield* Ref.set(state.pendingClaudeGrant, grantId);
+          yield* Ref.set(state.claudeRead, EMPTY_CLAUDE_READ);
+          return yield* redeemLocked(
+            state,
+            (requestId) =>
+              restore(consume(grantId, requestId)).pipe(
+                Effect.tapError((error) =>
+                  isSettled(error) ? Ref.set(state.claudeRead, known) : Effect.void,
                 ),
-              isSettled,
-            ).pipe(
-              Effect.ensuring(
-                Effect.gen(function* () {
-                  if ((yield* Ref.get(state.pendingKey)) === null)
-                    yield* Ref.set(state.pendingClaudeGrant, null);
-                  else yield* Ref.set(state.claudeRead, { ...known, nextAttemptAt: 0 });
-                }),
               ),
-            );
-          }),
-        ),
-      );
-    });
+            isSettled,
+          ).pipe(
+            Effect.ensuring(
+              Effect.gen(function* () {
+                if ((yield* Ref.get(state.pendingKey)) === null)
+                  yield* Ref.set(state.pendingClaudeGrant, null);
+                else yield* Ref.set(state.claudeRead, { ...known, nextAttemptAt: 0 });
+              }),
+            ),
+          );
+        }),
+      ),
+    );
+  });
 
   return {
     redeem,
