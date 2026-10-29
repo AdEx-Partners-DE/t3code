@@ -398,6 +398,67 @@ it.effect.each([
   }).pipe(Effect.provide(layerTest)),
 );
 
+const leftoverItem = (type: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO orchestration_v2_projection_turn_items
+      (turn_item_id, thread_id, run_id, node_id, provider_thread_id, provider_turn_id, ordinal, type, status, updated_at, payload_json)
+      VALUES ('leftover', 'history-thread', 'history-run', 'history-root', 'history-provider', 'history-turn', 0,
+        ${type}, 'running', ${old}, '{}')`;
+  });
+
+it.effect.each(["idle", "s97"] as const)(
+  "%s ignores a compaction left running by a terminal turn",
+  (mode) =>
+    Effect.gen(function* () {
+      yield* terminalHistory;
+      yield* leftoverItem("compaction");
+      if (mode === "s97") {
+        yield* execution;
+        yield* question;
+      }
+      const drain = yield* DeploymentDrain.DeploymentDrain;
+      const held = yield* drain.execute({
+        operation: "acquire",
+        leaseId,
+        ...(mode === "s97" ? { recoveryPolicy: "s97" as const } : {}),
+      });
+      assert.isTrue(
+        held.state === "held" && held.disposition === (mode === "idle" ? "idle" : "s97-recovery"),
+      );
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect.each(["background command", "latest turn"] as const)(
+  "a leftover item still blocks with %s",
+  (scenario) =>
+    Effect.gen(function* () {
+      yield* terminalHistory;
+      const sql = yield* SqlClient.SqlClient;
+      yield* leftoverItem(scenario === "background command" ? "command_execution" : "compaction");
+      if (scenario === "latest turn")
+        yield* sql`UPDATE orchestration_v2_projection_provider_turns SET ordinal = 1349 WHERE provider_turn_id = 'history-turn'`;
+      const drain = yield* DeploymentDrain.DeploymentDrain;
+      for (const recoveryPolicy of [undefined, "s97"] as const) {
+        if (recoveryPolicy === "s97") {
+          yield* execution;
+          yield* question;
+        }
+        assert.equal(
+          (yield* Effect.flip(
+            drain.execute({
+              operation: "acquire",
+              leaseId,
+              ...(recoveryPolicy === undefined ? {} : { recoveryPolicy }),
+            }),
+          )).reason,
+          "busy",
+        );
+        assert.equal((yield* drain.execute({ operation: "status" })).state, "open");
+      }
+    }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("ready sessions and persistent tools do not block an idle lease", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

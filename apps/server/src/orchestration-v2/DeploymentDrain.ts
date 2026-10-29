@@ -13,7 +13,11 @@ import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as WorkAdmission from "./WorkAdmission.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-import { inspectRecoveryPolicy, terminalProviderTurnHistory } from "./DeploymentRecoveryPolicy.ts";
+import {
+  inspectRecoveryPolicy,
+  terminalCompactionHistory,
+  terminalProviderTurnHistory,
+} from "./DeploymentRecoveryPolicy.ts";
 import type { OrchestrationEffectRequestV2 } from "./EffectOutbox.ts";
 
 export class DeploymentDrain extends Context.Service<
@@ -63,7 +67,8 @@ const make = Effect.gen(function* () {
           AND NOT (item.type = 'dynamic_tool'
             AND COALESCE(json_type(item.payload_json, '$.input.persistent'), '') = 'true')
           AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS run
-            WHERE run.run_id = item.run_id AND run.status = 'rolled_back'))
+            WHERE run.run_id = item.run_id AND run.status = 'rolled_back')
+          AND NOT ${terminalCompactionHistory(sql, "item")})
     ) AS busy,
     EXISTS (SELECT 1 FROM orchestration_v2_effect_outbox WHERE ${blockingEffect}) AS pending_effects
   `.pipe(Effect.mapError((cause) => new ServerDrainError({ reason: "inspection_failed", cause })));

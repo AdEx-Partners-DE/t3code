@@ -117,6 +117,16 @@ export const terminalProviderTurnHistory = (sql: SqlClient.SqlClient) => sql`EXI
       WHERE newer.provider_thread_id = turn.provider_thread_id AND newer.ordinal > turn.ordinal)
 )`;
 
+// Compaction runs inside its provider turn and never outlives it, so a running
+// compaction row whose turn is proven history is a projection leftover. Other
+// item types (background commands) can outlive their turn and still block.
+export const terminalCompactionHistory = (sql: SqlClient.SqlClient, item: "item" | "q") =>
+  sql`(${sql.literal(item)}.type = 'compaction' AND EXISTS (
+  SELECT 1 FROM orchestration_v2_projection_provider_turns turn
+  WHERE turn.provider_turn_id = ${sql.literal(item)}.provider_turn_id
+    AND ${terminalProviderTurnHistory(sql)}
+))`;
+
 export const inspectRecoveryPolicy = Effect.fn("DeploymentDrain.inspectRecoveryPolicy")(function* (
   now: number,
 ) {
@@ -155,7 +165,8 @@ export const inspectRecoveryPolicy = Effect.fn("DeploymentDrain.inspectRecoveryP
       WHERE q.status IN ('pending', 'running', 'waiting')
         AND q.type IN ('command_execution', 'dynamic_tool', 'subagent', 'secret_request',
           'file_change', 'file_search', 'web_search', 'compaction')
-        AND (item_run.status IS NULL OR item_run.status <> 'rolled_back')`,
+        AND (item_run.status IS NULL OR item_run.status <> 'rolled_back')
+        AND NOT ${terminalCompactionHistory(sql, "q")}`,
       );
       const providers = decode(
         yield* sql<Row>`SELECT * FROM orchestration_v2_projection_provider_threads`,
