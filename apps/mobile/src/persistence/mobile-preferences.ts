@@ -39,6 +39,7 @@ export type PullRequestListControls = typeof PullRequestListControls.Type;
 const ThreadListFilters = Schema.Struct({
   environmentId: Schema.NullOr(EnvironmentId),
   projectKey: Schema.NullOr(Schema.String),
+  projectSortOrder: Schema.optional(Schema.Literals(["updated_at", "created_at"])),
 });
 export type ThreadListFilters = typeof ThreadListFilters.Type;
 

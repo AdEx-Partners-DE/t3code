@@ -38,12 +38,43 @@ it("saves the scope from every update made in one event", async () => {
   act(() => {
     controls!.setSelectedEnvironmentId(ENVIRONMENT);
     controls!.setSelectedProjectKey("env-1:project-1");
+    controls!.setProjectSortOrder("created_at");
   });
 
   expect(harness.saved.at(-1)).toEqual({
-    threadListFilters: { environmentId: ENVIRONMENT, projectKey: "env-1:project-1" },
+    threadListFilters: {
+      environmentId: ENVIRONMENT,
+      projectKey: "env-1:project-1",
+      projectSortOrder: "created_at",
+    },
   });
   expect(controls!.options.selectedEnvironmentId).toBe(ENVIRONMENT);
   expect(controls!.options.selectedProjectKey).toBe("env-1:project-1");
+  act(() => root.unmount());
+});
+
+it("restores the saved sort order on the next launch", async () => {
+  let controls: ReturnType<typeof useHomeListOptions> | undefined;
+  function Probe() {
+    const result = useHomeListOptions(AVAILABLE);
+    useLayoutEffect(() => {
+      controls = result;
+    });
+    return null;
+  }
+
+  const root = createRoot(document.createElement("div"));
+  await act(async () =>
+    root.render(
+      <HomeListOptionsProvider
+        projectGroupingMode="repository"
+        savedFilters={{ environmentId: null, projectKey: null, projectSortOrder: "created_at" }}
+      >
+        <Probe />
+      </HomeListOptionsProvider>,
+    ),
+  );
+
+  expect(controls!.options.projectSortOrder).toBe("created_at");
   act(() => root.unmount());
 });

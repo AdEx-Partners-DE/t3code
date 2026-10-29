@@ -23,9 +23,10 @@ function defaultHomeListOptions(filters?: ThreadListFilters): HomeListOptions {
     selectedEnvironmentId: filters?.environmentId ?? null,
     selectedProjectKey: filters?.projectKey ?? null,
     projectSortOrder:
-      DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
+      filters?.projectSortOrder ??
+      (DEFAULT_SIDEBAR_PROJECT_SORT_ORDER === "manual"
         ? "updated_at"
-        : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
+        : DEFAULT_SIDEBAR_PROJECT_SORT_ORDER),
   };
 }
 
@@ -49,20 +50,21 @@ export function HomeListOptionsProvider({
   const [optionsAtom] = useState(() => Atom.make(defaultHomeListOptions(savedFilters)));
   const options = useAtomValue(optionsAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  // Only the scope persists; the sort order is per session. Updates read the
-  // registry, so several in one event each build on the last and save it.
+  // Updates read the registry, so several in one event each build on the last and save it.
   const updateOptions = (patch: Partial<HomeListOptions>) => {
     const current = registry.get(optionsAtom);
     const next = { ...current, ...patch };
     registry.set(optionsAtom, next);
     if (
       next.selectedEnvironmentId !== current.selectedEnvironmentId ||
-      next.selectedProjectKey !== current.selectedProjectKey
+      next.selectedProjectKey !== current.selectedProjectKey ||
+      next.projectSortOrder !== current.projectSortOrder
     ) {
       savePreferences({
         threadListFilters: {
           environmentId: next.selectedEnvironmentId,
           projectKey: next.selectedProjectKey,
+          projectSortOrder: next.projectSortOrder,
         },
       });
     }
