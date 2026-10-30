@@ -94,6 +94,9 @@ class WorktreeRecreateNoBaseError extends Schema.TaggedError<WorktreeRecreateNoB
 
 const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
 
+// Folders `git worktree remove` can leave behind when they are junctions or locked.
+const LEFTOVER_WORKTREE_ENTRIES = new Set(["node_modules", ".next"]);
+
 /**
  * Claude refuses these before it reads the prompt: replacing a process running background work,
  * launch arguments whose appended system prompt or settings cannot be read, or MCP registration
@@ -582,7 +585,20 @@ export const layer: Layer.Layer<
         const exists = yield* fileSystem
           .exists(worktreePath)
           .pipe(Effect.orElseSucceed(() => true));
-        if (!exists && (yield* isManagedWorktreePath(worktreePath))) {
+        const managed = yield* isManagedWorktreePath(worktreePath);
+        // A `git worktree remove` that skips a junctioned `node_modules` leaves
+        // a folder with no checkout. Only that leftover is cleared, never user files.
+        const leftover =
+          exists &&
+          managed &&
+          !(yield* fileSystem
+            .exists(path.join(worktreePath, ".git"))
+            .pipe(Effect.orElseSucceed(() => true))) &&
+          (yield* fileSystem.readDirectory(worktreePath).pipe(
+            Effect.map((entries) => entries.every((entry) => LEFTOVER_WORKTREE_ENTRIES.has(entry))),
+            Effect.orElseSucceed(() => false),
+          ));
+        if (managed && (!exists || leftover)) {
           const project = yield* projects.getById(projection.thread.projectId).pipe(
             Effect.map(Option.getOrUndefined),
             Effect.orElseSucceed(() => undefined),
@@ -594,15 +610,28 @@ export const layer: Layer.Layer<
               branch,
             });
             const recreateResult = yield* Effect.result(
-              recreateMissingWorktree({
-                cwd: project.workspaceRoot,
-                worktreePath,
-                branch,
-              }).pipe(
-                Effect.mapError((cause) =>
-                  cause._tag === "WorktreeRecreateNoBaseError"
-                    ? cause
-                    : new WorktreeRecreateError({ worktreePath, branch, cause }),
+              (leftover
+                ? fileSystem
+                    .remove(worktreePath, { recursive: true })
+                    .pipe(
+                      Effect.mapError(
+                        (cause) => new WorktreeRecreateError({ worktreePath, branch, cause }),
+                      ),
+                    )
+                : Effect.void
+              ).pipe(
+                Effect.andThen(
+                  recreateMissingWorktree({
+                    cwd: project.workspaceRoot,
+                    worktreePath,
+                    branch,
+                  }).pipe(
+                    Effect.mapError((cause) =>
+                      cause._tag === "WorktreeRecreateNoBaseError"
+                        ? cause
+                        : new WorktreeRecreateError({ worktreePath, branch, cause }),
+                    ),
+                  ),
                 ),
               ),
             );
