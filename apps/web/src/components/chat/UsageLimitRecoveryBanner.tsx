@@ -7,9 +7,13 @@ import type {
   LimitSwitchSuggestion,
   LimitSwitchTarget,
 } from "@t3tools/client-runtime/state/limit-switch-targets";
+import { type TimestampFormat } from "@t3tools/contracts/settings";
+import { deadlineStore } from "@t3tools/client-runtime/clock";
 import { GaugeIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useDeadlinePassed } from "../../hooks/useDeadline";
 import { Button } from "../ui/button";
+import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { toastManager } from "../ui/toast";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 
@@ -19,26 +23,26 @@ type RecoveryProps = {
   stoppedAt: string;
   snoozedUntil: string | null;
   recovery: OrchestrationV2LimitRecovery | null;
+  timestampFormat: TimestampFormat;
   onChange: (recovery: OrchestrationV2LimitRecoveryUpdate) => Promise<void>;
   /** Other accounts that can take this thread over now; see `listLimitSwitchTargets`. */
-  switchTargets: ReadonlyArray<LimitSwitchTarget>;
-  onSwitch: (target: LimitSwitchTarget) => Promise<void>;
+  switchTargets?: ReadonlyArray<LimitSwitchTarget>;
+  onSwitch?: (target: LimitSwitchTarget) => Promise<void>;
 };
 
 export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBannerStackItem {
-  const { runId, resetAt, stoppedAt } = props;
+  const { runId, resetAt, stoppedAt, timestampFormat } = props;
   const canSchedule = resetAt !== null && Date.parse(resetAt) > Date.parse(stoppedAt);
   return {
     id: `usage-limit-recovery:${runId}`,
     variant: "warning",
-    priority: "urgent",
     icon: <GaugeIcon />,
     title: "Usage limit reached",
     description: resetAt
-      ? `Resets ${new Date(resetAt).toLocaleString()}`
+      ? `Resets ${formatUpcomingTimestamp(resetAt, timestampFormat)}`
       : "Reset time unavailable; retry manually",
     actions:
-      canSchedule || props.switchTargets.length > 0 ? (
+      canSchedule || (props.switchTargets?.length ?? 0) > 0 ? (
         <RecoveryActions key={`${runId}:${resetAt}`} canSchedule={canSchedule} {...props} />
       ) : null,
   };
@@ -64,6 +68,7 @@ export function limitSwitchBannerItem(
   suggestion: LimitSwitchSuggestion,
   onSwitch: (target: LimitSwitchTarget) => void,
   onDismiss: (id: string) => void,
+  timestampFormat: TimestampFormat,
 ): ComposerBannerStackItem {
   const { window, sourceLabel, targets, remainingPercent, spendingCredits } = suggestion;
   const usedUp = remainingPercent <= 0;
@@ -72,7 +77,6 @@ export function limitSwitchBannerItem(
   return {
     id,
     variant: usedUp ? "warning" : "info",
-    priority: "notice",
     icon: <GaugeIcon />,
     title: usedUp
       ? `${window.label} limit used up on ${sourceLabel}`
@@ -84,7 +88,9 @@ export function limitSwitchBannerItem(
           : spendingCredits.balance === null
             ? "Further turns spend credits."
             : `Further turns spend credits (${formatCreditBalance(spendingCredits.balance)} left).`,
-        window.resetsAt ? `Resets ${new Date(window.resetsAt).toLocaleString()}` : null,
+        window.resetsAt
+          ? `Resets ${formatUpcomingTimestamp(window.resetsAt, timestampFormat)}`
+          : null,
       ]
         .filter((part) => part !== null)
         .join(" ") || undefined,
@@ -114,24 +120,17 @@ function RecoveryActions({
   recovery,
   snoozedUntil,
   onChange,
-  switchTargets,
+  switchTargets = [],
   onSwitch,
   canSchedule,
 }: RecoveryProps & { canSchedule: boolean }) {
   const [pending, setPending] = useState(false);
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const delay = Date.parse(resetAt ?? "") - Math.max(nowMs, Date.now());
-    if (!Number.isFinite(delay) || delay <= 0) return;
-    const timer = window.setTimeout(() => setNowMs(Date.now()), Math.min(delay + 1, 2_147_483_647));
-    return () => window.clearTimeout(timer);
-  }, [resetAt, nowMs]);
 
   const scheduled =
     recovery?.runId === runId && recovery.resetAt === resetAt && recovery.autoResume;
   // The server leaves snoozedUntil in place after the timer wakes the thread,
   // so a snooze whose reset has passed is no longer active.
-  const resetPassed = Date.parse(resetAt ?? "") <= nowMs;
+  const resetPassed = useDeadlinePassed(resetAt === null ? null : Date.parse(resetAt));
   const snoozed =
     recovery?.snooze === true &&
     recovery.runId === runId &&
@@ -161,7 +160,8 @@ function RecoveryActions({
         title: "Could not snooze thread",
         description: "The reset time has passed. Retry the thread manually.",
       });
-      setNowMs(Date.now());
+      // The deadline timer can lag after a throttled tab or sleep; disable now.
+      deadlineStore(Date.parse(resetAt)).refresh();
       return;
     }
     await run(
@@ -182,9 +182,9 @@ function RecoveryActions({
           key={target.selection.instanceId}
           size="xs"
           variant="ghost"
-          disabled={pending}
+          disabled={pending || !onSwitch}
           onClick={() =>
-            void run(() => onSwitch(target), `Could not continue with ${target.label}`)
+            void run(async () => onSwitch?.(target), `Could not continue with ${target.label}`)
           }
         >
           {switchTargetLabel("Continue with", target)}

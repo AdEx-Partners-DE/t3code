@@ -18,7 +18,7 @@ const FAVICON_CACHE_CAPACITY = 512;
 const FAVICON_POSITIVE_CACHE_TTL = Duration.minutes(10);
 // A miss costs a scan of every candidate file, and clients ask for project icon
 // URLs all the time; a new icon file showing within 15 minutes matches the
-// enrichment cache (#16206).
+// enrichment cache.
 const FAVICON_NEGATIVE_CACHE_TTL = Duration.minutes(15);
 
 function faviconCacheKey(cwd: string, faviconPath?: string): string {
@@ -128,7 +128,7 @@ function extractIconHref(source: string): string | null {
   return null;
 }
 
-const optionOnNotFound = <A, R>(
+export const optionOnNotFound = <A, R>(
   effect: Effect.Effect<A, PlatformError.PlatformError, R>,
 ): Effect.Effect<Option.Option<A>, PlatformError.PlatformError, R> =>
   effect.pipe(

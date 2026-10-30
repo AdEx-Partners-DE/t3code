@@ -1,12 +1,6 @@
 /**
- * Turns successive usage-limit reads into a history: one point whenever a
- * window's reading changes, and one reset whenever a window starts over.
- *
- * A provider only reports where an account stands now. Without the earlier
- * readings nobody can say how the allowance burned down, or how much of it was
- * left when the provider reset every account ahead of schedule.
- *
- * @module usageLimitReadings
+ * Turns successive usage-limit reads into a history: one point whenever a window's
+ * reading changes, one reset whenever it starts over. Providers only report the present.
  */
 import type { ServerProvider, UsageLimitHistoryPoint, UsageLimitReset } from "@t3tools/contracts";
 
@@ -69,7 +63,7 @@ function sameResetTime(left: string | undefined, right: string | undefined): boo
  * One series per subscription and window. An instance that switches accounts
  * keeps one series per account, so the switch is not mistaken for a reset.
  */
-export function usageLimitWindowKey(point: {
+function usageLimitWindowKey(point: {
   readonly instanceId: string;
   readonly driver?: string | undefined;
   readonly account?: string | undefined;
@@ -114,7 +108,7 @@ function startedOver(previous: UsageLimitHistoryPoint, point: UsageLimitHistoryP
  * returns the reset it reveals. Used for live readings and to rebuild the
  * resets from recorded points, so a corrected rule also corrects the past.
  */
-export function observeUsageLimitPoint(
+function observeUsageLimitPoint(
   state: Map<string, UsageLimitHistoryPoint>,
   point: UsageLimitHistoryPoint,
 ): { readonly recorded: boolean; readonly reset?: UsageLimitReset } {

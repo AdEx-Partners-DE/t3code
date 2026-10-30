@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
 import * as Option from "effect/Option";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import {
   Clock3Icon,
   CopyIcon,
@@ -12,7 +12,7 @@ import {
   PlusIcon,
   Trash2Icon,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -49,15 +49,11 @@ import {
 import { formatRelativeTime } from "../../timestampFormat";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-} from "../../providerInstances";
+import { providerInstanceEntriesFor } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import {
@@ -67,6 +63,7 @@ import {
 } from "../../state/environments";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useProjects, useThreadShell, useThreadShells } from "../../state/entities";
+import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -377,7 +374,7 @@ export function relativeLabel(value: string | null): string {
  * Where a task posts, how often it has run and who made it: what tells an
  * automation an agent set up apart from one the user did.
  */
-export function taskFactsLabel(task: ScheduledTask, threadTitle: string | null): string {
+function taskFactsLabel(task: ScheduledTask, threadTitle: string | null): string {
   const target =
     task.schedule.type === "idle" && task.schedule.allOpenThreads
       ? `At most ${task.schedule.maxParallel ?? 2} at work at once`
@@ -427,6 +424,45 @@ export function ScheduledTasksSettings(target: {
     setEditor({ environmentId, task });
   };
   const defaultEnvironment = environment ?? connectedEnvironments[0];
+  const linkedEnvironmentId = target.environmentId ?? defaultEnvironment?.environmentId;
+  const linkedEnvironmentConnected = environments.some(
+    (entry) =>
+      entry.environmentId === linkedEnvironmentId &&
+      entry.connection.phase === "connected" &&
+      entry.serverConfig !== null,
+  );
+  const linkedTasksQuery = useEnvironmentQuery(
+    target.taskId !== undefined && linkedEnvironmentId !== undefined && linkedEnvironmentConnected
+      ? serverEnvironment.scheduledTasksLive({ environmentId: linkedEnvironmentId, input: {} })
+      : null,
+  );
+  const linkedTask = linkedTasksQuery.data?.tasks.find(
+    (task) =>
+      task.id === target.taskId &&
+      linkedEnvironmentId !== undefined &&
+      matchesScheduledTaskScope(scope, linkedEnvironmentId, task.projectId),
+  );
+  // A `taskId` link opens its editor once, the first time the task loads. The editor then owns
+  // the session until close, so a disconnect that disables the query cannot drop unsaved edits.
+  // An editor the user already opened wins: a late-loading link must not replace its draft.
+  const [openedLinkTaskId, setOpenedLinkTaskId] = useState<ScheduledTaskId | undefined>();
+  if (target.taskId === undefined && openedLinkTaskId !== undefined) {
+    setOpenedLinkTaskId(undefined);
+  }
+  if (linkedTask && linkedEnvironmentId !== undefined && openedLinkTaskId !== target.taskId) {
+    setOpenedLinkTaskId(target.taskId);
+    if (editor === null) setEditor({ environmentId: linkedEnvironmentId, task: linkedTask });
+  }
+  const navigate = useNavigate({ from: "/settings/scheduled-tasks" });
+  const closeEditor = () => {
+    setEditor(null);
+    if (target.taskId === undefined) return;
+    void navigate({
+      to: "/settings/scheduled-tasks",
+      search: ({ taskId: _closed, ...rest }) => rest,
+      replace: true,
+    });
+  };
   const canCreate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(defaultEnvironment?.environmentId ?? null),
   );
@@ -466,8 +502,7 @@ export function ScheduledTasksSettings(target: {
           </Empty>
         ) : environments.length > 1 ? (
           <ScheduledTaskEnvironmentList
-            key={`${target.environmentId ?? defaultEnvironment?.environmentId}:${target.taskId ?? ""}`}
-            environmentId={target.environmentId ?? defaultEnvironment?.environmentId}
+            environmentId={linkedEnvironmentId}
             taskId={target.taskId}
             onEdit={openForEdit}
           />
@@ -475,15 +510,9 @@ export function ScheduledTasksSettings(target: {
           <div className="space-y-8">
             {environments.map((entry) => (
               <ScheduledTaskEnvironmentSection
-                key={`${entry.environmentId}:${target.taskId ?? ""}`}
+                key={entry.environmentId}
                 environment={entry}
-                showEnvironmentHeading={environments.length > 1}
-                taskId={
-                  (target.environmentId ?? defaultEnvironment?.environmentId) ===
-                  entry.environmentId
-                    ? target.taskId
-                    : undefined
-                }
+                taskId={linkedEnvironmentId === entry.environmentId ? target.taskId : undefined}
                 onEdit={openForEdit}
               />
             ))}
@@ -495,12 +524,16 @@ export function ScheduledTasksSettings(target: {
           key={`${editor.environmentId}:${editor.task?.id ?? "new"}`}
           initialEnvironmentId={editor.environmentId}
           task={editor.task}
-          onClose={() => setEditor(null)}
+          onClose={closeEditor}
         />
       ) : null}
     </SettingsPageContainer>
   );
 }
+
+const scheduledTasksListAtom = environmentAtomList("web-scheduled-tasks-list", (environmentId) =>
+  serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
+);
 
 function ScheduledTaskEnvironmentList({
   environmentId,
@@ -512,40 +545,27 @@ function ScheduledTaskEnvironmentList({
   readonly onEdit: (environmentId: EnvironmentId, task: ScheduledTask) => void;
 }) {
   const { scope, environments } = useSettingsScope();
-  const states = useAtomValue(
-    Atom.make((get) =>
-      environments.map((environment) => {
-        const connected =
-          environment.connection.phase === "connected" && environment.serverConfig !== null;
-        const query = connected
-          ? get(
-              serverEnvironment.scheduledTasksLive({
-                environmentId: environment.environmentId,
-                input: {},
-              }),
-            )
-          : null;
-        const data = query === null ? null : Option.getOrNull(AsyncResult.value(query));
-        return {
-          environment,
-          connected,
-          tasks: data?.tasks.filter((task) =>
-            matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
-          ),
-          error: query?._tag === "Failure" ? formatEnvironmentQueryError(query.cause) : null,
-        };
-      }),
-    ),
+  const connectedIds = environments.flatMap((environment) =>
+    environment.connection.phase === "connected" && environment.serverConfig !== null
+      ? [environment.environmentId]
+      : [],
   );
+  const queries = useAtomValue(scheduledTasksListAtom(environmentIdsKey(connectedIds)));
+  const states = environments.map((environment) => {
+    const index = connectedIds.indexOf(environment.environmentId);
+    const query = index < 0 ? null : queries[index]!;
+    const data = query === null ? null : AsyncResult.getOrElse(query, () => null);
+    return {
+      environment,
+      connected: index >= 0,
+      tasks: data?.tasks.filter((task) =>
+        matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
+      ),
+      error: query?._tag === "Failure" ? formatEnvironmentQueryError(query.cause) : null,
+    };
+  });
   const linkedState = states.find((state) => state.environment.environmentId === environmentId);
   const linkedTask = linkedState?.tasks?.find((task) => task.id === taskId);
-  const openedLink = useRef(false);
-  useEffect(() => {
-    if (!openedLink.current && environmentId && linkedTask) {
-      openedLink.current = true;
-      onEdit(environmentId, linkedTask);
-    }
-  }, [environmentId, linkedTask, onEdit]);
 
   const loaded = states.filter((state) => state.connected && state.error === null && state.tasks);
   const populated = loaded.filter((state) => state.tasks && state.tasks.length > 0);
@@ -669,12 +689,10 @@ function ScheduledTasksUpdateHoldRow({ environmentId }: { readonly environmentId
 
 function ScheduledTaskEnvironmentSection({
   environment,
-  showEnvironmentHeading,
   taskId,
   onEdit,
 }: {
   readonly environment: EnvironmentPresentation;
-  readonly showEnvironmentHeading: boolean;
   readonly taskId?: ScheduledTaskId | undefined;
   readonly onEdit: (environmentId: EnvironmentId, task: ScheduledTask) => void;
 }) {
@@ -706,17 +724,10 @@ function ScheduledTaskEnvironmentSection({
     tasks?.filter((task) => task.enabled && isTaskHeldByPause(task.id, paused, pauseExemptIds))
       .length ?? 0;
   const linkedTask = tasks?.find((task) => task.id === taskId);
-  const openedLink = useRef(false);
-  useEffect(() => {
-    if (!openedLink.current && linkedTask) {
-      openedLink.current = true;
-      onEdit(environment.environmentId, linkedTask);
-    }
-  }, [environment.environmentId, linkedTask, onEdit]);
   return (
     <SettingsSection
       title={environment.label}
-      hideTitle={!showEnvironmentHeading}
+      hideTitle
       icon={
         <EnvironmentMachineIcon
           kind={resolveEnvironmentMachineKind(environment.serverConfig)}
@@ -1205,8 +1216,8 @@ function WebhookDeliveryMode({ environmentId }: { readonly environmentId: Enviro
       {cloudLink.data.holdWebhooksWhileOffline
         ? "Held for up to 24 hours while this environment is offline. "
         : "Forwarded live. Requests fail while this environment is offline. "}
-      <Link to="/settings/connections" className="underline underline-offset-2">
-        Change in Connections
+      <Link to="/settings/access" className="underline underline-offset-2">
+        Change in Sharing & access
       </Link>
     </p>
   );
@@ -1295,12 +1306,10 @@ function ScheduledTaskEditorDialog({
           .slice(0, 100);
   // The task runs in selectedProject, so its model picker should reflect that
   // project's effective enablement, not just the machine's.
-  const instanceEntries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(
-      deriveProviderInstanceEntries(providers),
-      settings,
-      selectedProject?.id ?? null,
-    ),
+  const instanceEntries = providerInstanceEntriesFor(
+    providers,
+    settings,
+    selectedProject?.id ?? null,
   );
 
   const firstInstance = instanceEntries[0];

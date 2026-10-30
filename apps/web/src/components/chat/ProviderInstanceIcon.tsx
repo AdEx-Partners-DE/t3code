@@ -69,7 +69,6 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   className?: string;
   iconClassName?: string;
   badgeClassName?: string;
-  statusDotClassName?: string;
   indicatorBackground?: string;
   /**
    * Allowance left in the account's tightest usage window, 0 to 100. Draws a
@@ -153,16 +152,6 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
             }
           />
         </svg>
-      ) : null}
-      {props.statusDotClassName ? (
-        <span
-          className={cn(
-            "pointer-events-none absolute -left-0.5 -top-0.5 z-10 size-2 rounded-full",
-            props.statusDotClassName,
-          )}
-          style={{ boxShadow: `0 0 0 2px ${indicatorBackground}` }}
-          aria-hidden
-        />
       ) : null}
       {props.showBadge ? (
         <span

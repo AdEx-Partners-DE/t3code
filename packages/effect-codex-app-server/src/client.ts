@@ -42,6 +42,7 @@ export class CodexAppServerClient extends Context.Service<
   CodexAppServerClient,
   {
     readonly raw: CodexAppServerClientRaw;
+    readonly awaitTermination: Effect.Effect<never, CodexError.CodexAppServerError>;
     readonly request: <M extends CodexRpc.ClientRequestMethod>(
       method: M,
       payload: CodexRpc.ClientRequestParamsByMethod[M],
@@ -105,6 +106,7 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
   exited?: Effect.Effect<CodexError.CodexAppServerError>,
 ): Effect.fn.Return<CodexAppServerClient["Service"], never, Scope.Scope> {
   const requestHandlers = new Map<string, ServerRequestHandler>();
+  const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
   const notificationHandlers = new Map<string, Array<ServerNotificationHandler>>();
   let unknownRequestHandler:
     | ((method: string, params: unknown) => Effect.Effect<unknown, CodexError.CodexAppServerError>)
@@ -200,18 +202,20 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
       : Effect.fail(CodexError.CodexAppServerRequestError.methodNotFound(request.method));
   };
 
-  const termination = yield* Deferred.make<CodexError.CodexAppServerError>();
   const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
     stdio,
-    onTermination: (error) => Deferred.succeed(termination, error).pipe(Effect.asVoid),
     ...(terminationError ? { terminationError } : {}),
     ...(exited ? { exited } : {}),
     ...(options.logIncoming !== undefined ? { logIncoming: options.logIncoming } : {}),
     ...(options.logOutgoing !== undefined ? { logOutgoing: options.logOutgoing } : {}),
     ...(options.logger ? { logger: options.logger } : {}),
-    ...(options.onTermination ? { onTermination: options.onTermination } : {}),
     onNotification: dispatchNotification,
     onRequest: dispatchRequest,
+    onTermination: (error) =>
+      Deferred.succeed(termination, error).pipe(
+        Effect.andThen(options.onTermination?.(error) ?? Effect.void),
+        Effect.asVoid,
+      ),
   });
 
   const request = <M extends CodexRpc.ClientRequestMethod>(
@@ -239,6 +243,7 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
     );
 
   return CodexAppServerClient.of({
+    awaitTermination: Deferred.await(termination).pipe(Effect.flatMap(Effect.fail)),
     raw: {
       notifications: transport.incomingNotifications,
       requests: transport.incomingRequests,
@@ -249,24 +254,36 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
     },
     request,
     notify,
-    handleServerRequest: (method, handler) =>
-      Effect.sync(() => {
-        requestHandlers.set(method, handler as ServerRequestHandler);
-      }),
-    handleServerNotification: (method, handler) =>
-      Effect.sync(() => {
-        const current = notificationHandlers.get(method) ?? [];
-        current.push(handler as ServerNotificationHandler);
-        notificationHandlers.set(method, current);
-      }),
-    handleUnknownServerRequest: (handler) =>
-      Effect.sync(() => {
-        unknownRequestHandler = handler;
-      }),
-    handleUnknownServerNotification: (handler) =>
-      Effect.sync(() => {
+    handleServerRequest: Effect.fn("CodexAppServerClient.handleServerRequest")(
+      function (method, handler) {
+        return Effect.sync(() => {
+          requestHandlers.set(method, handler as ServerRequestHandler);
+        });
+      },
+    ),
+    handleServerNotification: Effect.fn("CodexAppServerClient.handleServerNotification")(
+      function (method, handler) {
+        return Effect.sync(() => {
+          const current = notificationHandlers.get(method) ?? [];
+          current.push(handler as ServerNotificationHandler);
+          notificationHandlers.set(method, current);
+        });
+      },
+    ),
+    handleUnknownServerRequest: Effect.fn("CodexAppServerClient.handleUnknownServerRequest")(
+      function (handler) {
+        return Effect.sync(() => {
+          unknownRequestHandler = handler;
+        });
+      },
+    ),
+    handleUnknownServerNotification: Effect.fn(
+      "CodexAppServerClient.handleUnknownServerNotification",
+    )(function (handler) {
+      return Effect.sync(() => {
         unknownNotificationHandler = handler;
-      }),
+      });
+    }),
     terminated: Deferred.await(termination),
   });
 });

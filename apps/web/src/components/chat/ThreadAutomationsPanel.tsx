@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { useNavigate } from "@tanstack/react-router";
 import { CalendarClockIcon, PencilIcon, PlayIcon, Settings2Icon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -83,12 +83,9 @@ const RELATED_REASON_LABEL: Record<ThreadAutomationReason, string> = {
 };
 
 /**
- * Thread details panel section listing the automations (scheduled tasks) bound
- * to this thread, the ones that send to it or wait for it, any task running
- * elsewhere, and one line saying how many are on and which starts next. Fed by
- * the live scheduled-task subscription, so run status and next-run times update
- * as the scheduler works — no manual refresh. Renders nothing when no task is
- * on and none concerns this thread.
+ * Thread details section for the scheduled tasks bound to, sending to, or waiting on this thread,
+ * plus any running elsewhere and a summary of how many are on and which starts next. Fed by the
+ * live scheduled-task subscription. Renders nothing when no task is on and none concerns it.
  */
 export function ThreadAutomationsPanel(props: {
   readonly environmentId: EnvironmentId;
@@ -120,10 +117,7 @@ export function ThreadAutomationsPanel(props: {
   const isHeld = (task: ScheduledTask) =>
     task.enabled && isTaskHeldByPause(task.id, allTasksPaused, pauseExemptIds);
 
-  const threadRef = useMemo(
-    () => scopeThreadRef(props.environmentId, props.threadId),
-    [props.environmentId, props.threadId],
-  );
+  const threadRef = scopeThreadRef(props.environmentId, props.threadId);
   const thread = useThreadShell(threadRef);
   const nowMinute = useNowMinute();
   const nowMs = Date.parse(`${nowMinute}:00.000Z`);
@@ -234,12 +228,6 @@ export function ThreadAutomationsPanel(props: {
         </Tooltip>
       }
     >
-      {tasksQuery.error !== null ? (
-        <p className="px-2.5 py-1.5 text-2xs text-destructive">
-          Could not load automations: {tasksQuery.error}
-        </p>
-      ) : null}
-
       {boundTasks.some(isHeld) ? (
         <div
           className={cn(
@@ -393,6 +381,13 @@ export function ThreadAutomationsPanel(props: {
         >
           {summary}
         </button>
+      ) : null}
+
+      {/* Kept last: the details card treats a section whose last child is empty as empty. */}
+      {tasksQuery.error !== null ? (
+        <p className="px-2.5 py-1.5 text-2xs text-destructive">
+          Could not load automations: {tasksQuery.error}
+        </p>
       ) : null}
     </ThreadDetailsSection>
   );

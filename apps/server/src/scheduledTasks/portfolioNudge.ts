@@ -1,13 +1,6 @@
 /**
- * Picks the threads a portfolio task nudges in one pass.
- *
- * A portfolio task is an idle task for every open thread at once: it sends its
- * prompt to each thread that stands still, so work goes on everywhere without
- * one automation per thread. Three brakes keep that from running away: a cap
- * on how many threads may work at the same time, a pause after each thread's
- * own run, and never the same finished run twice.
- *
- * @module portfolioNudge
+ * Picks the threads a portfolio task nudges in one pass. Brakes: a cap on threads
+ * working at once, a pause after each thread's own run, never the same finished run twice.
  */
 import type { OrchestrationV2ThreadShell, ScheduledTaskIdleSchedule } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -18,7 +11,7 @@ import { isOpenThread } from "../orchestration-v2/OpenThreadModelOverride.ts";
 type PortfolioThread = Parameters<typeof standsStill>[0] &
   Pick<OrchestrationV2ThreadShell, "modelSelection">;
 
-export const DEFAULT_MAX_PARALLEL = 2;
+const DEFAULT_MAX_PARALLEL = 2;
 /**
  * How often a supervised task sends one thread on. A supervisor and an agent
  * that keep answering each other would otherwise go round in circles.

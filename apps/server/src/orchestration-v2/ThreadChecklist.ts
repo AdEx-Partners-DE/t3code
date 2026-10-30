@@ -1,13 +1,6 @@
 /**
- * Keeps a checklist per thread: what is done, what is open, what is parked,
- * and what waits on the user, written by a model from the thread's history.
- *
- * Long threads bury things, above all when automations add a turn every few
- * minutes. The checklist is the short view that stays readable. It is derived
- * and can be thrown away: each one is a file in the state directory, rewritten
- * on refresh.
- *
- * @module ThreadChecklist
+ * A model-written checklist per thread (done, open, parked, waiting on the user).
+ * Derived and disposable: one file per thread in the state directory, rewritten on refresh.
  */
 import {
   ThreadChecklist as ThreadChecklistSchema,
@@ -52,7 +45,7 @@ const decodeChecklist = Schema.decodeUnknownOption(Schema.fromJsonString(ThreadC
 const encodeChecklist = Schema.encodeSync(Schema.fromJsonString(ThreadChecklistSchema));
 
 /** Raised when an item's status is set on a thread whose checklist was never written. */
-export class ChecklistMissingError extends Data.TaggedError("ChecklistMissingError")<{
+class ChecklistMissingError extends Data.TaggedError("ChecklistMissingError")<{
   readonly detail: string;
 }> {}
 

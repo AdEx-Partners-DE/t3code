@@ -37,35 +37,6 @@ import {
 const ServerSettingsJson = fromLenientJson(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownOption(ServerSettingsJson);
 
-export function resolveProjectAgentBrowserAccess(
-  settings: Pick<
-    ServerSettings,
-    "enableAgentBrowserAccess" | "projectAgentBrowserAccessOverrides" | "projectSettingsOverrides"
-  >,
-  projectId: ProjectId,
-): boolean {
-  return (
-    settings.projectSettingsOverrides[projectId]?.enableAgentBrowserAccess ??
-    settings.projectAgentBrowserAccessOverrides[projectId] ??
-    settings.enableAgentBrowserAccess
-  );
-}
-
-export function resolveProjectAutoPull(
-  settings: Pick<
-    ServerSettings,
-    "defaultAutoPull" | "projectAutoPullOverrides" | "projectSettingsOverrides"
-  >,
-  projectId: ProjectId,
-  legacyAutoPull: boolean | undefined,
-): boolean {
-  return (
-    settings.projectSettingsOverrides[projectId]?.defaultAutoPull ??
-    settings.projectAutoPullOverrides[projectId] ??
-    (legacyAutoPull === true || settings.defaultAutoPull)
-  );
-}
-
 export function isModelSelectionProviderEnabled(
   settings: ServerSettings,
   selection: ModelSelection,
@@ -121,13 +92,15 @@ export function fallbackTextGenerationModelSelection(
   ) {
     return threadDefault;
   }
-  return {
-    instanceId,
-    model:
-      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
-      DEFAULT_MODEL_BY_PROVIDER[driver] ??
-      DEFAULT_TEXT_GENERATION_MODEL,
-  };
+  return { instanceId, model: defaultTextGenerationModel(driver) };
+}
+
+export function defaultTextGenerationModel(driver: ProviderDriverKind): string {
+  return (
+    DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
+    DEFAULT_MODEL_BY_PROVIDER[driver] ??
+    DEFAULT_TEXT_GENERATION_MODEL
+  );
 }
 
 export function resolveSourceControlWriterModelSelection(
@@ -330,7 +303,7 @@ function translateLegacyProjectOverridePatch(
     for (const [projectId, value] of Object.entries(map)) {
       if (canonicalProjectIds.has(projectId)) continue;
       const entry: ProjectSettingsOverrides = {
-        ...(entries.get(projectId) ?? currentEntries[projectId] ?? {}),
+        ...(entries.get(projectId) ?? currentEntries[projectId]),
       };
       if (value === null || value === undefined) {
         delete entry[key];
@@ -432,35 +405,41 @@ export function applyServerSettingsPatch(
   const initialFavorites =
     patch.favorites ?? current.favorites ?? migrateModelPreferences?.favorites ?? null;
   const favorites =
-    setModelFavorites?.reduce((current, change) => {
-      const exists = current.some(
-        (favorite) => favorite.provider === change.provider && favorite.model === change.model,
-      );
-      return change.favorite
-        ? exists
-          ? current
-          : [...current, { provider: change.provider, model: change.model }]
-        : current.filter(
-            (favorite) => favorite.provider !== change.provider || favorite.model !== change.model,
-          );
-    }, initialFavorites ?? []) ?? initialFavorites;
+    setModelFavorites?.reduce(
+      (current, change) => {
+        const exists = current.some(
+          (favorite) => favorite.provider === change.provider && favorite.model === change.model,
+        );
+        if (change.favorite) {
+          if (!exists) current.push({ provider: change.provider, model: change.model });
+          return current;
+        }
+        return current.filter(
+          (favorite) => favorite.provider !== change.provider || favorite.model !== change.model,
+        );
+      },
+      [...(initialFavorites ?? [])],
+    ) ?? initialFavorites;
   const initialModelPreferences =
     providerModelPreferences ??
     current.providerModelPreferences ??
     migrateModelPreferences?.providerModelPreferences ??
     null;
   let nextModelPreferences = initialModelPreferences;
-  for (const change of setModelsHidden ?? []) {
-    const preferences = nextModelPreferences?.[change.provider] ?? {
-      hiddenModels: [],
-      modelOrder: [],
-    };
-    const hiddenModels = preferences.hiddenModels.filter((model) => model !== change.model);
-    if (change.hidden) hiddenModels.push(change.model);
-    nextModelPreferences = {
-      ...nextModelPreferences,
-      [change.provider]: { ...preferences, hiddenModels },
-    };
+  if (setModelsHidden?.length) {
+    const updated = { ...initialModelPreferences };
+    for (const change of setModelsHidden) {
+      const preferences = (Object.hasOwn(updated, change.provider)
+        ? updated[change.provider]
+        : undefined) ?? {
+        hiddenModels: [],
+        modelOrder: [],
+      };
+      const hiddenModels = preferences.hiddenModels.filter((model) => model !== change.model);
+      if (change.hidden) hiddenModels.push(change.model);
+      updated[change.provider] = { ...preferences, hiddenModels };
+    }
+    nextModelPreferences = updated;
   }
   if (setProviderModelOrder) {
     const preferences = nextModelPreferences?.[setProviderModelOrder.provider] ?? {
@@ -560,6 +539,9 @@ export function applyServerSettingsPatch(
       : {}),
     ...(patch.defaultModelSelection !== undefined
       ? { defaultModelSelection: patch.defaultModelSelection }
+      : {}),
+    ...(patch.fallbackModelSelection !== undefined
+      ? { fallbackModelSelection: patch.fallbackModelSelection }
       : {}),
     ...(patch.defaultProjectScripts !== undefined
       ? { defaultProjectScripts: patch.defaultProjectScripts }

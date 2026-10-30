@@ -43,9 +43,6 @@ export interface ProjectEnrichmentServiceOptions {
   readonly cacheCapacity?: number;
   readonly maxPending?: number;
   readonly concurrency?: number;
-  readonly successTtl?: Duration.Input;
-  readonly faviconTtl?: Duration.Input;
-  readonly failureTtl?: Duration.Input;
 }
 
 export class ProjectEnrichmentService extends Context.Service<
@@ -54,6 +51,9 @@ export class ProjectEnrichmentService extends Context.Service<
     readonly peek: (workspaceRoot: string) => Effect.Effect<ProjectEnrichment>;
     readonly request: (workspaceRoot: string) => Effect.Effect<void>;
     readonly getAvailable: (workspaceRoot: string) => Effect.Effect<ProjectEnrichment>;
+    readonly readRepositoryIdentity: (
+      workspaceRoot: string,
+    ) => Effect.Effect<RepositoryIdentity | null>;
     readonly invalidate: (workspaceRoots: Iterable<string>) => Effect.Effect<void>;
     readonly subscribeChanges: Effect.Effect<
       PubSub.Subscription<ProjectEnrichmentChange>,
@@ -94,17 +94,14 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
   const cacheCapacity = Math.max(1, options.cacheCapacity ?? DEFAULT_CACHE_CAPACITY);
   const maxPending = Math.max(1, options.maxPending ?? DEFAULT_MAX_PENDING);
   const concurrency = Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY);
-  const successTtl = options.successTtl ?? DEFAULT_SUCCESS_TTL;
-  const failureTtl = options.failureTtl ?? DEFAULT_FAILURE_TTL;
-  const faviconTtl = options.faviconTtl ?? DEFAULT_FAVICON_TTL;
 
   const repositoryIdentityCache = yield* Cache.makeWith(
     (workspaceRoot: string) => Effect.exit(repositoryIdentityResolver.resolve(workspaceRoot)),
     {
       capacity: cacheCapacity,
       timeToLive: Exit.match({
-        onFailure: () => failureTtl,
-        onSuccess: (result) => (Exit.isSuccess(result) ? successTtl : failureTtl),
+        onFailure: () => DEFAULT_FAILURE_TTL,
+        onSuccess: (result) => (Exit.isSuccess(result) ? DEFAULT_SUCCESS_TTL : DEFAULT_FAILURE_TTL),
       }),
     },
   );
@@ -113,11 +110,13 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     {
       capacity: cacheCapacity,
       timeToLive: Exit.match({
-        onFailure: () => failureTtl,
+        onFailure: () => DEFAULT_FAILURE_TTL,
         // A moved or deleted checkout stays gone for a while; retrying it every
         // few seconds only fills the log for as long as the project points there.
         onSuccess: (result) =>
-          Exit.isSuccess(result) || isMissingWorkspaceRootExit(result) ? faviconTtl : failureTtl,
+          Exit.isSuccess(result) || isMissingWorkspaceRootExit(result)
+            ? DEFAULT_FAVICON_TTL
+            : DEFAULT_FAILURE_TTL,
       }),
     },
   );
@@ -277,6 +276,12 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     },
   );
 
+  const readRepositoryIdentity: ProjectEnrichmentService["Service"]["readRepositoryIdentity"] =
+    Effect.fn("ProjectEnrichmentService.readRepositoryIdentity")(function* (workspaceRoot) {
+      const resolved = yield* Cache.get(repositoryIdentityCache, workspaceRoot);
+      return Exit.isSuccess(resolved) ? resolved.value : null;
+    });
+
   const invalidate: ProjectEnrichmentService["Service"]["invalidate"] = Effect.fn(
     "ProjectEnrichmentService.invalidate",
   )(function* (workspaceRoots) {
@@ -300,6 +305,7 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     peek,
     request,
     getAvailable,
+    readRepositoryIdentity,
     invalidate,
     subscribeChanges: PubSub.subscribe(changes),
   });
