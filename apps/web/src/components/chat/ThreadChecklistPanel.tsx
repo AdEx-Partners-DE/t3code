@@ -25,7 +25,7 @@ import {
   RefreshCwIcon,
   SparklesIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { resolveComposerDraftKey, useComposerDraftStore } from "../../composerDraftStore";
 import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
@@ -58,7 +58,7 @@ export const CHECKLIST_STATUS_LABEL: Record<ThreadChecklistItem["status"], strin
 };
 
 /** An item as plain text: its line and, if it has one, the note below. */
-export function checklistItemText(item: ThreadChecklistItem): string {
+function checklistItemText(item: ThreadChecklistItem): string {
   return item.note ? `${item.text}\n${item.note}` : item.text;
 }
 
@@ -86,23 +86,20 @@ export function quoteChecklistItem(
  */
 export function useChecklistFollowUp() {
   const handleNewThread = useNewThreadHandler();
-  return useCallback(
-    async (input: {
-      readonly environmentId: EnvironmentId;
-      readonly projectId: ProjectId;
-      readonly threadTitle: string;
-      readonly item: ThreadChecklistItem;
-    }) => {
-      const opened = await handleNewThread(scopeProjectRef(input.environmentId, input.projectId));
-      if (opened === null || opened === undefined) return;
-      quoteChecklistItem(
-        scopeThreadRef(input.environmentId, opened.threadId),
-        input.item,
-        `From the thread "${input.threadTitle}":`,
-      );
-    },
-    [handleNewThread],
-  );
+  return async (input: {
+    readonly environmentId: EnvironmentId;
+    readonly projectId: ProjectId;
+    readonly threadTitle: string;
+    readonly item: ThreadChecklistItem;
+  }) => {
+    const opened = await handleNewThread(scopeProjectRef(input.environmentId, input.projectId));
+    if (opened === null || opened === undefined) return;
+    quoteChecklistItem(
+      scopeThreadRef(input.environmentId, opened.threadId),
+      input.item,
+      `From the thread "${input.threadTitle}":`,
+    );
+  };
 }
 
 /** Statuses the user can set by hand; the model keeps them when it rewrites the list. */
@@ -197,11 +194,7 @@ export function ChecklistItemMenu(props: {
   );
 }
 
-export function ChecklistStatusIcon({
-  status,
-}: {
-  readonly status: ThreadChecklistItem["status"];
-}) {
+function ChecklistStatusIcon({ status }: { readonly status: ThreadChecklistItem["status"] }) {
   const className = "mt-0.5 size-3.5 shrink-0";
   switch (status) {
     case "attention":
@@ -225,7 +218,7 @@ export function ThreadChecklistPanel(props: {
   readonly threadId: ThreadId;
 }) {
   const { environmentId, threadId } = props;
-  const input = useMemo(() => ({ threadId }), [threadId]);
+  const input = { threadId };
   const stored = useEnvironmentQuery(serverEnvironment.threadChecklist({ environmentId, input }));
   const shell = useThreadShell(scopeThreadRef(environmentId, threadId));
   const allowed = useAtomValue(
@@ -315,6 +308,7 @@ export function ThreadChecklistPanel(props: {
   // turn has ended, or the number read on opening the thread would stand.
   const turnsBehind = stored.data?.turnsBehind ?? 0;
   const refreshStored = stored.refresh;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- refetches the server's turns-behind count when a turn ends
   useEffect(() => {
     if (auto && latestRunId !== null) refreshStored();
   }, [auto, latestRunId, refreshStored]);
@@ -326,6 +320,10 @@ export function ThreadChecklistPanel(props: {
   const attemptedForRun = useRef<string | null>(null);
   const [openedAt] = useState(() => Date.now());
   const fetchedAt = stored.dataUpdatedAt;
+  const startAutoRefresh = useEffectEvent(() => {
+    void run(true);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- asks the server for a model rewrite once per run after the thread moved on
   useEffect(() => {
     if (!auto || !allowed || !loaded || !hasRun || busy) return;
     if (latestRunId === null || attemptedForRun.current === latestRunId) return;
@@ -341,8 +339,8 @@ export function ThreadChecklistPanel(props: {
     });
     if (!needed) return;
     attemptedForRun.current = latestRunId;
-    void run(true);
-    // `run` closes over the same values this effect lists.
+    // oxlint-disable-next-line react/set-state-in-effect -- The rewrite marks itself busy so a second trigger waits for it.
+    startAutoRefresh();
   }, [
     allowed,
     auto,

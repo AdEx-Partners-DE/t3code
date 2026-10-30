@@ -18,15 +18,12 @@ export interface LimitSwitchTarget {
 }
 
 /** Below this much left, the five-hour session window is worth showing instead of the weekly one. */
-export const SESSION_WINDOW_SHOWN_BELOW_PERCENT = 15;
+const SESSION_WINDOW_SHOWN_BELOW_PERCENT = 15;
 
 /**
- * The window to show for a compact "where do I stand" readout: the weekly or
- * monthly window closest to running out. That is the allowance that goes
- * unused or runs dry; the five-hour session window refills many times a day
- * and is shown only when it is nearly empty, since that stops the next turn.
- * Null when the account reports no windows, so the caller shows nothing
- * rather than a full bar.
+ * The window for a compact readout: the weekly or monthly window closest to running out.
+ * The five-hour session window refills often, so it shows only when nearly empty.
+ * Null when the account reports no windows, so the caller shows nothing.
  */
 export function tightestUsageWindow(
   provider: Pick<ServerProvider, "usageLimits">,

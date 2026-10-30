@@ -3,6 +3,7 @@ import type {
   OrchestrationV2ProviderThread,
 } from "@t3tools/contracts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { ContextHandoffBudgetError } from "@t3tools/provider-core/server/failure";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -29,8 +30,7 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       (handoff) =>
         nativeThreadId === undefined ||
         handoff.delivery?.nativeThreadId !== nativeThreadId ||
-        handoff.delivery.status === "pending" ||
-        handoff.delivery.status === "deferred",
+        handoff.delivery.status === "pending",
     );
     if (pending.length === 0 || (input.deferInline && input.inject === undefined))
       return { context: "", delivered: Effect.void, unsent: Effect.void };
@@ -70,28 +70,9 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
       omittedItems: pending.reduce((sum, handoff) => sum + (handoff.history?.omittedItems ?? 0), 0),
       budget,
     });
-    const selectedCost = historyCost(selected.messages, selected.context);
-    if (selectedCost > budget) {
-      // Failing here wedges every later turn while the handoff stays ready.
-      // Keep it ready instead, like /compact, and let the user message through.
-      // The deferred marker lets later turns retry it once space recovers.
-      yield* Effect.logDebug("Deferring context handoff delivery until context is available", {
-        handoffCount: pending.length,
-        budget,
-        selectedCost,
-      });
-      if (nativeThreadId !== undefined) {
-        yield* Effect.forEach(
-          pending,
-          (handoff) =>
-            input.persist({
-              ...handoff,
-              delivery: { nativeThreadId, status: "deferred", itemIds: [] },
-            }),
-          { discard: true },
-        );
-      }
-      return { context: "", delivered: Effect.void, unsent: Effect.void };
+    if (historyCost(selected.messages, selected.context) > budget) {
+      if (input.deferInline) return { context: "", delivered: Effect.void, unsent: Effect.void };
+      return yield* new ContextHandoffBudgetError();
     }
     const omittedItemIds = new Set(selected.omittedItemIds);
     const persist = (status: "pending" | "injected" | "inline") =>

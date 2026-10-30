@@ -18,6 +18,7 @@ export interface McpCredentialRequest {
   /** False omits the preview capability wherever the token is honored. Defaults to full access. */
   readonly browserToolsAvailable?: boolean;
   readonly capabilities?: ReadonlySet<McpInvocationContext.McpCapability>;
+  readonly subagent?: boolean;
 }
 
 export interface McpIssuedCredential {
@@ -56,13 +57,9 @@ export interface McpSessionRegistryOptions {
 }
 
 /**
- * `/mcp` is outside environment auth, so idle tokens stop authenticating.
- * Keep expired records until explicit revocation: a trusted provider turn can
- * refresh the token its subprocess still holds; MCP requests cannot.
- *
- * Every provider turn, and an hourly tick while a turn's event stream is open,
- * refreshes liveness, so a session still working or waiting on the user never
- * expires between tool calls.
+ * `/mcp` is outside environment auth, so idle tokens stop authenticating. Expired records stay
+ * until revoked so a trusted provider turn can refresh the token its subprocess holds. Each turn,
+ * and an hourly tick while its event stream is open, refreshes liveness between tool calls.
  */
 const DEFAULT_LIVENESS_WINDOW_MS = 24 * 60 * 60 * 1_000;
 
@@ -110,6 +107,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           threadId: ThreadId.make(request.threadId),
           providerSessionId,
           providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
+          subagent: request.subagent === true,
         },
         client: undefined,
         capabilities: new Set<McpInvocationContext.McpCapability>([
@@ -220,12 +218,6 @@ export const layer = Layer.effect(McpSessionRegistry, make);
  */
 export const touchActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.touch(threadId) : Effect.void;
-
-const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
-  activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeThread(threadId) : Effect.void;
-
-const revokeAllActiveMcpCredentials = (): Effect.Effect<void> =>
-  activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeAll : Effect.void;
 
 export const __testing = {
   make: makeWithOptions,

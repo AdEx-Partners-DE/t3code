@@ -7,9 +7,9 @@ export type CockpitOverview = Pick<
 >;
 
 /** A queue whose oldest message waited this long is called out. */
-export const STALE_QUEUE_MS = 60 * 60_000;
+const STALE_QUEUE_MS = 60 * 60_000;
 /** A run under way with no event for this long is called out. */
-export const QUIET_RUN_MS = 5 * 60_000;
+const QUIET_RUN_MS = 5 * 60_000;
 /**
  * Context a thread may carry before the cockpit suggests compacting it. Every
  * request sends the whole context again, so long threads spend the allowance

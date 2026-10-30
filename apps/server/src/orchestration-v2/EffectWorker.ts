@@ -96,7 +96,7 @@ export const layerExecutor: Layer.Layer<
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
     return OrchestrationEffectExecutorV2.of({
-      execute: (effect, options) => {
+      execute: Effect.fn("OrchestrationEffectExecutorV2.execute")(function (effect, options) {
         const willRetry = options?.willRetry ?? false;
         switch (effect.request.type) {
           case "provider-runtime.continue": {
@@ -178,14 +178,14 @@ export const layerExecutor: Layer.Layer<
                         cause,
                       }),
                 ),
-                Effect.catch((cause) =>
-                  request.subagent === undefined &&
-                  isNonRetryableProviderTurnControlFailure(
-                    request.type,
-                    Cause.pretty(Cause.fail(cause)),
-                  )
-                    ? Effect.void
-                    : Effect.fail(cause),
+                Effect.catchIf(
+                  (cause) =>
+                    request.subagent === undefined &&
+                    isNonRetryableProviderTurnControlFailure(
+                      request.type,
+                      Cause.pretty(Cause.fail(cause)),
+                    ),
+                  () => Effect.void,
                 ),
                 Effect.andThen((outcome) =>
                   request.subagent !== undefined && outcome === undefined
@@ -558,10 +558,33 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
         }
-      },
+      }),
     });
   }),
 );
+
+// A running effect blocks later work on its thread and its lease is never reclaimed in-process,
+// so a stop that hangs must give up and fall through to the normal retry/fail path.
+const DELEGATED_TASKS_STOP_TIMEOUT = Duration.seconds(30);
+
+const boundExecution =
+  (effect: EffectOutbox.OrchestrationEffectV2) =>
+  (execution: Effect.Effect<void, OrchestrationEffectExecutionError>) =>
+    effect.request.type === "delegated-tasks.stop"
+      ? execution.pipe(
+          Effect.timeoutOrElse({
+            duration: DELEGATED_TASKS_STOP_TIMEOUT,
+            orElse: () =>
+              Effect.fail(
+                new OrchestrationEffectExecutionError({
+                  effectId: effect.id,
+                  effectType: effect.request.type,
+                  cause: `Timed out after ${Duration.format(DELEGATED_TASKS_STOP_TIMEOUT)}.`,
+                }),
+              ),
+          }),
+        )
+      : execution;
 
 export class OrchestrationEffectWorkerError extends Schema.TaggedError<OrchestrationEffectWorkerError>()(
   "OrchestrationEffectWorkerError",
@@ -592,7 +615,6 @@ export class OrchestrationEffectWorkerV2 extends Context.Service<
 
 export interface OrchestrationEffectWorkerOptions {
   readonly workerId?: string;
-  readonly leaseDurationMs?: number;
   readonly maxAttempts?: number;
 }
 
@@ -610,7 +632,6 @@ export const layerWithOptions = (
       const admission = yield* WorkAdmission.WorkAdmission;
       const executor = yield* OrchestrationEffectExecutorV2;
       const workerId = options.workerId ?? `orchestration-v2:${process.pid}`;
-      const leaseDurationMs = Math.max(1, options.leaseDurationMs ?? 30_000);
       const maxAttempts = Math.max(1, options.maxAttempts ?? 5);
       const wasCancelled = (effectId: string) =>
         outbox.get(effectId).pipe(
@@ -706,12 +727,7 @@ export const layerWithOptions = (
       const runOnce = Effect.fnUntraced(
         function* (excludeRestartContinuations = false, cleanupOnly = false) {
           const claimExit = yield* Effect.exit(
-            outbox.claimNext({
-              workerId,
-              leaseDurationMs,
-              excludeRestartContinuations,
-              cleanupOnly,
-            }),
+            outbox.claimNext({ workerId, excludeRestartContinuations, cleanupOnly }),
           );
           yield* increment(orchestrationEffectClaimsTotal, {
             result: Exit.isFailure(claimExit)
@@ -754,7 +770,7 @@ export const layerWithOptions = (
 
           const execution = executor
             .execute(effect, { willRetry: effect.attemptCount < maxAttempts })
-            .pipe(Effect.as("executed" as const));
+            .pipe(boundExecution(effect), Effect.as("executed" as const));
           const exit = yield* Effect.exit(Effect.raceFirst(execution, cancellation)).pipe(
             Effect.ensuring(outbox.clearCancellation(effect.id)),
           );
@@ -824,15 +840,12 @@ export const layerWithOptions = (
       // Claiming and executing a start share one permit. After closure only
       // cleanup may claim new rows; existing executions remain counted to settle.
       const admittedRunOnce = (excludeRestartContinuations = false) =>
-        admission
-          .whenOpen(runOnce(excludeRestartContinuations))
-          .pipe(
-            Effect.flatMap((result) =>
-              result === undefined
-                ? admission.track(runOnce(excludeRestartContinuations, true))
-                : Effect.succeed(result),
-            ),
-          );
+        admission.whenOpen(runOnce(excludeRestartContinuations)).pipe(
+          Effect.filterOrElse(
+            (result) => result !== undefined,
+            () => admission.track(runOnce(excludeRestartContinuations, true)),
+          ),
+        );
 
       return OrchestrationEffectWorkerV2.of({
         awaitWork: outbox.awaitAvailable,
@@ -936,7 +949,3 @@ export const runDaemonWithOptions = (options: OrchestrationEffectDaemonOptions =
   );
 
 export const runDaemon = runDaemonWithOptions();
-
-const layerDaemon: Layer.Layer<never, never, OrchestrationEffectWorkerV2> = Layer.effectDiscard(
-  runDaemon.pipe(Effect.forkScoped),
-);

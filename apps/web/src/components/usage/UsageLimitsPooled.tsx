@@ -255,6 +255,7 @@ function ActiveSegmentPopover({
   // The trigger is gone, so the popup has nothing to anchor to: an exit transition would
   // slide it to the viewport origin. Unmount it outright, which also clears Base UI's
   // active-trigger bookkeeping so the segment can open again when it comes back.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the popover handle and unmounts the Base UI popup before paint when its trigger is gone
   useLayoutEffect(() => {
     if (available) return;
     handle.close();
@@ -406,7 +407,12 @@ function SegmentTriggers({
               {accountLabel(account)}
             </span>
           ) : null}
-          <span className="shrink-0 font-semibold text-foreground tabular-nums">{remaining}%</span>
+          {/* A single-account bar repeats the headline percentage. */}
+          {showAccountName ? (
+            <span className="shrink-0 font-semibold text-foreground tabular-nums">
+              {remaining}%
+            </span>
+          ) : null}
           {/* Countdown and badge get their own plate: fill and hatching run under them otherwise.
               An unstarted window has no reset, so the plate is skipped rather than drawn empty. */}
           {resetsIn || credits ? (

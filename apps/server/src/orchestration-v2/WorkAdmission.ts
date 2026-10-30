@@ -114,6 +114,20 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const whenOpen = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.suspend((): Effect.Effect<A | undefined, E, R> => {
+        if (lease !== undefined) return Effect.undefined;
+        const permit = Symbol();
+        admitted.add(permit);
+        begin();
+        return restore(effect).pipe(
+          Effect.provideService(CurrentAdmission, permit),
+          Effect.ensuring(Effect.sync(() => admitted.delete(permit)).pipe(Effect.andThen(finish))),
+        );
+      }),
+    );
+
   const acquire = Effect.fn("WorkAdmission.acquire")(function* <E, R>(
     id: string,
     checkIdle: Effect.Effect<void | "idle" | "s97-recovery", E, R>,
@@ -141,8 +155,8 @@ const make = Effect.gen(function* () {
           ).pipe(Effect.as(true));
         });
         if (!acquired) return yield* status;
-        yield* Effect.sleep("120 seconds").pipe(
-          Effect.raceFirst(Deferred.await(current.released)),
+        yield* Deferred.await(current.released).pipe(
+          Effect.timeoutOrElse({ duration: "120 seconds", orElse: () => Effect.void }),
           Effect.andThen(release(current)),
           Effect.forkIn(scope),
         );
@@ -179,21 +193,7 @@ const make = Effect.gen(function* () {
   return WorkAdmission.of({
     run,
     track,
-    whenOpen: (effect) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.suspend(() => {
-          if (lease !== undefined) return Effect.succeed(undefined);
-          const permit = Symbol();
-          admitted.add(permit);
-          begin();
-          return restore(effect).pipe(
-            Effect.provideService(CurrentAdmission, permit),
-            Effect.ensuring(
-              Effect.sync(() => admitted.delete(permit)).pipe(Effect.andThen(finish)),
-            ),
-          );
-        }),
-      ),
+    whenOpen,
     reopened: Stream.fromPubSub(reopened),
     awaitOpen: Effect.suspend(() =>
       lease === undefined ? Effect.void : Deferred.await(lease.released),

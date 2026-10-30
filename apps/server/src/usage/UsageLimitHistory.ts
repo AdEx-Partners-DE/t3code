@@ -1,13 +1,7 @@
 /**
- * Keeps the history of every account's quota windows: how the allowance was
- * used over time, and what was left each time a window reset.
- *
- * It listens to the provider registry, so it records whatever the usage
- * probes already read and adds no probing of its own. The history is an
- * append-only file of readings in the state directory, one JSON object per
- * line. Resets are worked out from the readings at startup, so a better rule
- * for telling a reset from noise also corrects the past.
- *
+ * Append-only JSONL history of every account's quota-window readings, fed by the provider
+ * registry with no probing of its own. Resets are derived from the readings at startup, so a
+ * better rule for telling a reset from noise also corrects the past.
  * @module UsageLimitHistory
  */
 import {
@@ -36,7 +30,7 @@ import {
   type UsageLimitReadingState,
 } from "./usageLimitReadings.ts";
 
-export const USAGE_LIMIT_HISTORY_FILE_NAME = "usage-limit-history.jsonl";
+const USAGE_LIMIT_HISTORY_FILE_NAME = "usage-limit-history.jsonl";
 
 /** Long enough to compare a few monthly windows; older lines are dropped at startup. */
 const RETENTION_MS = 120 * 24 * 60 * 60_000;
@@ -80,7 +74,7 @@ function serialize(points: ReadonlyArray<UsageLimitHistoryPoint>): string {
   return points.map((point) => `${encodeLine({ point })}\n`).join("");
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
@@ -123,7 +117,7 @@ export const make = Effect.gen(function* () {
   yield* registry.getProviders.pipe(Effect.flatMap(record));
 
   return UsageLimitHistory.of({
-    read: (input) =>
+    read: Effect.fn("UsageLimitHistory.read")((input) =>
       Effect.sync(() => {
         const sinceMs = Date.parse(input.since);
         return {
@@ -131,13 +125,8 @@ export const make = Effect.gen(function* () {
           resets: resets.filter((reset) => Date.parse(reset.at) >= sinceMs),
         };
       }),
+    ),
   });
 });
 
 export const layer = Layer.effect(UsageLimitHistory, make);
-
-/** Empty history, for suites that only need the RPC surface to resolve. */
-export const layerTest = Layer.succeed(
-  UsageLimitHistory,
-  UsageLimitHistory.of({ read: () => Effect.succeed({ points: [], resets: [] }) }),
-);

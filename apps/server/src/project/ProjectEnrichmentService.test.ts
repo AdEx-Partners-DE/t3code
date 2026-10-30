@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 
 import * as ProjectEnrichment from "./ProjectEnrichmentService.ts";
@@ -27,12 +28,16 @@ const waitForAvailable = Effect.fn("ProjectEnrichmentServiceTest.waitForAvailabl
   workspaceRoot: string,
   predicate: (value: ProjectEnrichment.ProjectEnrichment) => boolean,
 ) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const available = yield* service.peek(workspaceRoot);
-    if (predicate(available)) return available;
-    yield* Effect.yieldNow;
-  }
-  return yield* Effect.die(`Project metadata for ${workspaceRoot} was not resolved in time.`);
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const changes = yield* service.subscribeChanges;
+      for (;;) {
+        const available = yield* service.peek(workspaceRoot);
+        if (predicate(available)) return available;
+        yield* PubSub.take(changes);
+      }
+    }),
+  );
 });
 
 const layer = (
@@ -258,6 +263,7 @@ it.effect("deduplicates requests, bounds pending work, and reloads invalidated r
 it.effect("rescans a workspace root that no longer exists only after 15 minutes", () =>
   Effect.gen(function* () {
     const faviconScans = yield* Ref.make(0);
+    const scanned = yield* Queue.unbounded<void>();
     const layerMetadata = Layer.merge(
       Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
         resolve: (workspaceRoot) => Effect.succeed(identity(workspaceRoot)),
@@ -265,6 +271,7 @@ it.effect("rescans a workspace root that no longer exists only after 15 minutes"
       Layer.succeed(ProjectFaviconResolver.ProjectFaviconResolver, {
         resolvePath: (workspaceRoot) =>
           Ref.update(faviconScans, (count) => count + 1).pipe(
+            Effect.andThen(Queue.offer(scanned, undefined)),
             Effect.andThen(
               Effect.fail(
                 new ProjectFaviconResolver.ProjectFaviconResolutionError({
@@ -281,28 +288,22 @@ it.effect("rescans a workspace root that no longer exists only after 15 minutes"
         invalidate: () => Effect.void,
       }),
     );
-    const scansReach = Effect.fn("scansReach")(function* (count: number) {
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(faviconScans)) >= count) return;
-        yield* Effect.yieldNow;
-      }
-    });
-
     yield* Effect.gen(function* () {
       const service = yield* ProjectEnrichment.ProjectEnrichmentService;
       yield* service.getAvailable("/gone");
-      yield* scansReach(1);
+      yield* Queue.take(scanned);
 
+      // A request decides synchronously from the cache whether to scan, so
+      // nothing is queued for a root whose miss is still fresh.
       for (let minute = 1; minute < 15; minute += 1) {
         yield* TestClock.adjust("1 minute");
         yield* service.getAvailable("/gone");
-        yield* scansReach(2);
       }
       assert.equal(yield* Ref.get(faviconScans), 1);
 
       yield* TestClock.adjust("1 minute");
       yield* service.getAvailable("/gone");
-      yield* scansReach(2);
+      yield* Queue.take(scanned);
       assert.equal(yield* Ref.get(faviconScans), 2);
     }).pipe(Effect.provide(layer(layerMetadata)));
   }),

@@ -1,12 +1,7 @@
 /**
- * A small, lasting record of decisions the server takes on its own: whether it
- * continued a thread after a restart, retried a failed turn, moved a turn to
- * another account, or held one back for the queue pause.
- *
- * The trace log rolls over within minutes on a busy server, so "why did this
- * thread not go on last night" has no answer there. This file holds one JSON
- * object per line in the state directory and keeps a few weeks.
- *
+ * Lasting JSONL record, kept a few weeks in the state directory, of decisions the server takes
+ * on its own (continue after restart, retry, move account, hold for queue pause). The trace log
+ * rolls over within minutes, too fast to explain what happened overnight.
  * @module decisionLog
  */
 import * as Clock from "effect/Clock";
@@ -22,7 +17,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "./config.ts";
 
-export const DECISION_LOG_FILE_NAME = "decision-log.jsonl";
+const DECISION_LOG_FILE_NAME = "decision-log.jsonl";
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 const encodeLine = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -75,16 +70,13 @@ export const layer = Layer.effect(
       yield* fileSystem.writeFileString(filePath, kept).pipe(Effect.ignore);
     }
     return DecisionLog.of({
-      record: (decision) =>
-        lock.withPermits(1)(
-          Effect.gen(function* () {
-            const at = DateTime.formatIso(yield* DateTime.now);
-            // A record is a convenience; a full disk must not fail the decision itself.
-            yield* fileSystem
-              .writeFileString(filePath, `${encodeLine({ at, ...decision })}\n`, { flag: "a" })
-              .pipe(Effect.ignore);
-          }),
-        ),
+      record: Effect.fn("DecisionLog.record")(function* (decision) {
+        const at = DateTime.formatIso(yield* DateTime.now);
+        // A record is a convenience; a full disk must not fail the decision itself.
+        yield* fileSystem
+          .writeFileString(filePath, `${encodeLine({ at, ...decision })}\n`, { flag: "a" })
+          .pipe(Effect.ignore);
+      }, lock.withPermits(1)),
     });
   }),
 );

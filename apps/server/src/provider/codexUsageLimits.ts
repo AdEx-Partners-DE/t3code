@@ -158,15 +158,29 @@ export function codexRateLimitsToLimits(input: {
 
 export function codexRateLimitsToUpdate(
   snapshot: CodexRateLimitSnapshot,
+  previous?: CodexRateLimitSnapshot,
 ): ProviderUsageLimitsUpdate | undefined {
   if (snapshot.limitId && snapshot.limitId !== "codex") return undefined;
-  const windows = codexRateLimitsToWindows(snapshot);
-  return windows.length > 0 || snapshot.credits !== undefined
-    ? {
-        windows,
-        ...(snapshot.credits !== undefined ? { credits: codexCredits(snapshot.credits) } : {}),
-      }
-    : undefined;
+  const previousWindows = previous ? codexRateLimitsToWindows(previous) : [];
+  // Token ticks repeat session-cached limits that may predate an account probe or reset.
+  const windows = codexRateLimitsToWindows(snapshot).filter((window) => {
+    const existing = previousWindows.find((candidate) => candidate.id === window.id);
+    return (
+      !existing ||
+      existing.kind !== window.kind ||
+      existing.usedPercent !== window.usedPercent ||
+      existing.resetsAt !== window.resetsAt ||
+      existing.windowDurationMins !== window.windowDurationMins
+    );
+  });
+  const credits =
+    snapshot.credits === undefined ||
+    (previous?.credits !== undefined &&
+      JSON.stringify(codexCredits(previous.credits)) ===
+        JSON.stringify(codexCredits(snapshot.credits)))
+      ? undefined
+      : { credits: codexCredits(snapshot.credits) };
+  return windows.length > 0 || credits !== undefined ? { windows, ...credits } : undefined;
 }
 
 export function codexRateLimitsFailureMessage(error: CodexErrors.CodexAppServerError): string {
@@ -204,53 +218,10 @@ export function mergeCodexRateLimits(
   };
 }
 
-function formatCodexUsageLimitWait(waitMs: number): string {
-  const totalMinutes = Math.ceil(waitMs / 60_000);
-  const days = Math.floor(totalMinutes / (24 * 60));
-  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
-  const minutes = totalMinutes % 60;
-  if (days > 0) return hours === 0 ? `${days}d` : `${days}d ${hours}h`;
-  if (hours === 0) return `${totalMinutes}m`;
-  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
-}
-
-function codexUsageLimitNextStep(rateLimitReachedType: string | null | undefined): string {
-  switch (rateLimitReachedType) {
-    case "workspace_owner_credits_depleted":
-    case "workspace_member_credits_depleted":
-      return " The workspace has no credits to continue sooner: ask your workspace owner to add credits, or send the message again once the limit resets.";
-    case "workspace_owner_usage_limit_reached":
-    case "workspace_member_usage_limit_reached":
-      return " The workspace spend limit is reached: ask your workspace owner to raise it, or send the message again once the limit resets.";
-    default:
-      return " Send the message again once the limit resets.";
-  }
-}
-
-export function codexUsageLimitMessage(
-  snapshot: CodexRateLimitSnapshot | undefined,
-  atIso: string,
-): string {
-  const atMs = Date.parse(atIso);
-  const windows = snapshot && Number.isFinite(atMs) ? codexRateLimitsToWindows(snapshot) : [];
-  let reset = "";
-  let latestResetMs = Number.NEGATIVE_INFINITY;
-  for (const window of windows) {
-    if (window.usedPercent < 100 || !window.resetsAt) continue;
-    const resetMs = Date.parse(window.resetsAt);
-    if (!Number.isFinite(resetMs) || resetMs <= atMs || resetMs <= latestResetMs) continue;
-    latestResetMs = resetMs;
-    reset = ` The ${window.kind} limit resets in ${formatCodexUsageLimitWait(resetMs - atMs)}.`;
-  }
-  return `Codex usage limit reached.${reset}${codexUsageLimitNextStep(snapshot?.rateLimitReachedType)}`;
-}
-
 /**
- * The reset a usage-limit stop at `atMs` waits for. All exhausted windows must
- * reset before a continuation can run. Codex reports whole percentages and can
- * refuse a turn while its last update still reads 99%, so a window at 99%
- * counts as exhausted when none reads 100%. A window whose reset has already
- * passed has renewed since it was observed, so its percentage no longer applies.
+ * The reset a usage-limit stop at `atMs` waits for; every exhausted window must reset first.
+ * Codex reports whole percentages and can refuse at 99%, so 99% counts as exhausted when none
+ * reads 100%. A window whose reset already passed has renewed; its percentage no longer applies.
  */
 function usageLimitStopResetAt(
   allWindows: ReadonlyArray<ServerProviderUsageWindow>,

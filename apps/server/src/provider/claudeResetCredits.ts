@@ -294,19 +294,13 @@ export function resetCreditsReadDue(
 }
 
 /**
- * Asks for the banked resets at most once per interval and keeps the last
- * answer in between. Every provider check called the endpoint, about once a
- * minute per account, and it answered 429 each time; a refused request then
- * also emptied the display. A failed `read` (an error) keeps the last answer
- * and doubles the wait; a successful one replaces it, also when it says the
- * account has no resets. Reads run one at a time. `forget` makes the next call
- * ask again, for the moment a reset has just been redeemed; a read still in
- * flight then does not store its older answer.
+ * Asks for banked resets at most once per interval (per-check calls get 429) and keeps the last
+ * answer between reads: a failed read keeps it and doubles the wait, a success replaces it even
+ * with "no resets". Reads run one at a time. `forget` (after a redeem) makes the next call ask
+ * again, and a read still in flight then does not store its older answer.
  */
-export const makeThrottledResetCreditsReader = <A, E, R>(
-  read: (version: string) => Effect.Effect<A | undefined, E, R>,
-) =>
-  Effect.gen(function* () {
+export const makeThrottledResetCreditsReader = Effect.fn("makeThrottledResetCreditsReader")(
+  function* <A, E, R>(read: (version: string) => Effect.Effect<A | undefined, E, R>) {
     const state = yield* Ref.make<{
       readonly attemptedAt: number | null;
       readonly value: A | undefined;
@@ -320,25 +314,22 @@ export const makeThrottledResetCreditsReader = <A, E, R>(
     });
     const oneAtATime = yield* Semaphore.make(1);
     return {
-      read: (version: string) =>
-        oneAtATime.withPermits(1)(
-          Effect.gen(function* () {
-            const known = yield* Ref.get(state);
-            const now = yield* Clock.currentTimeMillis;
-            if (!resetCreditsReadDue(known.attemptedAt, now, known.refusedInARow)) {
-              return known.value;
-            }
-            const outcome = yield* Effect.exit(read(version));
-            return yield* Ref.modify(state, (current) => {
-              // Forgotten while the request ran: its answer may predate a redeem.
-              if (current.generation !== known.generation) return [current.value, current];
-              const next = Exit.isSuccess(outcome)
-                ? { ...current, attemptedAt: now, value: outcome.value, refusedInARow: 0 }
-                : { ...current, attemptedAt: now, refusedInARow: current.refusedInARow + 1 };
-              return [next.value, next];
-            });
-          }),
-        ),
+      read: Effect.fn("ClaudeResetCredits.read")(function* (version: string) {
+        const known = yield* Ref.get(state);
+        const now = yield* Clock.currentTimeMillis;
+        if (!resetCreditsReadDue(known.attemptedAt, now, known.refusedInARow)) {
+          return known.value;
+        }
+        const outcome = yield* Effect.exit(read(version));
+        return yield* Ref.modify(state, (current) => {
+          // Forgotten while the request ran: its answer may predate a redeem.
+          if (current.generation !== known.generation) return [current.value, current];
+          const next = Exit.isSuccess(outcome)
+            ? { ...current, attemptedAt: now, value: outcome.value, refusedInARow: 0 }
+            : { ...current, attemptedAt: now, refusedInARow: current.refusedInARow + 1 };
+          return [next.value, next];
+        });
+      }, oneAtATime.withPermits(1)),
       forget: Ref.update(state, (current) => ({
         attemptedAt: null,
         value: undefined,
@@ -346,4 +337,5 @@ export const makeThrottledResetCreditsReader = <A, E, R>(
         generation: current.generation + 1,
       })),
     };
-  });
+  },
+);

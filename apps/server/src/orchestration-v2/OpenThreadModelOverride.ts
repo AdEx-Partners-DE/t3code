@@ -1,15 +1,7 @@
 /**
- * Sets one model, one thinking level, or both on every open thread at once,
- * and puts the previous selections back on request.
- *
- * A thread's selection is what its next turn runs on, so the change takes
- * effect with the next message in each thread; a run under way is not touched.
- * The selections that were replaced are kept in a file in the state directory,
- * so the way back survives a restart.
- *
- * A call can cover all open threads, only the threads scheduled tasks post to,
- * or only the others, so tasks and ad-hoc work can run on different models.
- *
+ * Sets a model, a thinking level, or both on open threads (all, task threads, or the rest),
+ * effective from each thread's next turn; a run under way is not touched. The replaced
+ * selections persist in the state directory, so restoring them survives a restart.
  * @module OpenThreadModelOverride
  */
 import {
@@ -240,7 +232,7 @@ export const make = Effect.gen(function* () {
         })
         .pipe(
           Effect.as(true),
-          Effect.catch(() => Effect.succeed(false)),
+          Effect.orElseSucceed(() => false),
         );
       if (set) restored.push({ threadId: thread.id, modelSelection: entry.previous });
     }

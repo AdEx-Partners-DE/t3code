@@ -1,12 +1,7 @@
 /**
- * Keeps "set this model on all open threads" in force after the click.
- *
- * The override itself is one pass over the threads that are open at that
- * moment. A thread that opens again later, or one an automation wakes up, was
- * not there and would go on with its old model. So the override's own terms
- * are kept in a file until the models are put back, and a thread that is about
- * to get work without the user is brought in line first.
- *
+ * Keeps an "all open threads" model override in force after its one pass: the terms persist in
+ * the state directory until restored, and a thread about to get work without the user (reopened
+ * or woken by an automation) is aligned first.
  * @module StandingModelOverride
  */
 import {
@@ -36,7 +31,7 @@ import type * as ThreadManagement from "./ThreadManagementService.ts";
 /** Thread and model of every kept choice already written to the decision log since the server started. */
 const keptChoicesRecorded = new Set<string>();
 
-export const STANDING_OVERRIDE_FILE_NAME = "open-thread-model-override.active.json";
+const STANDING_OVERRIDE_FILE_NAME = "open-thread-model-override.active.json";
 
 const StoredOverride = Schema.Struct({
   model: Schema.optional(
@@ -62,7 +57,7 @@ export interface StandingOverrides {
   readonly adhoc: ModelOverride | null;
 }
 
-export const NO_STANDING_OVERRIDES: StandingOverrides = { tasks: null, adhoc: null };
+const NO_STANDING_OVERRIDES: StandingOverrides = { tasks: null, adhoc: null };
 
 /** Whether a call for `scope` covers a thread of the part `thread`. */
 export function scopeCovers(scope: ModelOverrideScope, thread: ThreadScope): boolean {
@@ -70,13 +65,9 @@ export function scopeCovers(scope: ModelOverrideScope, thread: ThreadScope): boo
 }
 
 /**
- * Whether a message that starts without the user may move its thread to the
- * standing model first. A provider's own wake (`creationSource: "provider"`)
- * reports work still running in the thread's live session, and the adapter
- * attaches that session's buffered output to it: moving the thread to another
- * account closes the session, which kills that work and loses the output. Such
- * a wake keeps the thread as it is; the next message from a task, an agent or
- * the server aligns it.
+ * Whether an automatic message may move its thread to the standing model first. A provider's own
+ * wake (`creationSource: "provider"`) carries the live session's buffered output, and switching
+ * accounts closes that session and kills its work, so such a wake keeps the thread as it is.
  */
 export function alignsBeforeMessage(message: {
   readonly modelSelection?: unknown;
@@ -140,40 +131,45 @@ const readKept = Effect.gen(function* () {
   );
 });
 
-const writeKept = (standing: StandingOverrides) =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    if (standing.tasks === null && standing.adhoc === null) {
-      yield* fileSystem.remove(yield* filePath);
-      return;
-    }
-    const tasks = storedForm(standing.tasks);
-    const adhoc = storedForm(standing.adhoc);
-    yield* fileSystem.writeFileString(
-      yield* filePath,
-      encodeStanding({
-        ...(tasks === undefined ? {} : { tasks }),
-        ...(adhoc === undefined ? {} : { adhoc }),
-      } as typeof StoredStanding.Type),
-    );
-  });
+const writeKept = Effect.fn("StandingModelOverride.writeKept")(function* (
+  standing: StandingOverrides,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  if (standing.tasks === null && standing.adhoc === null) {
+    yield* fileSystem.remove(yield* filePath);
+    return;
+  }
+  const tasks = storedForm(standing.tasks);
+  const adhoc = storedForm(standing.adhoc);
+  yield* fileSystem.writeFileString(
+    yield* filePath,
+    encodeStanding({
+      ...(tasks === undefined ? {} : { tasks }),
+      ...(adhoc === undefined ? {} : { adhoc }),
+    } as typeof StoredStanding.Type),
+  );
+});
 
 /**
  * Remembers the override for the parts `scope` covers, so it also reaches
  * threads that were not open when it was set. The other part keeps its own.
  */
-export const rememberStandingOverride = (override: ModelOverride, scope: ModelOverrideScope) =>
-  Effect.gen(function* () {
+export const rememberStandingOverride = Effect.fn("StandingModelOverride.remember")(
+  function* (override: ModelOverride, scope: ModelOverrideScope) {
     const current = (yield* readKept) ?? NO_STANDING_OVERRIDES;
     yield* writeKept(withScopedOverride(current, scope, override));
-  }).pipe(Effect.ignore);
+  },
+  (effect) => Effect.ignore(effect),
+);
 
 /** "Put back" ends the rule for the parts `scope` covers. */
-export const forgetStandingOverride = (scope: ModelOverrideScope) =>
-  Effect.gen(function* () {
+export const forgetStandingOverride = Effect.fn("StandingModelOverride.forget")(
+  function* (scope: ModelOverrideScope) {
     const current = (yield* readKept) ?? NO_STANDING_OVERRIDES;
     yield* writeKept(withScopedOverride(current, scope, null));
-  }).pipe(Effect.ignore);
+  },
+  (effect) => Effect.ignore(effect),
+);
 
 /**
  * The override that a set of applied selections stands for: the model when
@@ -303,11 +299,9 @@ export function describeSelection(selection: ModelSelection): string {
 }
 
 /**
- * Moving a thread to another instance while its run is under way detaches that
- * run's provider session and fails the turn (Alpha, 2026-10-21; upstream
- * #22748). Such a thread keeps its instance until the run ends: a client lines
- * its composer up from the reported selection, and automatic work aligns it
- * before its next start.
+ * Moving a thread to another instance mid-run detaches the run's provider session and fails the
+ * turn, so it keeps its instance until the run ends: a client lines its composer up from the
+ * reported selection, and automatic work aligns it before its next start.
  */
 export function switchWaitsForRun(input: {
   readonly activeRunId: string | null;
@@ -333,23 +327,21 @@ export function standingAlignmentStep(input: {
 }
 
 /**
- * Brings one thread in line with the standing override of its part before it
- * gets work that does not come from the user. `messageScope` is the part the
- * incoming message speaks for: "tasks" for a scheduled task's message. A thread
- * the override already reached stays in the part it was counted in then, so a
- * task thread that gets another automatic message does not swap models. Never
- * fails: a thread that cannot be aligned simply runs on what it has.
+ * Aligns one thread with its scope's standing override before work not from the user.
+ * `messageScope` is the scope the message speaks for ("tasks" for a scheduled task); a thread
+ * already reached stays in the scope it was counted in, so it does not swap models. Never fails:
+ * a thread that cannot be aligned runs on what it has.
  */
-export const alignThreadWithStandingOverride = (
-  threads: Pick<
-    ThreadManagement.ThreadManagementServiceShape,
-    "getThreadShell" | "getThreadRecords" | "dispatch"
-  >,
-  threadId: Parameters<ThreadManagement.ThreadManagementServiceShape["getThreadShell"]>[0],
-  reason: string,
-  messageScope: ThreadScope,
-) =>
-  Effect.gen(function* () {
+export const alignThreadWithStandingOverride = Effect.fn("StandingModelOverride.alignThread")(
+  function* (
+    threads: Pick<
+      ThreadManagement.ThreadManagementServiceShape,
+      "getThreadShell" | "getThreadRecords" | "dispatch"
+    >,
+    threadId: Parameters<ThreadManagement.ThreadManagementServiceShape["getThreadShell"]>[0],
+    reason: string,
+    messageScope: ThreadScope,
+  ) {
     const standing = yield* readStandingOverride;
     if (standing.tasks === null && standing.adhoc === null) return;
     const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
@@ -465,4 +457,6 @@ export const alignThreadWithStandingOverride = (
         scope,
       },
     });
-  }).pipe(Effect.ignore);
+  },
+  (effect) => Effect.ignore(effect),
+);

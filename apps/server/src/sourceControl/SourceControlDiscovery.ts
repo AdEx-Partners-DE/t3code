@@ -76,22 +76,10 @@ export const make = Effect.gen(function* () {
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
 
   const probe = <Kind extends VcsDriverKind>(
-    input: DiscoveryProbe & { readonly kind: Kind },
+    input: VcsProbe & { readonly kind: Kind },
   ): Effect.Effect<DiscoveryProbeResult<Kind>> => {
     const executable = input.executable;
     const versionArgs = input.versionArgs;
-
-    if (!executable || !versionArgs) {
-      return Effect.succeed({
-        kind: input.kind,
-        label: input.label,
-        implemented: input.implemented,
-        status: "missing" as const,
-        version: Option.none<string>(),
-        installHint: input.installHint,
-        detail: Option.some(input.installHint),
-      } satisfies DiscoveryProbeResult<Kind>);
-    }
 
     return process
       .run({
@@ -141,14 +129,9 @@ export const make = Effect.gen(function* () {
     ),
     sourceControlProviders: sourceControlProviders.discover,
   });
-  // A scan spawns every CLI, and on Windows each missing one is a failed
-  // process start. Clients scan on every connect, so a reconnecting phone
-  // respawned five missing CLIs every few minutes. The scan takes seconds and
-  // runs detached: a client that leaves early stops waiting, but the scan
-  // finishes and is kept, since an interrupted one would not be. Installed CLIs
-  // rarely change and Settings → Source Control rescans on demand, so an hour:
-  // with ten minutes a phone reconnecting every few minutes still rescanned
-  // about every expiry (390 failed starts a day in the fork's server).
+  // A scan spawns every CLI (a failed process start per missing one on Windows) and clients scan
+  // on every connect, so it is cached for an hour; Settings → Source Control rescans on demand.
+  // It runs detached so a client leaving early does not interrupt it and the result is kept.
   const [cachedScan, invalidate] = yield* Effect.cachedInvalidateWithTTL(
     scan,
     Duration.minutes(60),

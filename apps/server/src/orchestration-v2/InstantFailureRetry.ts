@@ -26,7 +26,7 @@ import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as WorkAdmission from "./WorkAdmission.ts";
 
 /** A turn that ran longer than this did real work; its failure is not a start failure. */
-export const INSTANT_FAILURE_WINDOW_MS = 15_000;
+const INSTANT_FAILURE_WINDOW_MS = 15_000;
 
 const RETRY_MESSAGE_PREFIX = "message:instant-retry:";
 const isServerDrainError = Schema.is(ServerDrainError);
@@ -61,9 +61,7 @@ export function isTransientStartFailure(
  * same message on the same account fails again, but the account the thread
  * was on still has the conversation.
  */
-export function isHandoffBudgetFailure(
-  failure: Pick<OrchestrationV2ProviderFailure, "message">,
-): boolean {
+function isHandoffBudgetFailure(failure: Pick<OrchestrationV2ProviderFailure, "message">): boolean {
   return /Insufficient context allowance for the provider handoff/i.test(failure.message);
 }
 

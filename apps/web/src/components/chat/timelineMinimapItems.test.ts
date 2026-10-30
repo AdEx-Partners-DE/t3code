@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { MessageId } from "@t3tools/contracts";
 import type { MessagesTimelineRow } from "./MessagesTimeline.logic";
-import { deriveTimelineMinimapItems } from "./timelineMinimapItems";
+import { deriveTimelineMinimapItems, resolveTimelineMinimapPreview } from "./timelineMinimapItems";
 import type { ChatMessage } from "../../types";
 
 function rows(
@@ -49,5 +49,19 @@ describe("timeline minimap previews", () => {
       true,
       false,
     ]);
+  });
+});
+
+describe("resolveTimelineMinimapPreview", () => {
+  it("previews a thread autolink as prose, not its URL", () => {
+    const preview = resolveTimelineMinimapPreview({
+      id: "turn-1",
+      rowIndex: 0,
+      userText: null,
+      failed: false,
+      assistantText:
+        "Started <t3-thread://v2/env-1/thread-1> and [Fix CI](t3-thread://v2/env-1/t2).",
+    });
+    expect(preview?.assistantText).toBe("Started a thread and Fix CI.");
   });
 });

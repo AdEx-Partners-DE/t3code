@@ -26,6 +26,17 @@ if (
       process.stderr.write(`[service-launcher] ${error.message}\n`);
       process.exitCode = 1;
     });
+  } else if (command === "__document-text") {
+    const { extractDocumentText } = await import("./provider/documentTextWorker.ts");
+    try {
+      process.stdout.write(await extractDocumentText(process.argv[3]!, process.argv[4]!));
+    } catch (error) {
+      if (error instanceof Error && "code" in error && /^E[A-Z0-9]+$/.test(String(error.code))) {
+        throw error;
+      }
+      // Exit 2 identifies document rejections; OS and process failures remain retryable.
+      process.exitCode = 2;
+    }
   } else if (command === "__managed-chatgpt-token") {
     const { runManagedChatGptTokenCli } = await import("./cli/managedChatGptToken.ts");
     await runManagedChatGptTokenCli(process.argv.slice(3));

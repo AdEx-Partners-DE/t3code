@@ -15,9 +15,9 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const locks = yield* KeyedLock.make<ThreadId>();
     const admission = yield* WorkAdmission.WorkAdmission;
-    return ThreadCommandExecutor.of({
-      activeKeys: locks.activeKeys,
-      withLock: (key, effect) => admission.track(locks.withLock(key, effect)),
-    });
+    // Runs on every command; the locked work owns its span.
+    const withLock = <A, E, R>(key: ThreadId, effect: Effect.Effect<A, E, R>) =>
+      admission.track(locks.withLock(key, effect));
+    return ThreadCommandExecutor.of({ activeKeys: locks.activeKeys, withLock });
   }),
 ).pipe(Layer.provideMerge(WorkAdmission.layer));
