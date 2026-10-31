@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { EnvironmentId } from "@t3tools/contracts";
+import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
   collectLimitAccounts,
   collectExternalUsageLinks,
@@ -277,7 +278,7 @@ function PoolWindowCard({
               <View className="absolute inset-0 overflow-hidden rounded-md">
                 <AccountSegment
                   remaining={remainingPercent(window)}
-                  color={color}
+                  color={normalizeProviderAccentColor(account.accentColor) ?? color}
                   refillPercent={window.resetsAt ? member.refillPercent : 0}
                 />
               </View>

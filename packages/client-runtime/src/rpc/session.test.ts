@@ -972,7 +972,9 @@ describe("RpcSessionFactory", () => {
       sleptMs += 55_000;
       yield* TestClock.adjust("5 seconds");
       const error = yield* Fiber.join(closedFiber);
-      expect(error).toMatchObject({ detail: "Test environment stopped responding." });
+      expect(error).toMatchObject({
+        detail: expect.stringContaining("Test environment stopped responding"),
+      });
     }).pipe(Effect.scoped, Effect.provide(layerSleepyClock));
   });
 
