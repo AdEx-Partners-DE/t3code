@@ -275,29 +275,32 @@ const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: str
     }),
   );
 
-const layerTest = Layer.mergeAll(
-  RuntimeLayer.layer,
-  RuntimeLayer.layerEventSink,
-  ProjectStore.layer,
-  ProjectionStore.layer,
-  EffectOutbox.layer,
-  ThreadCommandExecutor.layer,
-).pipe(
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
-  Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
-  // "Continue threads after a server update" is on by default and then a
-  // restart no longer holds the queues. The lifecycle tests here cover the
-  // hold, so they run with it off; ProviderRuntimeRecoveryService.test.ts
-  // covers the setting on.
-  Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: false })),
-  Layer.provide(layerTestProviderInstanceRegistry),
-  Layer.provide(layerGitWorkflowTest),
-  Layer.provide(layerProjectServiceTest),
-  Layer.provide(layerPlatformTest),
-);
+const makeLayerTest = (continueThreadsAfterServerUpdate: boolean) =>
+  Layer.mergeAll(
+    RuntimeLayer.layer,
+    RuntimeLayer.layerEventSink,
+    ProjectStore.layer,
+    ProjectionStore.layer,
+    EffectOutbox.layer,
+    ThreadCommandExecutor.layer,
+  ).pipe(
+    Layer.provide(McpSessionRegistryTestkit.layer),
+    Layer.provide(McpProviderSessions.layer),
+    Layer.provide(SqlitePersistence.layerMemory),
+    Layer.provide(layerCheckpointStoreTest),
+    Layer.provide(layerServerConfig),
+    // "Continue threads after a server update" is on by default and then a
+    // restart no longer holds the queues. The lifecycle tests here cover the
+    // hold, so they run with it off; ProviderRuntimeRecoveryService.test.ts
+    // covers the setting on.
+    Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate })),
+    Layer.provide(layerTestProviderInstanceRegistry),
+    Layer.provide(layerGitWorkflowTest),
+    Layer.provide(layerProjectServiceTest),
+    Layer.provide(layerPlatformTest),
+  );
+
+const layerTest = makeLayerTest(false);
 
 const layerLegacyImportTest = RuntimeLayer.layer.pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
@@ -6544,165 +6547,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect.each([false, true])(
-    "restarts a continuation that failed before its prompt, unless stopped (%s)",
-    (stopped) =>
-      Effect.gen(function* () {
-        const orchestrator = yield* Orchestrator.OrchestratorV2;
-        const eventSink = yield* EventSink.EventSinkV2;
-        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-        const threadId = ThreadId.make(`runtime-layer-continuation-start-retry-${stopped}`);
-        const messageId = (key: string) => MessageId.make(`${threadId}:${key}`);
-        yield* orchestrator.dispatch({
-          type: "thread.create",
-          createdBy: "user",
-          creationSource: "web",
-          commandId: CommandId.make(`${threadId}:create`),
-          threadId,
-          projectId: ProjectId.make(`${threadId}:project`),
-          title: "Continuation start retry",
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: process.cwd(),
-        });
-        const runFor = (key: string) =>
-          Effect.map(orchestrator.getThreadProjection(threadId), ({ runs }) =>
-            runs.find((candidate) => candidate.userMessageId === messageId(key)),
-          );
-        const write = (
-          key: string,
-          payload: OrchestrationV2Run,
-          extra: Parameters<typeof eventSink.write>[0]["events"] = [],
-        ) =>
-          Effect.gen(function* () {
-            const now = yield* DateTime.now;
-            yield* eventSink.write({
-              events: [
-                ...extra,
-                {
-                  id: EventId.make(`${threadId}:${key}`),
-                  type: "run.updated",
-                  threadId,
-                  runId: payload.id,
-                  providerInstanceId: payload.providerInstanceId,
-                  occurredAt: now,
-                  payload: { ...payload, startedAt: now, completedAt: now },
-                },
-              ],
-            });
-          });
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          createdBy: "user",
-          creationSource: "web",
-          commandId: CommandId.make(`${threadId}:message:cut`),
-          threadId,
-          messageId: messageId("cut"),
-          text: "Work that the restart cut",
-          attachments: [],
-          modelSelection,
-          dispatchMode: { type: "start_immediately" },
-        });
-        const cut = (yield* runFor("cut"))!;
-        yield* write("cut:cancelled", { ...cut, status: "cancelled" });
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          createdBy: "agent",
-          creationSource: "server",
-          commandId: CommandId.make(`${threadId}:message:continuation`),
-          threadId,
-          messageId: messageId("continuation"),
-          text: "Continue where you left off.",
-          attachments: [],
-          modelSelection,
-          dispatchMode: { type: "start_immediately" },
-          restartContinuationOfRunId: cut.id,
-        });
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          createdBy: "user",
-          creationSource: "web",
-          commandId: CommandId.make(`${threadId}:message:queued`),
-          threadId,
-          messageId: messageId("queued"),
-          text: "Queued behind the continuation",
-          attachments: [],
-          modelSelection,
-          dispatchMode: { type: "queue_after_active" },
-        });
-        const continuation = (yield* runFor("continuation"))!;
-        assert.isNotNull(continuation.rootNodeId);
-        const queued = (yield* runFor("queued"))!;
-        // The failure holds the queue after the reactor scheduled any retry.
-        const held = yield* eventSink
-          .stream({ threadId, afterSequence: yield* orchestrator.getThreadEventSequence(threadId) })
-          .pipe(
-            Stream.filter(
-              (stored) =>
-                stored.event.type === "run.updated" &&
-                stored.event.payload.id === queued.id &&
-                stored.event.payload.queueHeld === true,
-            ),
-            Stream.runHead,
-            Effect.forkScoped,
-          );
-        yield* Effect.yieldNow;
-        const now = yield* DateTime.now;
-        yield* write("continuation:failed", { ...continuation, status: "failed" }, [
-          {
-            id: EventId.make(`${threadId}:continuation:error`),
-            type: "turn-item.updated",
-            threadId,
-            runId: continuation.id,
-            nodeId: continuation.rootNodeId,
-            providerInstanceId: continuation.providerInstanceId,
-            occurredAt: now,
-            payload: {
-              id: TurnItemId.make(`${threadId}:continuation:error`),
-              type: "error",
-              threadId,
-              runId: continuation.id,
-              nodeId: continuation.rootNodeId,
-              providerThreadId: continuation.providerThreadId,
-              providerTurnId: null,
-              nativeItemRef: null,
-              parentItemId: null,
-              ordinal: 2,
-              status: "failed",
-              title: "Provider failure",
-              startedAt: now,
-              completedAt: now,
-              updatedAt: now,
-              failure: {
-                class: "provider_error",
-                message: "Claude timed out while registering its MCP tools.",
-                code: null,
-                retryable: null,
-              },
-            },
-          },
-        ]);
-        yield* Fiber.join(held);
-        const retriesOf = Effect.map(orchestrator.getThreadProjection(threadId), ({ runs }) =>
-          runs.filter((run) => run.restartContinuationOfRunId === continuation.id),
-        );
-        yield* worker.drain();
-        assert.deepEqual(yield* retriesOf, [], "the retry waits out its backoff");
-        if (stopped) {
-          yield* orchestrator.dispatch({
-            type: "thread.stop",
-            commandId: CommandId.make(`${threadId}:stop`),
-            threadId,
-          });
-        }
-        yield* TestClock.adjust("61 seconds");
-        yield* worker.drain();
-        assert.lengthOf(yield* retriesOf, stopped ? 0 : 1);
-      }),
-  );
-
   it.effect.each(["startup", "shutdown"] as const)(
     "preserves and holds queued messages across %s until explicitly resumed",
     (trigger) =>
@@ -7095,6 +6939,167 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         .pipe(Effect.flip);
       assert.equal(cancelAgainError._tag, "OrchestratorDispatchError");
     }),
+  );
+});
+
+it.layer(makeLayerTest(true))("restart continuation retries", (it) => {
+  it.effect.each([false, true])(
+    "restarts a continuation that failed before its prompt, unless stopped (%s)",
+    (stopped) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const threadId = ThreadId.make(`runtime-layer-continuation-start-retry-${stopped}`);
+        const messageId = (key: string) => MessageId.make(`${threadId}:${key}`);
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:create`),
+          threadId,
+          projectId: ProjectId.make(`${threadId}:project`),
+          title: "Continuation start retry",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        const runFor = (key: string) =>
+          Effect.map(orchestrator.getThreadProjection(threadId), ({ runs }) =>
+            runs.find((candidate) => candidate.userMessageId === messageId(key)),
+          );
+        const write = (
+          key: string,
+          payload: OrchestrationV2Run,
+          extra: Parameters<typeof eventSink.write>[0]["events"] = [],
+        ) =>
+          Effect.gen(function* () {
+            const now = yield* DateTime.now;
+            yield* eventSink.write({
+              events: [
+                ...extra,
+                {
+                  id: EventId.make(`${threadId}:${key}`),
+                  type: "run.updated",
+                  threadId,
+                  runId: payload.id,
+                  providerInstanceId: payload.providerInstanceId,
+                  occurredAt: now,
+                  payload: { ...payload, startedAt: now, completedAt: now },
+                },
+              ],
+            });
+          });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:message:cut`),
+          threadId,
+          messageId: messageId("cut"),
+          text: "Work that the restart cut",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+        });
+        const cut = (yield* runFor("cut"))!;
+        yield* write("cut:cancelled", { ...cut, status: "cancelled" });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "agent",
+          creationSource: "server",
+          commandId: CommandId.make(`${threadId}:message:continuation`),
+          threadId,
+          messageId: messageId("continuation"),
+          text: "Continue where you left off.",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+          restartContinuationOfRunId: cut.id,
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:message:queued`),
+          threadId,
+          messageId: messageId("queued"),
+          text: "Queued behind the continuation",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "queue_after_active" },
+        });
+        const continuation = (yield* runFor("continuation"))!;
+        assert.isNotNull(continuation.rootNodeId);
+        const queued = (yield* runFor("queued"))!;
+        // The failure holds the queue after the reactor scheduled any retry.
+        const held = yield* eventSink
+          .stream({ threadId, afterSequence: yield* orchestrator.getThreadEventSequence(threadId) })
+          .pipe(
+            Stream.filter(
+              (stored) =>
+                stored.event.type === "run.updated" &&
+                stored.event.payload.id === queued.id &&
+                stored.event.payload.queueHeld === true,
+            ),
+            Stream.runHead,
+            Effect.forkScoped,
+          );
+        yield* Effect.yieldNow;
+        const now = yield* DateTime.now;
+        yield* write("continuation:failed", { ...continuation, status: "failed" }, [
+          {
+            id: EventId.make(`${threadId}:continuation:error`),
+            type: "turn-item.updated",
+            threadId,
+            runId: continuation.id,
+            nodeId: continuation.rootNodeId,
+            providerInstanceId: continuation.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make(`${threadId}:continuation:error`),
+              type: "error",
+              threadId,
+              runId: continuation.id,
+              nodeId: continuation.rootNodeId,
+              providerThreadId: continuation.providerThreadId,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 2,
+              status: "failed",
+              title: "Provider failure",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              failure: {
+                class: "provider_error",
+                message: "Claude timed out while registering its MCP tools.",
+                code: null,
+                retryable: null,
+              },
+            },
+          },
+        ]);
+        yield* Fiber.join(held);
+        const retriesOf = Effect.map(orchestrator.getThreadProjection(threadId), ({ runs }) =>
+          runs.filter((run) => run.restartContinuationOfRunId === continuation.id),
+        );
+        yield* worker.drain();
+        assert.deepEqual(yield* retriesOf, [], "the retry waits out its backoff");
+        if (stopped) {
+          yield* orchestrator.dispatch({
+            type: "thread.stop",
+            commandId: CommandId.make(`${threadId}:stop`),
+            threadId,
+          });
+        }
+        yield* TestClock.adjust("61 seconds");
+        yield* worker.drain();
+        assert.lengthOf(yield* retriesOf, stopped ? 0 : 1);
+      }),
   );
 });
 
