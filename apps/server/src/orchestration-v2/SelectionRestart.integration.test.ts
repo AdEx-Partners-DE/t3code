@@ -17,6 +17,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -47,7 +48,7 @@ const handoffSelection = {
 } satisfies ModelSelection;
 
 function makeCompletingHandoffAdapter(
-  startCount: Ref.Ref<number>,
+  started: Deferred.Deferred<void>,
 ): ProviderAdapter.ProviderAdapterV2["Service"] {
   return {
     instanceId: handoffProviderInstanceId,
@@ -103,7 +104,7 @@ function makeCompletingHandoffAdapter(
           resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
           startTurn: (input) =>
             Effect.gen(function* () {
-              yield* Ref.update(startCount, (count) => count + 1);
+              yield* Deferred.succeed(started, undefined);
               const occurredAt = yield* DateTime.now;
               const providerTurnId = ProviderTurnId.make(
                 `provider-turn:handoff:${input.attemptId}`,
@@ -841,6 +842,15 @@ it.live("Stop during a restart interrupts the turn the restart could not stop", 
           modelSelection: initialSelection,
           dispatchMode: { type: "restart_active", targetRunId: runId },
         });
+        const turnInterrupted = yield* orchestrator.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "provider-turn.updated" && event.payload.status === "interrupted",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.forkScoped({ startImmediately: true }),
+        );
         yield* orchestrator.dispatch({
           type: "run.interrupt",
           commandId: CommandId.make("command:selection-restart-stop:stop"),
@@ -848,6 +858,7 @@ it.live("Stop during a restart interrupts the turn the restart could not stop", 
           runId,
         });
         yield* worker.drain();
+        yield* Fiber.join(turnInterrupted);
         return {
           projection: yield* orchestrator.getThreadProjection(threadId),
           captured: yield* Ref.get(state),
@@ -1046,9 +1057,9 @@ it.live("a queued run moved off a pooled session opens the target under its own 
         closedSessionCount: 0,
         failedReplacementOpen: true,
       });
-      const targetStartCount = yield* Ref.make(0);
       const targetSessionIds: Array<ProviderSessionId> = [];
-      const target = makeCompletingHandoffAdapter(targetStartCount);
+      const targetStarted = yield* Deferred.make<void>();
+      const target = makeCompletingHandoffAdapter(targetStarted);
       const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
         makeRestartAdapter(state, pooledCapabilities),
         {
@@ -1122,17 +1133,13 @@ it.live("a queued run moved off a pooled session opens the target under its own 
           modelSelection: handoffSelection,
           includeQueuedRuns: true,
         });
-        const handoffRunning = yield* providerTurnRunning;
         yield* orchestrator.dispatch({
           type: "run.interrupt",
           commandId: CommandId.make("command:queued-pooled-handoff:interrupt"),
           threadId,
           runId: activeRunId,
         });
-        yield* Fiber.join(handoffRunning);
-        if ((yield* Ref.get(targetStartCount)) === 0) {
-          return yield* Effect.die("queued handoff run never started");
-        }
+        yield* Deferred.await(targetStarted);
       }).pipe(
         Effect.provide(
           ProviderReplayHarness.layerWithRegistry(
