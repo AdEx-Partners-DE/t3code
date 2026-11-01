@@ -20,9 +20,12 @@ import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
   scheduledTaskDefaultModel,
   defaultScheduledTaskProjectId,
+  defaultSortDescending,
   matchesScheduledTaskScope,
+  organizeScheduledTasks,
   scheduleFromDraft,
   taskToDraft,
+  type ScheduledTaskListView,
 } from "./scheduledTasksSettings.logic";
 
 const laptopId = EnvironmentId.make("laptop");
@@ -162,6 +165,68 @@ const legacyTask: ScheduledTask = {
   lastRunError: null,
   runCount: 0,
 };
+
+describe("organizing the scheduled task list", () => {
+  const task = (title: string, fields: Partial<ScheduledTask>) =>
+    ({
+      id: ScheduledTaskId.make(title),
+      title,
+      enabled: true,
+      runCount: 0,
+      lastRunAt: null,
+      nextRunAt: null,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      ...fields,
+    }) as ScheduledTask;
+  const tasks = [
+    task("busy", {
+      runCount: 700,
+      lastRunAt: "2026-11-01T10:00:00.000Z",
+      nextRunAt: "2026-11-01T11:00:00.000Z",
+    }),
+    task("stale", { enabled: false, runCount: 12, lastRunAt: "2026-10-01T10:00:00.000Z" }),
+    task("never", { enabled: false }),
+    task("old", {
+      enabled: false,
+      runCount: 3,
+      lastRunAt: "2026-09-01T10:00:00.000Z",
+      archivedAt: "2026-10-20T10:00:00.000Z" as ScheduledTask["createdAt"],
+    }),
+  ];
+  const titles = (view: Partial<ScheduledTaskListView>) =>
+    organizeScheduledTasks(tasks, {
+      show: "current",
+      sort: "lastRun",
+      descending: true,
+      ...view,
+    }).map((entry) => entry.title);
+
+  it("sorts a task that never ran as the oldest, in either direction", () => {
+    expect(titles({})).toEqual(["busy", "stale", "never"]);
+    expect(titles({ descending: false })).toEqual(["never", "stale", "busy"]);
+  });
+
+  it("puts a task without a next run after every timed one", () => {
+    expect(titles({ sort: "nextRun", descending: false })).toEqual(["busy", "never", "stale"]);
+  });
+
+  it("sorts by run count both ways and by name", () => {
+    expect(titles({ sort: "runCount" })).toEqual(["busy", "stale", "never"]);
+    expect(titles({ sort: "runCount", descending: false })).toEqual(["never", "stale", "busy"]);
+    expect(titles({ sort: "title", descending: false })).toEqual(["busy", "never", "stale"]);
+  });
+
+  it("keeps archived tasks out of every view but their own", () => {
+    expect(titles({ show: "off" })).toEqual(["stale", "never"]);
+    expect(titles({ show: "on" })).toEqual(["busy"]);
+    expect(titles({ show: "archived" })).toEqual(["old"]);
+  });
+
+  it("starts counts and past runs high, names and next runs low", () => {
+    expect(defaultSortDescending("runCount")).toBe(true);
+    expect(defaultSortDescending("nextRun")).toBe(false);
+  });
+});
 
 describe("editing scheduled task branch settings", () => {
   it("keeps an omitted origin flag on the local base branch", () => {

@@ -22,6 +22,7 @@ import {
   type ScheduledTaskMutationResult,
   type ScheduledTaskRunNowInput,
   type ScheduledTaskRunNowResult,
+  type ScheduledTaskSetArchivedInput,
   type ScheduledTaskSetEnabledInput,
   type ScheduledTaskUpsertInput,
 } from "@t3tools/contracts";
@@ -254,6 +255,9 @@ export class ScheduledTaskService extends Context.Service<
     readonly setEnabled: (
       input: ScheduledTaskSetEnabledInput,
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
+    readonly setArchived: (
+      input: ScheduledTaskSetArchivedInput,
+    ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     readonly delete: (
       input: ScheduledTaskDeleteInput,
     ) => Effect.Effect<ScheduledTaskDeleteResult, ScheduledTaskError>;
@@ -301,6 +305,11 @@ function iso(value: DateTime.DateTime): string {
 }
 
 const localNow = DateTime.withCurrentZoneLocal(DateTime.nowInCurrentZone);
+
+interface ScheduledTaskArchiveEntry {
+  readonly id: string;
+  readonly archivedAt: string;
+}
 
 function nextRunAt(
   task: Pick<ScheduledTask, "enabled" | "schedule">,
@@ -569,6 +578,27 @@ export const layer = Layer.effect(
         ),
       ).pipe(Effect.forkScoped);
     }
+    // Read-modify-write on one settings key: two tasks archived at once must both stay.
+    const archiveLock = yield* Semaphore.make(1);
+    const readArchive = Option.isNone(serverSettings)
+      ? Effect.succeed<ReadonlyArray<ScheduledTaskArchiveEntry>>([])
+      : serverSettings.value.getSettings.pipe(
+          Effect.map((settings) => settings.scheduledTasksArchived),
+          Effect.orElseSucceed((): ReadonlyArray<ScheduledTaskArchiveEntry> => []),
+        );
+    const forgetArchived = (ids: ReadonlyArray<string>) =>
+      Option.isNone(serverSettings)
+        ? Effect.void
+        : archiveLock
+            .withPermits(1)(
+              Effect.gen(function* () {
+                const entries = yield* readArchive;
+                const kept = entries.filter((entry) => !ids.includes(entry.id));
+                if (kept.length === entries.length) return;
+                yield* serverSettings.value.updateSettings({ scheduledTasksArchived: kept });
+              }),
+            )
+            .pipe(Effect.ignore);
     const readWebhookOrigin = yield* ScheduledTaskWebhookOrigin;
     const webhookPermits = yield* Ref.make<ReadonlyMap<ScheduledTaskId, Semaphore.Semaphore>>(
       new Map(),
@@ -1696,8 +1726,16 @@ export const layer = Layer.effect(
     yield* scheduler.register("scheduled-tasks-portfolio", runPortfolioTasks());
 
     const list: ScheduledTaskService["Service"]["list"] = () =>
-      listRows().pipe(
-        Effect.map((tasks) => ({ tasks })),
+      Effect.all([listRows(), readArchive]).pipe(
+        Effect.map(([tasks, archive]) => {
+          const archivedAt = new Map(archive.map((entry) => [entry.id, entry.archivedAt]));
+          return {
+            tasks: tasks.map((task) => {
+              const at = archivedAt.get(task.id);
+              return at === undefined ? task : { ...task, archivedAt: at };
+            }),
+          };
+        }),
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
       );
 
@@ -1869,6 +1907,8 @@ export const layer = Layer.effect(
         runCount: existingTask?.runCount ?? 0,
       };
       yield* saveTask(task, input.requireExisting === true, webhook);
+      // An archived task is out of sight, so it must not run: switching it on restores it.
+      if (input.enabled) yield* forgetArchived([id]);
       yield* notifyChanged;
       return { task: (yield* findTask(id)) ?? task };
     });
@@ -1881,6 +1921,7 @@ export const layer = Layer.effect(
       // is enabled. Switching it on resumes this one task.
       if (input.enabled) {
         yield* exemptFromPause(input.id);
+        yield* forgetArchived([input.id]);
         if (existing.enabled) yield* notifyChanged;
       }
       if (existing.enabled === input.enabled) return { task: existing };
@@ -1914,6 +1955,44 @@ export const layer = Layer.effect(
       return {
         task: { ...existing, enabled: input.enabled, nextRunAt: next, updatedAt: iso(now) },
       };
+    });
+
+    const setArchived: ScheduledTaskService["Service"]["setArchived"] = Effect.fn(
+      "ScheduledTaskService.setArchived",
+    )(function* (input) {
+      if (Option.isNone(serverSettings)) {
+        return yield* taskError("Archiving needs server settings.", { taskId: input.id });
+      }
+      const settings = serverSettings.value;
+      const existing = yield* loadTask(input.id);
+      // Archived implies off, so turn it off first. Restoring leaves it off.
+      const task =
+        input.archived && existing.enabled
+          ? (yield* setEnabled({ id: input.id, enabled: false })).task
+          : existing;
+      if (!input.archived) {
+        yield* forgetArchived([input.id]);
+        yield* notifyChanged;
+        return { task };
+      }
+      const archivedAt = iso(yield* localNow);
+      yield* archiveLock
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const entries = yield* readArchive;
+            if (entries.some((entry) => entry.id === input.id)) return;
+            yield* settings.updateSettings({
+              scheduledTasksArchived: [...entries, { id: input.id, archivedAt }],
+            });
+          }),
+        )
+        .pipe(
+          Effect.mapError((cause) =>
+            taskError("Could not archive schedule task.", { taskId: input.id, cause }),
+          ),
+        );
+      yield* notifyChanged;
+      return { task: { ...task, archivedAt } };
     });
 
     const forgetWebhookTask = (id: ScheduledTaskId) =>
@@ -1951,6 +2030,7 @@ export const layer = Layer.effect(
     const deleteTask: ScheduledTaskService["Service"]["delete"] = (input) =>
       deleteRow(input.id).pipe(
         Effect.andThen(forgetWebhookTask(input.id)),
+        Effect.andThen(forgetArchived([input.id])),
         Effect.andThen(notifyChanged),
         Effect.as({ id: input.id }),
       );
@@ -1980,6 +2060,7 @@ export const layer = Layer.effect(
       yield* Effect.forEach(removed, ({ task_id }) => forgetWebhookTask(task_id), {
         discard: true,
       });
+      yield* forgetArchived(removed.map(({ task_id }) => task_id));
       if (removed.length > 0) yield* notifyChanged;
     });
 
@@ -2911,6 +2992,7 @@ export const layer = Layer.effect(
       subscribeList,
       upsert,
       setEnabled,
+      setArchived,
       delete: deleteTask,
       deleteForThread,
       moveThreadTasks,

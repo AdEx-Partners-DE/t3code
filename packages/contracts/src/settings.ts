@@ -1269,6 +1269,14 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   /**
+   * Tasks kept but out of the way. Kept by the server. Here and not in
+   * `scheduled_tasks`: a fork-only column would need a migration id, and the
+   * migrator refuses to start once upstream's next migration takes that id.
+   */
+  scheduledTasksArchived: Schema.Array(
+    Schema.Struct({ id: Schema.String, archivedAt: Schema.String }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /**
    * Holds every thread's queue in this environment: a run that is under way
    * finishes, but no queued message starts until this is turned off again.
    * Messages can still be queued, edited and removed meanwhile.
@@ -1652,6 +1660,9 @@ export const ServerSettingsPatch = Schema.Struct({
   retryInstantFailures: Schema.optionalKey(Schema.Boolean),
   scheduledTasksPaused: Schema.optionalKey(Schema.Boolean),
   scheduledTasksPauseExemptIds: Schema.optionalKey(Schema.Array(Schema.String)),
+  scheduledTasksArchived: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ id: Schema.String, archivedAt: Schema.String })),
+  ),
   threadQueuesPaused: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),

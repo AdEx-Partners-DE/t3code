@@ -1622,6 +1622,12 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    setScheduledTaskArchived: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:scheduled-task:set-archived",
+      tag: WS_METHODS.scheduledTasksSetArchived,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
     deleteScheduledTask: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-task:delete",
       tag: WS_METHODS.scheduledTasksDelete,

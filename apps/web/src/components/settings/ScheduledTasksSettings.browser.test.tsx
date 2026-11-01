@@ -47,7 +47,13 @@ const threadFamilyRead = {
   threads: [{ id: task.threadId, title: "Fix login bug" }],
 };
 
-const state = vi.hoisted(() => ({ connected: true, tasksLoaded: true, secondary: false }));
+const state = vi.hoisted(() => ({
+  connected: true,
+  tasksLoaded: true,
+  secondary: false,
+  extraTasks: [] as ReadonlyArray<unknown>,
+  commands: [] as Array<{ readonly input: unknown }>,
+}));
 const secondaryId = EnvironmentId.make("secondary");
 const permissions = new Map<string, Atom.Writable<boolean>>();
 
@@ -55,6 +61,9 @@ function setup() {
   state.connected = true;
   state.tasksLoaded = true;
   state.secondary = false;
+  state.extraTasks = [];
+  state.commands = [];
+  localStorage.clear();
   permissions.clear();
   permissions.set(environmentId, Atom.make(true));
   permissions.set(secondaryId, Atom.make(true));
@@ -123,11 +132,22 @@ vi.mock(import("../../state/query"), async (original) => ({
     data:
       request === null || request === threadFamilyRead
         ? request
-        : { tasks: state.tasksLoaded ? [task] : [] },
+        : { tasks: state.tasksLoaded ? [task, ...state.extraTasks] : [] },
     error: null,
     isPending: false,
     refresh: vi.fn(),
   })) as never,
+}));
+vi.mock(import("../../state/use-atom-command"), async (original) => ({
+  ...(await original()),
+  useAtomCommand: (() => async (args: { readonly input: unknown }) => {
+    state.commands.push(args);
+    return { _tag: "Success" };
+  }) as never,
+}));
+vi.mock(import("~/state/session"), async (original) => ({
+  ...(await original()),
+  readEnvironmentScope: (() => true) as never,
 }));
 vi.mock(import("../../state/environments"), async (original) => ({
   ...(await original()),
@@ -199,6 +219,60 @@ describe("ScheduledTasksSettings", () => {
     state.connected = true;
     await screen.rerender(<ScheduledTasksSettings taskId={task.id} />);
     await expect.element(name).toHaveValue("Review stale issues");
+  });
+
+  it("sorts by runs, hides the archive, and archives only what the filter shows", async () => {
+    setup();
+    state.extraTasks = [
+      {
+        ...task,
+        id: ScheduledTaskId.make("stale"),
+        title: "Stale sweep",
+        enabled: false,
+        runCount: 12,
+        lastRunAt: "2026-10-01T00:00:00.000Z",
+      },
+      {
+        ...task,
+        id: ScheduledTaskId.make("busy"),
+        title: "Busy triage",
+        runCount: 733,
+        lastRunAt: "2026-10-31T00:00:00.000Z",
+      },
+      {
+        ...task,
+        id: ScheduledTaskId.make("old"),
+        title: "Old audit",
+        enabled: false,
+        archivedAt: "2026-10-20T00:00:00.000Z",
+      },
+    ];
+    await using screen = await render(<ScheduledTasksSettings />);
+    const rowOrder = () =>
+      [...document.querySelectorAll('[aria-label^="Select "]')]
+        .map((box) => box.getAttribute("aria-label")?.replace("Select ", ""))
+        .filter((title) => title !== "all shown tasks");
+    await expect.element(screen.getByText("Busy triage")).toBeVisible();
+    expect(rowOrder()).toEqual(["Busy triage", "Stale sweep", "Review issues"]);
+
+    await screen.getByRole("button", { name: "Sorted descending" }).click();
+    expect(rowOrder()).toEqual(["Review issues", "Stale sweep", "Busy triage"]);
+
+    await screen.getByRole("checkbox", { name: "Select all shown tasks" }).click();
+    await screen.getByRole("combobox", { name: "Show tasks" }).click();
+    await page.getByRole("option", { name: "Off (1)" }).click();
+    await expect.element(screen.getByText("1 selected")).toBeVisible();
+
+    await screen.getByRole("button", { name: "Archive", exact: true }).click();
+    await vi.waitFor(() => expect(state.commands).toHaveLength(1));
+    expect(state.commands[0]?.input).toEqual({
+      id: ScheduledTaskId.make("stale"),
+      archived: true,
+    });
+
+    await screen.getByRole("combobox", { name: "Show tasks" }).click();
+    await page.getByRole("option", { name: "Archived (1)" }).click();
+    await expect.element(screen.getByRole("button", { name: "Restore Old audit" })).toBeVisible();
   });
 
   it("keeps an editor the user opened when the linked task loads later", async () => {

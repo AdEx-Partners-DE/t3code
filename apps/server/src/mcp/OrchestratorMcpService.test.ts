@@ -2950,6 +2950,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     });
     // Runs one call against a project rooted at `workspaceRoot` and returns the
     // workspace strategies it saved. Only `/work/repo` is a Git repository.
+    const archivedTo = Ref.makeUnsafe<boolean | null>(null);
     const savedStrategies = (
       workspaceRoot: "/work/plain" | "/work/repo" | "/work/unreadable",
       call: (
@@ -3003,6 +3004,16 @@ describe("OrchestratorMcpService provider resolution", () => {
                         ...strategies,
                         input.workspaceStrategy,
                       ]).pipe(Effect.as({ task: savedTask(input.workspaceStrategy) })),
+                    setArchived: ({ archived }) =>
+                      Ref.set(archivedTo, archived).pipe(
+                        Effect.as({
+                          task: {
+                            ...savedTask({ type: "root" }),
+                            enabled: false,
+                            archivedAt: "2026-11-01T00:00:00.000Z",
+                          },
+                        }),
+                      ),
                   }),
                 ),
               ),
@@ -3033,6 +3044,27 @@ describe("OrchestratorMcpService provider resolution", () => {
     it.effect("keeps the worktree when the Git check fails", () =>
       Effect.gen(function* () {
         assert.deepEqual(yield* savedStrategies("/work/unreadable", scheduleWeekly), [worktree]);
+      }),
+    );
+
+    it.effect("archives an existing task after saving it", () =>
+      Effect.gen(function* () {
+        const existing = savedTask({ type: "root" });
+        yield* Ref.set(archivedTo, null);
+        yield* savedStrategies(
+          "/work/plain",
+          (mcp) =>
+            mcp.updateScheduledTask(client, { scheduledTaskId: existing.id, archived: true }).pipe(
+              Effect.tap((task) =>
+                Effect.sync(() => {
+                  assert.isFalse(task.enabled);
+                  assert.isDefined(task.archivedAt);
+                }),
+              ),
+            ),
+          existing,
+        );
+        assert.equal(yield* Ref.get(archivedTo), true);
       }),
     );
 

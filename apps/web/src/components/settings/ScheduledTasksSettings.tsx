@@ -3,6 +3,10 @@ import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
 import {
+  ArchiveIcon,
+  ArchiveRestoreIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
   Clock3Icon,
   CopyIcon,
   InboxIcon,
@@ -52,6 +56,7 @@ import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import { providerInstanceEntriesFor } from "../../providerInstances";
 import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -78,15 +83,24 @@ import { EnvironmentRow, useEnvironmentTransportLabel } from "./EnvironmentRow";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
+  DEFAULT_SCHEDULED_TASK_LIST_VIEW,
+  SCHEDULED_TASK_SHOWS,
+  SCHEDULED_TASK_SORTS,
+  ScheduledTaskListView,
   WEBHOOK_SIGNATURE_DEFAULTS,
   webhookDraftErrors,
   webhookDeliveryLabel,
   defaultScheduledTaskProjectId,
+  defaultSortDescending,
   matchesScheduledTaskScope,
+  organizeScheduledTasks,
+  scheduledTaskMatchesShow,
   scheduleFromDraft,
   scheduledTaskDefaultModel,
   taskToDraft,
   type DraftState,
+  type ScheduledTaskShow,
+  type ScheduledTaskSort,
   type ScheduleMode,
   type WorkspaceMode,
 } from "./scheduledTasksSettings.logic";
@@ -105,6 +119,7 @@ import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "..
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogClose,
@@ -373,8 +388,8 @@ export function relativeLabel(value: string | null): string {
 }
 
 /**
- * Where a task posts, how often it has run and who made it: what tells an
- * automation an agent set up apart from one the user did.
+ * Where a task posts and who made it: what tells an automation an agent set
+ * up apart from one the user did.
  */
 function taskFactsLabel(task: ScheduledTask, threadTitle: string | null): string {
   const target =
@@ -385,10 +400,8 @@ function taskFactsLabel(task: ScheduledTask, threadTitle: string | null): string
         : threadTitle === null
           ? "Thread no longer exists"
           : `In "${threadTitle}"`;
-  const runs = `${task.runCount} ${task.runCount === 1 ? "run" : "runs"}`;
-  const last = task.lastRunAt === null ? "never ran" : `last ${relativeLabel(task.lastRunAt)}`;
   const author = task.createdBy === "agent" ? "made by an agent" : `made by ${task.createdBy}`;
-  return [target, runs, last, author].join(" · ");
+  return [target, author].join(" · ");
 }
 
 function deliveryOutcomeVariant(outcome: string) {
@@ -627,14 +640,11 @@ function ScheduledTaskEnvironmentList({
                 {connectionStatusTitle(environment.connection)}
               </span>
             </EnvironmentRow>
-            {tasks?.map((task) => (
-              <ScheduledTaskRow
-                key={task.id}
-                environmentId={environment.environmentId}
-                task={task}
-                onEdit={() => onEdit(environment.environmentId, task)}
-              />
-            ))}
+            <ScheduledTaskList
+              environmentId={environment.environmentId}
+              tasks={tasks ?? []}
+              onEdit={(task) => onEdit(environment.environmentId, task)}
+            />
           </div>
         );
       })}
@@ -744,6 +754,7 @@ function ScheduledTaskEnvironmentSection({
   );
   const updateEnvironmentSettings = useUpdateEnvironmentSettings(environment.environmentId);
   const enabledCount = tasks?.filter((task) => task.enabled).length ?? 0;
+  const currentCount = tasks?.filter((task) => task.archivedAt === undefined).length ?? 0;
   const pauseExemptIds = useEnvironmentSettings(
     environment.environmentId,
     (settings) => settings.scheduledTasksPauseExemptIds,
@@ -788,7 +799,7 @@ function ScheduledTaskEnvironmentSection({
                 ? heldCount === 0
                   ? "No task is held right now. New tasks stay off until you switch them on."
                   : `${heldCount} ${heldCount === 1 ? "task is" : "tasks are"} paused and read off below. Switch a single task on to resume just that one, or resume all of them here.`
-                : `Switches every task in this environment off at once. Afterwards switch single tasks on again, or resume all. ${enabledCount} of ${tasks.length} enabled.`
+                : `Switches every task in this environment off at once. Afterwards switch single tasks on again, or resume all. ${enabledCount} of ${currentCount} enabled.`
             }
             control={
               <Button
@@ -807,14 +818,11 @@ function ScheduledTaskEnvironmentSection({
               description="No tasks match this environment and project selection."
             />
           ) : (
-            tasks.map((task) => (
-              <ScheduledTaskRow
-                key={task.id}
-                environmentId={environment.environmentId}
-                task={task}
-                onEdit={() => onEdit(environment.environmentId, task)}
-              />
-            ))
+            <ScheduledTaskList
+              environmentId={environment.environmentId}
+              tasks={tasks}
+              onEdit={(task) => onEdit(environment.environmentId, task)}
+            />
           )}
         </>
       )}
@@ -822,13 +830,203 @@ function ScheduledTaskEnvironmentSection({
   );
 }
 
+const SCHEDULED_TASK_LIST_VIEW_KEY = "t3code:scheduled-task-list-view:v1";
+
+function ScheduledTaskList({
+  environmentId,
+  tasks,
+  onEdit,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly tasks: ReadonlyArray<ScheduledTask>;
+  readonly onEdit: (task: ScheduledTask) => void;
+}) {
+  const [view, setView] = useLocalStorage(
+    SCHEDULED_TASK_LIST_VIEW_KEY,
+    DEFAULT_SCHEDULED_TASK_LIST_VIEW,
+    ScheduledTaskListView,
+  );
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<ScheduledTaskId>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const canOperate = useAtomValue(
+    serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
+  );
+  const archive = useAtomCommand(serverEnvironment.setScheduledTaskArchived, {
+    label: "scheduled tasks archive",
+  });
+  const remove = useAtomCommand(serverEnvironment.deleteScheduledTask, {
+    label: "scheduled tasks delete",
+  });
+  const visible = organizeScheduledTasks(tasks, view);
+  // A task the current filter hides stays out of a bulk action: only what is on screen counts.
+  const selected = visible.filter((task) => selectedIds.has(task.id));
+  const allSelected = visible.length > 0 && selected.length === visible.length;
+  const archivedView = view.show === "archived";
+  const count = (show: ScheduledTaskShow) =>
+    tasks.filter((task) => scheduledTaskMatchesShow(task, show)).length;
+  const toggleSelected = (id: ScheduledTaskId, checked: boolean) => {
+    const next = new Set(selectedIds);
+    if (checked) next.add(id);
+    else next.delete(id);
+    setSelectedIds(next);
+  };
+  const applyToSelected = async (action: "archive" | "restore" | "delete") => {
+    if (busy || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
+    if (action === "delete") {
+      const question = `Delete ${selected.length} ${selected.length === 1 ? "task" : "tasks"}?`;
+      const detail = "Their schedules and prompts are gone.";
+      const confirmed =
+        (await requestConfirmDialog(`${question}\n${detail}`, { variant: "destructive" })) ??
+        window.confirm(`${question} ${detail}`);
+      if (!confirmed) return;
+    }
+    setBusy(true);
+    const failures: string[] = [];
+    for (const task of selected) {
+      const result =
+        action === "delete"
+          ? await remove({ environmentId, input: { id: task.id } })
+          : await archive({
+              environmentId,
+              input: { id: task.id, archived: action === "archive" },
+            });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        failures.push(`${task.title}: ${String(squashAtomCommandFailure(result))}`);
+      }
+    }
+    setBusy(false);
+    setSelectedIds(new Set());
+    if (failures.length > 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Could not update ${failures.length} of ${selected.length} tasks`,
+          description: failures.join("\n"),
+        }),
+      );
+    }
+  };
+  return (
+    <>
+      <div
+        className="flex flex-wrap items-center gap-2 border-t border-border/50 px-3 py-2 first:border-t-0 sm:px-4"
+        data-testid="scheduled-task-list-toolbar"
+      >
+        <Checkbox
+          checked={allSelected}
+          indeterminate={selected.length > 0 && !allSelected}
+          disabled={visible.length === 0 || !canOperate}
+          aria-label="Select all shown tasks"
+          onCheckedChange={(checked) =>
+            setSelectedIds(checked ? new Set(visible.map((task) => task.id)) : new Set())
+          }
+        />
+        <Select
+          value={view.show}
+          onValueChange={(show) => {
+            if (show) setView({ ...view, show: show as ScheduledTaskShow });
+          }}
+        >
+          <SelectTrigger className="w-auto" size="xs" aria-label="Show tasks">
+            <SelectValue>{`${SCHEDULED_TASK_SHOWS[view.show]} (${count(view.show)})`}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            {(Object.keys(SCHEDULED_TASK_SHOWS) as ScheduledTaskShow[]).map((show) => (
+              <SelectItem key={show} value={show}>
+                {`${SCHEDULED_TASK_SHOWS[show]} (${count(show)})`}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <Select
+          value={view.sort}
+          onValueChange={(value) => {
+            if (!value) return;
+            const sort = value as ScheduledTaskSort;
+            setView({ ...view, sort, descending: defaultSortDescending(sort) });
+          }}
+        >
+          <SelectTrigger className="w-auto" size="xs" aria-label="Sort tasks">
+            <SelectValue>{SCHEDULED_TASK_SORTS[view.sort]}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            {(Object.keys(SCHEDULED_TASK_SORTS) as ScheduledTaskSort[]).map((sort) => (
+              <SelectItem key={sort} value={sort}>
+                {SCHEDULED_TASK_SORTS[sort]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          aria-label={view.descending ? "Sorted descending" : "Sorted ascending"}
+          onClick={() => setView({ ...view, descending: !view.descending })}
+        >
+          {view.descending ? <ArrowDownIcon /> : <ArrowUpIcon />}
+        </Button>
+        {selected.length > 0 ? (
+          <div className="ms-auto flex items-center gap-2">
+            <span className="text-xs text-muted-foreground" role="status">
+              {selected.length} selected
+            </span>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={busy || !canOperate}
+              onClick={() => void applyToSelected(archivedView ? "restore" : "archive")}
+            >
+              {archivedView ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+              {archivedView ? "Restore" : "Archive"}
+            </Button>
+            <Button
+              size="xs"
+              variant="destructive-outline"
+              disabled={busy || !canOperate}
+              onClick={() => void applyToSelected("delete")}
+            >
+              <Trash2Icon />
+              Delete
+            </Button>
+          </div>
+        ) : null}
+      </div>
+      {visible.length === 0 ? (
+        <SettingsRow
+          title={archivedView ? "No archived tasks" : "No tasks here"}
+          description={
+            archivedView
+              ? "Archived tasks stay off and out of the list until you restore them."
+              : "Pick another filter to see the rest."
+          }
+        />
+      ) : (
+        visible.map((task) => (
+          <ScheduledTaskRow
+            key={task.id}
+            environmentId={environmentId}
+            task={task}
+            selected={selectedIds.has(task.id)}
+            onSelectedChange={(checked) => toggleSelected(task.id, checked)}
+            onEdit={() => onEdit(task)}
+          />
+        ))
+      )}
+    </>
+  );
+}
+
 function ScheduledTaskRow({
   environmentId,
   task,
+  selected,
+  onSelectedChange,
   onEdit,
 }: {
   readonly environmentId: EnvironmentId;
   readonly task: ScheduledTask;
+  readonly selected: boolean;
+  readonly onSelectedChange: (checked: boolean) => void;
   readonly onEdit: () => void;
 }) {
   const canOperate = useAtomValue(
@@ -857,10 +1055,14 @@ function ScheduledTaskRow({
   const run = useAtomCommand(serverEnvironment.runScheduledTaskNow, {
     label: "scheduled task run now",
   });
+  const archive = useAtomCommand(serverEnvironment.setScheduledTaskArchived, {
+    label: "scheduled task archive",
+  });
   const remove = useAtomCommand(serverEnvironment.deleteScheduledTask, {
     label: "scheduled task delete",
   });
-  const act = async (action: "toggle" | "run" | "delete") => {
+  const archived = task.archivedAt !== undefined;
+  const act = async (action: "toggle" | "run" | "archive" | "delete") => {
     if (busy || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
     // A deleted task cannot be restored: ask first, as mobile does.
     if (
@@ -879,7 +1081,9 @@ function ScheduledTaskRow({
         ? await toggle({ environmentId, input: { id: task.id, enabled: !runsOnItsOwn } })
         : action === "run"
           ? await run({ environmentId, input: { id: task.id } })
-          : await remove({ environmentId, input: { id: task.id } });
+          : action === "archive"
+            ? await archive({ environmentId, input: { id: task.id, archived: !archived } })
+            : await remove({ environmentId, input: { id: task.id } });
     setBusy(false);
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       toastManager.add(
@@ -893,13 +1097,27 @@ function ScheduledTaskRow({
   };
   return (
     <SettingsRow
-      title={task.title}
+      title={
+        <span className="flex items-center gap-2">
+          <Checkbox
+            checked={selected}
+            disabled={!canOperate}
+            aria-label={`Select ${task.title}`}
+            onCheckedChange={(checked) => onSelectedChange(checked === true)}
+          />
+          {task.title}
+        </span>
+      }
       description={<span className="line-clamp-2">{task.prompt}</span>}
       status={
         <div className="flex flex-wrap items-center gap-2">
           <span>
             {scheduleLabel(task.schedule)} ·{" "}
-            {!task.enabled ? (
+            {archived ? (
+              <>
+                Archived <ScheduledRelativeLabel value={task.archivedAt ?? null} />
+              </>
+            ) : !task.enabled ? (
               "Off"
             ) : heldByPause ? (
               "Paused with all tasks; switch it on to resume just this one"
@@ -929,14 +1147,36 @@ function ScheduledTaskRow({
       }
       control={
         <div className="flex items-center gap-2">
-          <Switch
-            // Shows what the scheduler does: a task held by "Pause all tasks"
-            // reads off, and switching it on resumes that one task.
-            checked={runsOnItsOwn}
-            disabled={busy || !canOperate}
-            aria-label={`Enable ${task.title}`}
-            onCheckedChange={() => void act("toggle")}
-          />
+          <div className="w-24 text-right text-xs tabular-nums text-muted-foreground">
+            <div>{`${task.runCount} ${task.runCount === 1 ? "run" : "runs"}`}</div>
+            <div className="truncate">
+              {task.lastRunAt === null ? (
+                "Never ran"
+              ) : (
+                <ScheduledRelativeLabel value={task.lastRunAt} />
+              )}
+            </div>
+          </div>
+          {archived ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={busy || !canOperate}
+              aria-label={`Restore ${task.title}`}
+              onClick={() => void act("archive")}
+            >
+              Restore
+            </Button>
+          ) : (
+            <Switch
+              // Shows what the scheduler does: a task held by "Pause all tasks"
+              // reads off, and switching it on resumes that one task.
+              checked={runsOnItsOwn}
+              disabled={busy || !canOperate}
+              aria-label={`Enable ${task.title}`}
+              onCheckedChange={() => void act("toggle")}
+            />
+          )}
           <Menu>
             <MenuTrigger
               render={
@@ -966,6 +1206,10 @@ function ScheduledTaskRow({
                   Run now
                 </MenuItem>
               )}
+              <MenuItem onClick={() => void act("archive")}>
+                {archived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}
+                {archived ? "Restore" : "Archive"}
+              </MenuItem>
               <MenuSeparator />
               <MenuItem onClick={() => void act("delete")}>
                 <Trash2Icon />

@@ -1285,8 +1285,13 @@ function EnvironmentTasks({
   const tasks = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
-  const visibleTasks = tasks.data?.tasks.filter(
+  const [showArchived, setShowArchived] = useState(false);
+  const scopedTasks = tasks.data?.tasks.filter(
     (task) => projectIds === null || projectIds.includes(task.projectId),
+  );
+  const archivedCount = scopedTasks?.filter((task) => task.archivedAt !== undefined).length ?? 0;
+  const visibleTasks = scopedTasks?.filter(
+    (task) => (task.archivedAt !== undefined) === (showArchived && archivedCount > 0),
   );
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
@@ -1299,6 +1304,10 @@ function EnvironmentTasks({
     label: "scheduled task run",
     reportFailure: false,
   });
+  const setArchived = useAtomCommand(serverEnvironment.setScheduledTaskArchived, {
+    label: "scheduled task archive",
+    reportFailure: false,
+  });
   const remove = useAtomCommand(serverEnvironment.deleteScheduledTask, {
     label: "scheduled task delete",
     reportFailure: false,
@@ -1309,14 +1318,19 @@ function EnvironmentTasks({
     }
   };
 
-  const act = async (task: ScheduledTask, action: "run" | "toggle" | "delete") => {
+  const act = async (task: ScheduledTask, action: "run" | "toggle" | "archive" | "delete") => {
     if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
     const result =
       action === "run"
         ? await runNow({ environmentId, input: { id: task.id } })
         : action === "toggle"
           ? await setEnabled({ environmentId, input: { id: task.id, enabled: !task.enabled } })
-          : await remove({ environmentId, input: { id: task.id } });
+          : action === "archive"
+            ? await setArchived({
+                environmentId,
+                input: { id: task.id, archived: task.archivedAt === undefined },
+              })
+            : await remove({ environmentId, input: { id: task.id } });
     failure(`Could not ${action === "toggle" ? "update" : action} task`, result);
   };
 
@@ -1364,11 +1378,13 @@ function EnvironmentTasks({
               </Text>
               <Text className="text-sm text-foreground-muted" numberOfLines={2}>
                 {describeSchedule(task)}
-                {!task.enabled
-                  ? " · Paused"
-                  : task.nextRunAt
-                    ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
-                    : ""}
+                {task.archivedAt !== undefined
+                  ? " · Archived"
+                  : !task.enabled
+                    ? " · Paused"
+                    : task.nextRunAt
+                      ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
+                      : ""}
               </Text>
               {task.lastRunError ? (
                 <Text className="text-sm text-danger-foreground" numberOfLines={2}>
@@ -1388,6 +1404,11 @@ function EnvironmentTasks({
                   ? []
                   : [{ id: "run", title: "Run now", attributes: { disabled: !canOperate } }]),
                 {
+                  id: "archive",
+                  title: task.archivedAt === undefined ? "Archive" : "Restore",
+                  attributes: { disabled: !canOperate },
+                },
+                {
                   id: "delete",
                   title: "Delete",
                   attributes: { destructive: true, disabled: !canOperate },
@@ -1406,7 +1427,7 @@ function EnvironmentTasks({
                       onPress: () => void act(task, "delete"),
                     },
                   ]);
-                } else if (action === "toggle" || action === "run") {
+                } else if (action === "toggle" || action === "run" || action === "archive") {
                   void act(task, action);
                 }
               }}
@@ -1427,6 +1448,19 @@ function EnvironmentTasks({
           </View>
         ))
       )}
+      {archivedCount > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => {
+            setShowArchived(!showArchived);
+          }}
+          className="border-t border-border-subtle px-4 py-3 active:opacity-70"
+        >
+          <Text className="text-sm text-foreground-muted">
+            {showArchived ? "Back to tasks" : `Archived (${archivedCount})`}
+          </Text>
+        </Pressable>
+      ) : null}
     </SettingsSection>
   );
 }

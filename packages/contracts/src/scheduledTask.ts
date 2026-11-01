@@ -289,6 +289,8 @@ export const ScheduledTask = Schema.Struct({
   lastRunError: Schema.NullOr(Schema.String),
   runCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   webhook: Schema.optional(ScheduledTaskWebhookEndpoint),
+  /** Set while the task is archived. An archived task is always off. */
+  archivedAt: Schema.optional(IsoDateTime),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
 
@@ -326,6 +328,12 @@ export const ScheduledTaskSetEnabledInput = Schema.Struct({
   enabled: Schema.Boolean,
 });
 export type ScheduledTaskSetEnabledInput = typeof ScheduledTaskSetEnabledInput.Type;
+
+export const ScheduledTaskSetArchivedInput = Schema.Struct({
+  id: ScheduledTaskId,
+  archived: Schema.Boolean,
+});
+export type ScheduledTaskSetArchivedInput = typeof ScheduledTaskSetArchivedInput.Type;
 
 export const ScheduledTaskDeleteInput = Schema.Struct({
   id: ScheduledTaskId,

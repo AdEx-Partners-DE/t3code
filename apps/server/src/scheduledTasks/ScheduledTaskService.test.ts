@@ -592,6 +592,70 @@ it.effect("runs a task that was switched on again by itself while all tasks are 
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
+it.effect("keeps an archived task off and out of the scheduler until it is restored", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-09-09T12:00:00.000Z";
+    yield* insertRow(sql, { id: "first", next: now, status: "never", enabled: 1 }, now);
+    yield* insertRow(sql, { id: "second", next: now, status: "never", enabled: 1 }, now);
+    yield* insertRow(sql, { id: "third", next: null, status: "never", enabled: 0 }, now);
+    yield* TestClock.setTime(Date.parse(now) + 1_000);
+
+    const layer = Layer.provideMerge(
+      ScheduledTaskService.layer,
+      Layer.mergeAll(
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        ServerSettings.layerTest(),
+        NodeCrypto.layer,
+        Scheduler.layer,
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const archivedIds = service
+        .list()
+        .pipe(
+          Effect.map(({ tasks }) =>
+            tasks.flatMap((task) => (task.archivedAt === undefined ? [] : [task.id as string])),
+          ),
+        );
+
+      // Archived together, as the bulk action can: neither write may lose the other.
+      yield* Effect.forEach(
+        ["first", "second", "third"],
+        (id) => service.setArchived({ id: id as never, archived: true }),
+        { concurrency: "unbounded", discard: true },
+      );
+      assert.deepEqual((yield* archivedIds).toSorted(), ["first", "second", "third"]);
+      const { tasks } = yield* service.list();
+      assert.isTrue(tasks.every((task) => !task.enabled && task.nextRunAt === null));
+
+      yield* TestClock.adjust("6 seconds");
+      const ran = yield* sql<{ run_count: number }>`SELECT run_count FROM scheduled_tasks`;
+      assert.isTrue(ran.every((row) => row.run_count === 0));
+
+      // Restoring brings it back off; only an explicit switch-on runs it.
+      yield* service.setArchived({ id: "first" as never, archived: false });
+      assert.deepEqual((yield* archivedIds).toSorted(), ["second", "third"]);
+      assert.isFalse((yield* service.list()).tasks.find((task) => task.id === "first")?.enabled);
+
+      // A hidden task must not run, so switching one on takes it out of the archive.
+      yield* service.setEnabled({ id: "second" as never, enabled: true });
+      assert.deepEqual(yield* archivedIds, ["third"]);
+
+      yield* service.delete({ id: "third" as never });
+      assert.deepEqual((yield* settings.getSettings).scheduledTasksArchived, []);
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
 it.effect("does not queue another prompt while the task's last one still waits in its thread", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

@@ -123,7 +123,9 @@ export function ThreadAutomationsPanel(props: {
   const nowMs = Date.parse(`${nowMinute}:00.000Z`);
 
   const tasks = tasksQuery.data?.tasks ?? [];
-  const boundTasks = tasks.filter((task) => task.threadId === props.threadId);
+  const boundTasks = tasks.filter(
+    (task) => task.threadId === props.threadId && task.archivedAt === undefined,
+  );
   const relatedTasks = relatedThreadAutomations({ tasks, threadId: props.threadId, thread });
   const summary = formatAutomationsSummary(
     summarizeAutomations({ tasks, paused: allTasksPaused, exemptIds: pauseExemptIds }),

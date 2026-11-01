@@ -85,12 +85,18 @@ const handlers = {
     (input) => input.scheduledTaskId === undefined,
     McpToolAccess.startsThreads(
       () => ({}),
-      ({ prompt, schedule, ...input }) =>
+      ({ prompt, schedule, archived, ...input }) =>
         Effect.gen(function* () {
           if (prompt === undefined || schedule === undefined) {
             return yield* new OrchestratorMcpFailure({
               code: "invalid_request",
               message: "A new scheduled task needs `prompt` and `schedule`.",
+            });
+          }
+          if (archived !== undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "`archived` needs the `scheduledTaskId` of an existing task.",
             });
           }
           const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -101,7 +107,7 @@ const handlers = {
       { refused: "schedule tasks in this environment" },
     ),
     McpToolAccess.writes(
-      ({ scheduledTaskId, prompt, title, schedule, enabled, bindToCurrentThread }) =>
+      ({ scheduledTaskId, prompt, title, schedule, enabled, bindToCurrentThread, archived }) =>
         Effect.gen(function* () {
           if (scheduledTaskId === undefined) return yield* Effect.die("unreachable");
           const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -113,6 +119,7 @@ const handlers = {
             schedule,
             enabled,
             bindToCurrentThread,
+            archived,
           });
         }),
     ),

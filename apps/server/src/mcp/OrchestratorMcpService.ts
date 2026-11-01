@@ -270,6 +270,7 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
+    ...(task.archivedAt === undefined ? {} : { archivedAt: task.archivedAt }),
     ...(task.webhook?.url == null || !mayRun ? {} : { webhookUrl: task.webhook.url }),
     ...(task.webhook === undefined
       ? {}
@@ -2029,7 +2030,17 @@ const make = Effect.gen(function* () {
               failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
             ),
           );
-        return yield* summarizeScheduledTask(scope, { parent, limits }, task);
+        if (input.archived === undefined) {
+          return yield* summarizeScheduledTask(scope, { parent, limits }, task);
+        }
+        const archived = yield* scheduledTasks
+          .setArchived({ id: task.id, archived: input.archived })
+          .pipe(
+            Effect.mapError((error) =>
+              failure("orchestration_error", `Could not archive scheduled task: ${error.message}`),
+            ),
+          );
+        return yield* summarizeScheduledTask(scope, { parent, limits }, archived.task);
       },
     ),
     deleteScheduledTask: Effect.fn("OrchestratorMcpService.deleteScheduledTask")(

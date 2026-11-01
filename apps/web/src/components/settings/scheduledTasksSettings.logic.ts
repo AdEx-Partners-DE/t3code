@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import { isWebhookDedupeTemplate } from "@t3tools/contracts";
 import {
   EnvironmentId,
@@ -51,6 +52,77 @@ export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
       ? { taskId: ScheduledTaskId.make(raw.taskId) }
       : {}),
   };
+}
+
+export const SCHEDULED_TASK_SHOWS = {
+  current: "Not archived",
+  on: "On",
+  off: "Off",
+  archived: "Archived",
+} as const;
+export type ScheduledTaskShow = keyof typeof SCHEDULED_TASK_SHOWS;
+
+export const SCHEDULED_TASK_SORTS = {
+  lastRun: "Last run",
+  runCount: "Run count",
+  nextRun: "Next run",
+  title: "Name",
+  created: "Created",
+} as const;
+export type ScheduledTaskSort = keyof typeof SCHEDULED_TASK_SORTS;
+
+export const ScheduledTaskListView = Schema.Struct({
+  show: Schema.Literals(["current", "on", "off", "archived"]),
+  sort: Schema.Literals(["lastRun", "runCount", "nextRun", "title", "created"]),
+  descending: Schema.Boolean,
+});
+export type ScheduledTaskListView = typeof ScheduledTaskListView.Type;
+
+export const DEFAULT_SCHEDULED_TASK_LIST_VIEW: ScheduledTaskListView = {
+  show: "current",
+  sort: "lastRun",
+  descending: true,
+};
+
+/** Which way a sort first runs: names and next runs read upward, counts and past runs down. */
+export function defaultSortDescending(sort: ScheduledTaskSort): boolean {
+  return sort !== "title" && sort !== "nextRun";
+}
+
+export function scheduledTaskMatchesShow(
+  task: Pick<ScheduledTask, "enabled" | "archivedAt">,
+  show: ScheduledTaskShow,
+): boolean {
+  if (show === "archived") return task.archivedAt !== undefined;
+  if (task.archivedAt !== undefined) return false;
+  return show === "current" || task.enabled === (show === "on");
+}
+
+function timeOr(value: string | null, missing: number): number {
+  return value === null ? missing : Date.parse(value);
+}
+
+function sortValue(task: ScheduledTask, sort: Exclude<ScheduledTaskSort, "title">): number {
+  if (sort === "runCount") return task.runCount;
+  if (sort === "created") return Date.parse(task.createdAt);
+  // Never ran reads as oldest and no next run as furthest off, so both end up where
+  // a cleanup looks for them instead of between real dates.
+  return sort === "lastRun"
+    ? timeOr(task.lastRunAt, Number.NEGATIVE_INFINITY)
+    : timeOr(task.nextRunAt, Number.POSITIVE_INFINITY);
+}
+
+export function organizeScheduledTasks(
+  tasks: ReadonlyArray<ScheduledTask>,
+  view: ScheduledTaskListView,
+): ReadonlyArray<ScheduledTask> {
+  const direction = view.descending ? -1 : 1;
+  const compare = (left: ScheduledTask, right: ScheduledTask) => {
+    if (view.sort === "title") return direction * left.title.localeCompare(right.title);
+    const [a, b] = [sortValue(left, view.sort), sortValue(right, view.sort)];
+    return a === b ? left.title.localeCompare(right.title) : direction * (a < b ? -1 : 1);
+  };
+  return tasks.filter((task) => scheduledTaskMatchesShow(task, view.show)).toSorted(compare);
 }
 
 export type ScheduleMode = "fixed" | "interval" | "webhook" | "idle";

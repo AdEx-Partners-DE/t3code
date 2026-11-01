@@ -375,6 +375,7 @@ import {
   ScheduledTaskGetWebhookDeliveryInput,
   ScheduledTaskGetWebhookDeliveryResult,
   ScheduledTaskRunNowResult,
+  ScheduledTaskSetArchivedInput,
   ScheduledTaskSetEnabledInput,
   ScheduledTaskUpsertInput,
   ScheduledTaskMutationResult,
@@ -545,6 +546,7 @@ export const WS_METHODS = {
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
   scheduledTasksUpsert: "scheduledTasks.upsert",
   scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
+  scheduledTasksSetArchived: "scheduledTasks.setArchived",
   scheduledTasksDelete: "scheduledTasks.delete",
   scheduledTasksRunNow: "scheduledTasks.runNow",
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
@@ -1932,6 +1934,12 @@ const WsScheduledTasksSetEnabledRpc = Rpc.make(WS_METHODS.scheduledTasksSetEnabl
   error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
 });
 
+const WsScheduledTasksSetArchivedRpc = Rpc.make(WS_METHODS.scheduledTasksSetArchived, {
+  payload: ScheduledTaskSetArchivedInput,
+  success: ScheduledTaskMutationResult,
+  error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksDeleteRpc = Rpc.make(WS_METHODS.scheduledTasksDelete, {
   payload: ScheduledTaskDeleteInput,
   success: ScheduledTaskDeleteResult,
@@ -2062,6 +2070,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,
   WsScheduledTasksSetEnabledRpc,
+  WsScheduledTasksSetArchivedRpc,
   WsScheduledTasksDeleteRpc,
   WsScheduledTasksRunNowRpc,
   WsScheduledTasksRotateWebhookTokenRpc,

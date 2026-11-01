@@ -76,6 +76,13 @@ to override its environment defaults. Worktree directories keep their original n
 If generation fails, or a custom name is invalid or already taken, the temporary
 branch name remains.
 
+## Tidy up scheduled tasks
+
+In **Settings → Scheduled tasks**, filter and sort the list, for example by last run
+or run count, and tick tasks to archive or delete them together. An archived task
+stays off and out of the list until you restore it from the **Archived** filter. It
+comes back switched off. Switching it on, by hand or through an agent, also restores it.
+
 ## Scheduled tasks on mobile
 
 Open **Settings → Scheduled tasks** to create recurring tasks or manage existing
