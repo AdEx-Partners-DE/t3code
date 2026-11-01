@@ -49,6 +49,12 @@ const STATUS_DOT_CLASS: Record<ScheduledTask["lastRunStatus"], string> = {
   failed: "bg-destructive",
 };
 
+/** Green says a task is alive, so one that will not start reads neutral. A failure still shows. */
+function statusDotClass(task: ScheduledTask, held: boolean): string {
+  const asleep = (held || !task.enabled) && task.lastRunStatus === "succeeded";
+  return STATUS_DOT_CLASS[asleep ? "never" : task.lastRunStatus];
+}
+
 function taskScheduleLine(task: ScheduledTask, held: boolean, nowMs: number) {
   return (
     <>
@@ -256,7 +262,7 @@ export function ThreadAutomationsPanel(props: {
               <span
                 className={cn(
                   "absolute -right-1 -top-1 size-1.5 rounded-full",
-                  STATUS_DOT_CLASS[task.lastRunStatus],
+                  statusDotClass(task, isHeld(task)),
                 )}
                 aria-hidden
               />
@@ -348,7 +354,7 @@ export function ThreadAutomationsPanel(props: {
                 <span
                   className={cn(
                     "absolute -right-1 -top-1 size-1.5 rounded-full",
-                    STATUS_DOT_CLASS[task.lastRunStatus],
+                    statusDotClass(task, isHeld(task)),
                   )}
                   aria-hidden
                 />

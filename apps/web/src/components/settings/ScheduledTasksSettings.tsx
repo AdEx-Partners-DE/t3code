@@ -1603,6 +1603,14 @@ function ScheduledTaskEditorForm({
           projectId: defaultScheduledTaskProjectId(scopedProjects, scope),
         },
   );
+  // The switch below is the task's own setting; the list's switch shows what the scheduler does.
+  const heldByPause =
+    draft.enabled &&
+    isTaskHeldByPause(
+      task?.id ?? "",
+      settings.scheduledTasksPaused,
+      settings.scheduledTasksPauseExemptIds,
+    );
   // Pinned first. The chosen project stays listed after it is archived.
   const projects = scopedProjects
     .filter(
@@ -2531,7 +2539,9 @@ function ScheduledTaskEditorForm({
             <div className="min-w-0 space-y-1">
               <Label htmlFor="scheduled-task-enabled">Enabled</Label>
               <p id="scheduled-task-enabled-description" className="text-sm text-muted-foreground">
-                Disabled tasks stay saved but do not run.
+                {heldByPause
+                  ? "Paused with all tasks. This switch is the task's own setting: it runs again when you resume all tasks, or switch it on in the list to resume just this one."
+                  : "Disabled tasks stay saved but do not run."}
               </p>
             </div>
             <Switch

@@ -51,6 +51,7 @@ const state = vi.hoisted(() => ({
   connected: true,
   tasksLoaded: true,
   secondary: false,
+  paused: false,
   extraTasks: [] as ReadonlyArray<unknown>,
   commands: [] as Array<{ readonly input: unknown }>,
 }));
@@ -61,6 +62,7 @@ function setup() {
   state.connected = true;
   state.tasksLoaded = true;
   state.secondary = false;
+  state.paused = false;
   state.extraTasks = [];
   state.commands = [];
   localStorage.clear();
@@ -163,7 +165,10 @@ vi.mock(import("../../hooks/useSettings"), async (original) => ({
   useEnvironmentSettings: ((
     _environmentId: string,
     select?: (settings: typeof DEFAULT_UNIFIED_SETTINGS) => unknown,
-  ) => (select ? select(DEFAULT_UNIFIED_SETTINGS) : DEFAULT_UNIFIED_SETTINGS)) as never,
+  ) => {
+    const settings = { ...DEFAULT_UNIFIED_SETTINGS, scheduledTasksPaused: state.paused };
+    return select ? select(settings) : settings;
+  }) as never,
 }));
 
 describe("ScheduledTasksSettings", () => {
@@ -219,6 +224,15 @@ describe("ScheduledTasksSettings", () => {
     state.connected = true;
     await screen.rerender(<ScheduledTasksSettings taskId={task.id} />);
     await expect.element(name).toHaveValue("Review stale issues");
+  });
+
+  it("says in the editor when an enabled task is held by the pause", async () => {
+    setup();
+    state.paused = true;
+    await using _screen = await render(<ScheduledTasksSettings taskId={task.id} />);
+    const dialog = page.getByRole("dialog");
+    await expect.element(dialog.getByRole("switch", { name: "Enabled" })).toBeChecked();
+    await expect.element(dialog.getByText(/^Paused with all tasks/)).toBeVisible();
   });
 
   it("sorts by runs, hides the archive, and archives only what the filter shows", async () => {
