@@ -215,24 +215,25 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     { concurrency: "unbounded", discard: true },
   );
 
-  const requestLane = Effect.fn("ProjectEnrichmentService.requestLane")(function* (
+  // Every project read lands here; only an actual enqueue gets a span, the resolve workers trace the work.
+  const requestLane = Effect.fnUntraced(function* (
     lane: EnrichmentWorkLane,
     workspaceRoot: string,
     field: "repositoryIdentity" | "faviconPath",
   ) {
     if (!(yield* reservePending(lane, workspaceRoot))) return;
-    if (!(yield* Queue.offer(lane.queue, workspaceRoot))) {
-      yield* removePending(lane, workspaceRoot);
-      yield* Effect.logWarning("Project metadata enrichment queue is full", {
-        workspaceRoot,
-        field,
-      });
-    }
+    yield* Effect.gen(function* () {
+      if (!(yield* Queue.offer(lane.queue, workspaceRoot))) {
+        yield* removePending(lane, workspaceRoot);
+        yield* Effect.logWarning("Project metadata enrichment queue is full", {
+          workspaceRoot,
+          field,
+        });
+      }
+    }).pipe(Effect.withSpan("ProjectEnrichmentService.requestLane"));
   });
 
-  // Untraced: peek, request and getAvailable are cache lookups behind every project
-  // shell read; the pull request sweeps alone made about 230 of each a minute, a
-  // quarter of a busy host's trace for under 0.1 ms each.
+  // peek/request/getAvailable run per project on every shell read, inside the caller's span; own spans were ~0ms noise.
   const peek: ProjectEnrichmentService["Service"]["peek"] = Effect.fnUntraced(
     function* (workspaceRoot) {
       const [repositoryIdentity, faviconPath] = yield* Effect.all(

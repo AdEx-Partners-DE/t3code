@@ -4,6 +4,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   handoffStrategyLabel,
   resolveHandoffEndpoints,
+  resolveModelSwitchChange,
   type HandoffEndpoints,
 } from "@t3tools/client-runtime/handoff";
 import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
@@ -14,6 +15,8 @@ import {
 } from "@t3tools/client-runtime/state/provider-instance-display";
 import type {
   EnvironmentId,
+  ModelSelection,
+  OrchestrationV2ModelSwitch,
   OrchestrationV2ProjectedTurnItem,
   ProviderInstanceId,
   ServerProvider,
@@ -47,6 +50,33 @@ function handoffEndpointsAtom(
     if (JSON.stringify(next) !== JSON.stringify(previous)) previous = next;
     return previous;
   });
+}
+
+/** A same-harness model or effort change. Shows only what changed. */
+export function ThreadModelSwitchDivider(props: {
+  environmentId: EnvironmentId;
+  modelSwitch: OrchestrationV2ModelSwitch;
+  iconColor: ColorValue;
+}) {
+  const providers = useAtomValue(serverEnvironment.providersValueAtom(props.environmentId)) ?? [];
+  const change = resolveModelSwitchChange(props.modelSwitch, providers);
+  if (change === null) return null;
+  const describe = (selection: ModelSelection, effort: string | undefined) => {
+    const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
+    const model = provider?.models.find((candidate) => candidate.slug === selection.model);
+    const modelName =
+      (model ? resolveModelShortName(model, provider?.driver) : undefined) ??
+      model?.name ??
+      selection.model;
+    return [change.modelChanged ? modelName : null, effort].filter(Boolean).join(" ");
+  };
+  const { from, to } = props.modelSwitch;
+  return (
+    <ThreadContextDivider
+      label={`${describe(from, change.effort?.from)} → ${describe(to, change.effort?.to)}`}
+      iconColor={props.iconColor}
+    />
+  );
 }
 
 export function ThreadHandoffRow(props: {

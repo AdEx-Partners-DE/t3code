@@ -339,16 +339,16 @@ function selectOlderTimelinePage<Row extends HistoryRow>(input: {
     turnLimit === undefined ? policy.maxItems : (policy.maxTurnItems ?? policy.maxItems);
   for (let index = end - 1; index >= 0; index -= 1) {
     const row = input.items[index]!;
-    const rowBytes = rowCost(row);
     if (
       selected.length > 0 &&
       (selected.length >= maxItems ||
-        encodedBytes + rowBytes > policy.maxEncodedBytes ||
         (turnLimit !== undefined &&
           (userTurns >= turnLimit || rawTurns >= THREAD_HISTORY_MAX_RAW_TURNS)))
     ) {
       break;
     }
+    const rowBytes = rowCost(row);
+    if (selected.length > 0 && encodedBytes + rowBytes > policy.maxEncodedBytes) break;
     selected.push(row);
     encodedBytes += rowBytes;
     if (isThreadHistoryUserTurn(row.item)) userTurns += 1;
@@ -509,12 +509,6 @@ function isLocalProjectedRow(
   return row.visibility === "local" || String(row.sourceThreadId) === String(projection.thread.id);
 }
 
-/**
- * Keep every small request item from the full projection even when it sits
- * outside the recent visible window, so a later history page that introduces
- * the matching result still has the request available for live attempt/run
- * reducers.
- */
 function pendingRequestIdsOf(
   projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests">,
 ): ReadonlySet<string> {
@@ -538,6 +532,7 @@ function isRetainedDependency(
   );
 }
 
+/** Retain small requests outside the visible window; later result pages still need them for attempt/run reducers. */
 function retainedInterruptRequestTurnItems(
   projection: OrchestrationV2ThreadProjection,
   visible: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,

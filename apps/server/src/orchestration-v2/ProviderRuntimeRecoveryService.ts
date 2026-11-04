@@ -27,6 +27,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { recordDecision } from "../decisionLog.ts";
 import { restartContinuationRun } from "./RestartContinuation.ts";
 import { isBufferedProviderNotification } from "./NotificationMailbox.ts";
+import { queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 import {
   endOrphanedNativeSubagent,
   endRunlessRootTurns,
@@ -165,7 +166,13 @@ const cancelledItem = (
 ): OrchestrationV2ThreadProjection["turnItems"][number] =>
   item.type === "secret_request" && item.secretStatus === "pending"
     ? { ...item, status: "cancelled", secretStatus: "cancelled", completedAt: now, updatedAt: now }
-    : { ...item, status: "cancelled", completedAt: now, updatedAt: now };
+    : {
+        ...item,
+        ...("streaming" in item ? { streaming: false } : {}),
+        status: "cancelled",
+        completedAt: now,
+        updatedAt: now,
+      };
 
 function latestStartedRun(
   projection: ProjectionStore.ProjectionRuntimeRecoveryState,
@@ -221,7 +228,7 @@ export const make = Effect.gen(function* () {
         providerSessions: sessionsLiveAtStart(projection, stoppedThisPass),
       };
       const now = yield* DateTime.now;
-      const runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
+      let runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
       for (const run of nonterminalRuns(projection)) {
         if (run.status === "waiting") {
           const checkpointEffects = yield* outbox
@@ -336,13 +343,65 @@ export const make = Effect.gen(function* () {
           cancelledBackgroundNativeIds.add(item.nativeItemRef.nativeId);
         }
       };
+      const unstartedRuns = runs.filter(
+        (run) =>
+          run.status === "starting" &&
+          neverStarted(run) &&
+          !projection.providerTurns.some((turn) => turn.runAttemptId === run.activeAttemptId) &&
+          !projection.runtimeRequests.some(
+            (request) =>
+              request.status === "pending" &&
+              projection.nodes.some((node) => node.id === request.nodeId && node.runId === run.id),
+          ),
+      );
       const queuedRuns = projection.runs.filter((run) => run.status === "queued");
+      const pendingRuns = [...unstartedRuns, ...queuedRuns];
       const queuedMessages =
-        queuedRuns.length === 0
+        pendingRuns.length === 0
+          ? []
+          : [
+              ...(yield* projections
+                .getMessagesById(
+                  projection.thread.id,
+                  pendingRuns.map((run) => run.userMessageId),
+                )
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderRuntimeRecoveryError({
+                        operation: "read-projections",
+                        threadId: projection.thread.id,
+                        cause,
+                      }),
+                  ),
+                )).values(),
+            ];
+      const bufferedMessageIds = new Set(
+        queuedMessages.filter(isBufferedProviderNotification).map((message) => message.id),
+      );
+      const retryableMessageIds = new Set(
+        queuedMessages
+          .filter(
+            (message) =>
+              message.createdBy === "user" &&
+              message.scheduledTaskId === undefined &&
+              message.notification === undefined &&
+              message.delegatedCompletion === undefined,
+          )
+          .map((message) => message.id),
+      );
+      // A saved user message the provider never accepted stays available through the held queue.
+      const retryableRuns = unstartedRuns.filter((run) =>
+        retryableMessageIds.has(run.userMessageId),
+      );
+      const retryableRunIds = new Set(retryableRuns.map((run) => run.id));
+      const retryableItems =
+        retryableRuns.length === 0
           ? []
           : (yield* projections
-              .getThreadRecords(projection.thread.id, ["messages"], {
-                messageIds: queuedRuns.map((run) => run.userMessageId),
+              .getThreadRecords(projection.thread.id, ["turnItems"], {
+                turnItemTypes: ["user_message"],
+                turnItemRunIds: retryableRuns.map((run) => run.id),
               })
               .pipe(
                 Effect.mapError(
@@ -353,16 +412,37 @@ export const make = Effect.gen(function* () {
                       cause,
                     }),
                 ),
-              )).messages;
-      const bufferedMessageIds = new Set(
-        queuedMessages.filter(isBufferedProviderNotification).map((message) => message.id),
-      );
+              )).turnItems;
+      for (const item of retryableItems) {
+        if (item.type !== "user_message" || !retryableMessageIds.has(item.messageId)) continue;
+        events.push({
+          id: yield* allocateEventId(),
+          type: "turn-item.updated",
+          threadId: projection.thread.id,
+          ...(item.runId === null ? {} : { runId: item.runId }),
+          occurredAt: now,
+          payload: {
+            ...item,
+            inputIntent: "queued_turn",
+            status: "pending",
+            startedAt: null,
+            completedAt: null,
+            updatedAt: now,
+          },
+        });
+      }
+      runs = runs.filter((run) => !retryableRunIds.has(run.id));
+      const heldRuns = [
+        ...retryableRuns,
+        ...queuedRunsInDeliveryOrder({ runs: queuedRuns, messages: queuedMessages }),
+      ];
       // Queued runs have not started provider work. Preserve their execution
       // identities and order, but require explicit consent before draining them.
       // A handoff's sole continuation already has that consent, and the old
       // session was detached to run it in the newly bound worktree.
       const handoffContinuation =
         continueAfterRestart &&
+        retryableRuns.length === 0 &&
         projection.thread.worktreePath != null &&
         queuedRuns.length === 1 &&
         queuedRuns[0]!.queueHeld !== true &&
@@ -371,16 +451,18 @@ export const make = Effect.gen(function* () {
           : undefined;
       // Buffered wakes lost their output with the process. Durable queued messages
       // keep their execution identities and order until the user resumes them.
-      for (const run of queuedRuns) {
+      for (const [index, run] of heldRuns.entries()) {
         if (bufferedMessageIds.has(run.userMessageId)) {
           runs.push(run);
           continue;
         }
-        if (run.queueHeld === true || run === handoffContinuation) continue;
+        if (run.id === handoffContinuation?.id) continue;
+        if (run.queueHeld === true && retryableRuns.length === 0) continue;
         // "Continue threads after a server update" is that consent, given
         // once for every restart. Without it each update would park every
         // waiting queue until the user resumed the threads one by one.
-        if (continueAfterRestart) continue;
+        // A message the provider never accepted stays held, as upstream intends.
+        if (continueAfterRestart && retryableRuns.length === 0) continue;
         events.push({
           id: yield* allocateEventId(),
           type: "run.updated",
@@ -388,7 +470,12 @@ export const make = Effect.gen(function* () {
           runId: run.id,
           providerInstanceId: run.providerInstanceId,
           occurredAt: now,
-          payload: { ...run, queueHeld: true },
+          payload: {
+            ...run,
+            status: "queued",
+            queueHeld: true,
+            ...(retryableRuns.length === 0 ? {} : { queuePosition: index + 1 }),
+          },
         });
       }
       for (const question of questions) {
@@ -936,6 +1023,7 @@ export const make = Effect.gen(function* () {
           continueAfterRestart &&
           trigger === "startup" &&
           continuationRun === undefined &&
+          retryableRuns.length === 0 &&
           queuedRuns.some((run) => run.queueHeld !== true),
       };
     },
