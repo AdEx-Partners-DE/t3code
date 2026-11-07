@@ -8,7 +8,6 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -40,14 +39,15 @@ const CHECKLIST_DIRECTORY = "thread-checklists";
 /** Fits the context of every model offered for text generation, with room for the reply. */
 const TRANSCRIPT_BUDGET = 90_000;
 
-type Checklist = typeof ThreadChecklistSchema.Type;
+type Checklist = ThreadChecklistSchema;
 const decodeChecklist = Schema.decodeUnknownOption(Schema.fromJsonString(ThreadChecklistSchema));
 const encodeChecklist = Schema.encodeSync(Schema.fromJsonString(ThreadChecklistSchema));
 
 /** Raised when an item's status is set on a thread whose checklist was never written. */
-class ChecklistMissingError extends Data.TaggedError("ChecklistMissingError")<{
-  readonly detail: string;
-}> {}
+class ChecklistMissingError extends Schema.TaggedError<ChecklistMissingError>()(
+  "ChecklistMissingError",
+  { detail: Schema.String },
+) {}
 
 export const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;

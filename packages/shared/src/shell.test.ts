@@ -342,7 +342,7 @@ describe("readEnvironmentFromWindowsShell", () => {
 
       expect(
         yield* readEnvironmentFromWindowsShell(["PATH"], {}, (...args) =>
-          Effect.try(() => execFile(...args)).pipe(Effect.option),
+          Effect.sync(() => Option.liftThrowable(execFile)(...args)),
         ),
       ).toEqual({
         PATH: "C:\\Users\\testuser\\AppData\\Roaming\\npm",
@@ -370,7 +370,7 @@ describe("readEnvironmentFromWindowsShell", () => {
 
       expect(
         yield* readEnvironmentFromWindowsShell(["FNM_DIR"], {}, (...args) =>
-          Effect.try(() => execFile(...args)).pipe(Effect.option),
+          Effect.sync(() => Option.liftThrowable(execFile)(...args)),
         ),
       ).toEqual({
         FNM_DIR: "C:\\Users\\testuser\\AppData\\Roaming\\fnm",
@@ -390,7 +390,7 @@ describe("readEnvironmentFromWindowsShell", () => {
 
       expect(
         yield* readEnvironmentFromWindowsShell(["PATH"], { loadProfile: true }, (...args) =>
-          Effect.try(() => execFile(...args)).pipe(Effect.option),
+          Effect.sync(() => Option.liftThrowable(execFile)(...args)),
         ),
       ).toEqual({
         PATH: "C:\\Tools",
@@ -421,7 +421,7 @@ describe("readEnvironmentFromWindowsShell", () => {
 
       expect(
         yield* readEnvironmentFromWindowsShell(["PATH"], {}, (...args) =>
-          Effect.try(() => execFile(...args)).pipe(Effect.option),
+          Effect.sync(() => Option.liftThrowable(execFile)(...args)),
         ),
       ).toEqual({
         PATH: "C:\\Tools",
@@ -564,49 +564,31 @@ effectIt.layer(NodeServices.layer)("resolveCommandPath", (it) => {
 
 describe("runsGitWithoutConsole", () => {
   const git = "C:\\Program Files\\Git\\ucrt64\\bin\\git.exe";
-  const runs = (args: Array<string>, executable = git, platform: NodeJS.Platform = "win32") =>
-    runsGitWithoutConsole(platform, executable, args);
 
-  it("runs read-only commands of the real git.exe without a console", () => {
-    expect(runs(["rev-parse", "HEAD"])).toBe(true);
-    expect(runs(["rev-parse", "HEAD"], "D:\\PortableGit\\MINGW64\\bin\\git.EXE")).toBe(true);
-    expect(runs(["--git-dir", "X", "rev-parse", "HEAD"])).toBe(true);
-    expect(runs(["--git-dir=X", "rev-parse", "HEAD"])).toBe(true);
-    expect(runs(["-c", "k=v", "for-each-ref", "refs/heads"])).toBe(true);
-    expect(runs(["-C", "dir", "config", "--get", "k"])).toBe(true);
-    expect(runs(["config", "--get-regexp", "^remote\\."])).toBe(true);
-    expect(runs(["config", "get", "user.name"])).toBe(true);
-    expect(runs(["config", "--list"])).toBe(true);
-    expect(runs(["symbolic-ref", "--quiet", "--short", "HEAD"])).toBe(true);
-    expect(runs(["remote", "-v"])).toBe(true);
-    expect(runs(["remote", "get-url", "origin"])).toBe(true);
+  it.each([
+    [["rev-parse", "--git-path", "index"], true],
+    [["--git-dir", "C:\\repo\\.git", "symbolic-ref", "refs/remotes/origin/HEAD"], true],
+    [["remote", "get-url", "--", "origin"], true],
+    [["config", "--get", "branch.main.pushRemote"], true],
+    [["symbolic-ref", "--quiet", "HEAD"], true],
+    [["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], true],
+    [["rev-parse", "HEAD"], false],
+    [["symbolic-ref", "HEAD", "refs/heads/x"], false],
+    [["symbolic-ref", "-qd", "refs/remotes/origin/HEAD"], false],
+    [["config", "--get", "--edit"], false],
+    [["-c", "core.pager=x", "config", "--get", "user.name"], false],
+  ])("Git for Windows %j without a console: %s", (args, expected) => {
+    expect(runsGitWithoutConsole("win32", git, args)).toBe(expected);
   });
 
-  it("keeps the console for commands that can start hooks or edit", () => {
-    expect(runs(["commit", "-m", "x"])).toBe(false);
-    expect(runs(["fetch", "origin"])).toBe(false);
-    expect(runs(["status", "--porcelain"])).toBe(false);
-    expect(runs(["diff", "HEAD"])).toBe(false);
-    expect(runs(["symbolic-ref", "HEAD", "refs/heads/x"])).toBe(false);
-    expect(runs(["remote", "add", "origin", "url"])).toBe(false);
-    expect(runs(["config", "--edit"])).toBe(false);
-    expect(runs(["config", "edit", "--global"])).toBe(false);
-    expect(runs(["config", "--edi"])).toBe(false);
-    expect(runs(["config", "--edi", "user.name"])).toBe(false);
-    expect(runs(["config", "branch.x.gh-merge-base", "main"])).toBe(false);
-    expect(runs(["rev-parse", "--help"])).toBe(false);
-    expect(runs(["--help", "rev-parse"])).toBe(false);
-    expect(runs(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"])).toBe(false);
-    expect(runs(["-C", "rev-parse", "status"])).toBe(false);
-  });
-
-  it("keeps the console for launchers, shims and other platforms", () => {
-    expect(runs(["rev-parse", "HEAD"], "C:\\Program Files\\Git\\cmd\\git.exe")).toBe(false);
-    expect(runs(["rev-parse", "HEAD"], "D:\\PortableGit\\bin\\git.exe")).toBe(false);
-    expect(runs(["rev-parse", "HEAD"], "C:\\Users\\x\\scoop\\shims\\git.exe")).toBe(false);
-    expect(runs(["rev-parse", "HEAD"], "/usr/bin/git", "linux")).toBe(false);
-    expect(runs(["rev-parse", "HEAD"], git, "linux")).toBe(false);
-    expect(runs(["rev-parse"], "C:\\Program Files\\Git\\ucrt64\\bin\\node.exe")).toBe(false);
+  it.each([
+    ["win32", "C:\\Program Files\\Git\\cmd\\git.exe"],
+    ["win32", "C:\\Users\\x\\scoop\\shims\\git.exe"],
+    ["linux", git],
+  ] as const)("keeps the console on %s for %s", (platform, executable) => {
+    expect(runsGitWithoutConsole(platform, executable, ["rev-parse", "--show-toplevel"])).toBe(
+      false,
+    );
   });
 });
 

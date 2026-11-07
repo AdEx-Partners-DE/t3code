@@ -158,6 +158,7 @@ export interface EnvironmentThreadShell {
   readonly latestUserAuthoredMessageAt?: string | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  readonly pendingUserInputAt?: string | null;
   /** When the open approval or question was raised, so clients can show how long it has waited. */
   readonly pendingRequestSince: string | null;
   /** What a live subagent below this thread waits on the user for. Subagent
@@ -320,6 +321,10 @@ export function presentThreadShell(
       thread.pendingRuntimeRequest === null || thread.pendingRuntimeRequest.kind === "auth_refresh"
         ? null
         : nullableIso(thread.pendingRuntimeRequest.createdAt),
+    pendingUserInputAt:
+      thread.pendingRuntimeRequest?.kind === "user_input"
+        ? iso(thread.pendingRuntimeRequest.createdAt)
+        : null,
     pendingSubagentRequest,
     pendingGuestMessageCount: thread.pendingGuestMessageCount ?? 0,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,

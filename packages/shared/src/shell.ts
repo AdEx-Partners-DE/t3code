@@ -725,71 +725,6 @@ export function preferGitForWindowsBinary(
   return executable;
 }
 
-const GIT_GLOBAL_OPTIONS_WITH_VALUE = new Set([
-  "-C",
-  "-c",
-  "--git-dir",
-  "--work-tree",
-  "--namespace",
-  "--config-env",
-  "--super-prefix",
-  "--attr-source",
-]);
-
-const positionals = (args: ReadonlyArray<string>) => args.filter((arg) => !arg.startsWith("-"));
-
-const GIT_READ_SUBCOMMANDS = new Map<string, (args: ReadonlyArray<string>) => boolean>([
-  ["rev-parse", () => true],
-  ["rev-list", () => true],
-  ["merge-base", () => true],
-  ["for-each-ref", () => true],
-  ["show-ref", () => true],
-  [
-    "config",
-    (args) =>
-      args[0] === "get" ||
-      args[0] === "list" ||
-      args.some(
-        (arg) => arg === "--get" || arg.startsWith("--get-") || arg === "--list" || arg === "-l",
-      ),
-  ],
-  [
-    "symbolic-ref",
-    (args) => !args.includes("--delete") && !args.includes("-d") && positionals(args).length <= 1,
-  ],
-  [
-    "remote",
-    (args) => {
-      const [first] = positionals(args);
-      return first === undefined || first === "get-url";
-    },
-  ],
-]);
-
-// Git for Windows needs no console, but hooks, MSYS children and launchers can.
-// Keep normal spawning for those commands instead of detaching them.
-export function runsGitWithoutConsole(
-  platform: NodeJS.Platform,
-  executable: string,
-  args: ReadonlyArray<string>,
-): boolean {
-  if (platform !== "win32") return false;
-  const path = NodePath.win32;
-  if (path.basename(executable).toLowerCase() !== "git.exe") return false;
-  const binDirectory = path.dirname(executable);
-  if (path.basename(binDirectory).toLowerCase() !== "bin") return false;
-  const build = path.basename(path.dirname(binDirectory)).toLowerCase();
-  if (!GIT_FOR_WINDOWS_BUILDS.some((candidate) => candidate === build)) return false;
-  if (args.includes("--help")) return false;
-  let index = 0;
-  for (let arg = args[0]; arg?.startsWith("-"); arg = args[index]) {
-    index += GIT_GLOBAL_OPTIONS_WITH_VALUE.has(arg) ? 2 : 1;
-  }
-  const subcommand = args[index];
-  const isRead = subcommand === undefined ? undefined : GIT_READ_SUBCOMMANDS.get(subcommand);
-  return isRead?.(args.slice(index + 1)) ?? false;
-}
-
 // What npm's cmd-shim writes for a package whose bin is a native executable.
 const NPM_EXECUTABLE_SHIM_PREFIX = [
   "@ECHO off",
@@ -898,6 +833,46 @@ const resolveMacosGit = Effect.fnUntraced(function* (
 export interface SpawnCommandOptions extends CommandAvailabilityOptions {
   /** Bypass npm cmd-shims; see npmShimExecutable for process-lifetime semantics. */
   readonly bypassNpmShim?: boolean;
+}
+
+// `*` is one argument that is not an option. These forms read refs or config
+// only, so git starts no hook, helper, pager, editor or lazy fetch for them.
+const CONSOLE_FREE_GIT_READS = [
+  "rev-parse --git-path index",
+  "rev-parse --git-common-dir",
+  "rev-parse --show-toplevel",
+  "rev-parse --symbolic-full-name HEAD",
+  "rev-parse --abbrev-ref --symbolic-full-name @{upstream}",
+  "symbolic-ref --quiet HEAD",
+  "symbolic-ref *",
+  "remote",
+  "remote get-url *",
+  "remote get-url -- *",
+  "config --get *",
+].map((form) => form.split(" "));
+
+export function runsGitWithoutConsole(
+  platform: NodeJS.Platform,
+  executable: string,
+  args: ReadonlyArray<string>,
+): boolean {
+  if (platform !== "win32") return false;
+  const { basename, dirname } = NodePath.win32;
+  const bin = dirname(executable);
+  const build = basename(dirname(bin)).toLowerCase();
+  if (basename(executable).toLowerCase() !== "git.exe" || basename(bin).toLowerCase() !== "bin") {
+    return false;
+  }
+  if (!GIT_FOR_WINDOWS_BUILDS.some((candidate) => candidate === build)) return false;
+  const rest =
+    args[0] === "--git-dir" && args[1] !== undefined && !args[1].startsWith("-")
+      ? args.slice(2)
+      : args;
+  return CONSOLE_FREE_GIT_READS.some(
+    (form) =>
+      form.length === rest.length &&
+      form.every((part, i) => part === rest[i] || (part === "*" && !rest[i]!.startsWith("-"))),
+  );
 }
 
 // Untraced because it runs before most spawns and returns at once off Windows.
