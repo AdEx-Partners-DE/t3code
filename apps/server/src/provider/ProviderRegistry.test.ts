@@ -3120,6 +3120,34 @@ it.layer(
         );
         assert.strictEqual(status.status, "error");
         assert.strictEqual(status.auth.status, "unauthenticated");
+        assert.notInclude(status.message, "CLAUDE_CONFIG_DIR");
+      }).pipe(
+        Effect.provide(
+          layerMockSpawner((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("names a logged-out instance's own config dir in the sign-in hint", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const homePath = path.resolve("/synthetic/claude-personal");
+        // A bare `claude auth login` signs in the default config dir and replaces that account's login.
+        const status = yield* checkClaudeProviderStatus(
+          { ...defaultClaudeSettings, homePath },
+          claudeCapabilities({
+            tokenSource: "none",
+            apiKeySource: "none",
+            apiProvider: "firstParty",
+          }),
+          { ANTHROPIC_BASE_URL: "" },
+        );
+        assert.strictEqual(status.auth.status, "unauthenticated");
+        assert.include(status.message, `CLAUDE_CONFIG_DIR set to ${JSON.stringify(homePath)}`);
       }).pipe(
         Effect.provide(
           layerMockSpawner((args) => {
