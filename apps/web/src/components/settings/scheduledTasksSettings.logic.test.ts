@@ -26,6 +26,7 @@ import {
   scheduleFromDraft,
   taskToDraft,
   type ScheduledTaskListView,
+  unbindDraftFromThread,
 } from "./scheduledTasksSettings.logic";
 
 const laptopId = EnvironmentId.make("laptop");
@@ -343,6 +344,21 @@ describe("idle scheduled tasks", () => {
     expect(scheduleFromDraft({ ...draft, idleMaxRuns: "0" })).toBeNull();
     expect(scheduleFromDraft({ ...draft, idleMaxRuns: "2.5" })).toBeNull();
     expect(scheduleFromDraft({ ...draft, idlePauseMinutes: "-1" })).toBeNull();
+  });
+});
+
+describe("scheduled task destination", () => {
+  it("unbinding leaves the shared checkout for a new worktree from the remote", () => {
+    const rootBound = taskToDraft({
+      ...legacyTask,
+      threadId: ThreadId.make("thread:bound"),
+      workspaceStrategy: { type: "root" },
+    });
+    expect(unbindDraftFromThread(rootBound)).toMatchObject({
+      threadId: "",
+      workspaceMode: "worktree",
+      startFromOrigin: true,
+    });
   });
 });
 

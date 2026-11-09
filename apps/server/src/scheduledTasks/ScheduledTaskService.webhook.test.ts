@@ -345,6 +345,12 @@ it.effect.each(["pending", "running"] as const)(
           isScratchProject: () => Effect.succeed(false),
         }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: () =>
+            Effect.succeed({
+              projectId: "project-webhook",
+              deletedAt: null,
+              archivedAt: null,
+            } as never),
           sendToThread: (input) =>
             Queue.offer(sends, input).pipe(
               Effect.andThen(Deferred.await(gate)),
