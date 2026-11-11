@@ -1888,6 +1888,7 @@ export const layer = Layer.effect(
               const at = archivedAt.get(task.id);
               return at === undefined ? task : { ...task, archivedAt: at };
             }),
+            timeZone: DateTime.zoneToString(DateTime.zoneMakeLocal()),
           };
         }),
         Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),

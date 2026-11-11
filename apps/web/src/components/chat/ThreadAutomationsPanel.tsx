@@ -23,7 +23,8 @@ import {
 
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
-import { ScheduledRelativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
+import { ScheduledRelativeLabel } from "../settings/ScheduledTasksSettings";
+import { scheduleLabel } from "../settings/scheduledTasksSettings.logic";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useThreadShell } from "../../state/entities";
@@ -55,10 +56,15 @@ function statusDotClass(task: ScheduledTask, held: boolean): string {
   return STATUS_DOT_CLASS[asleep ? "never" : task.lastRunStatus];
 }
 
-function taskScheduleLine(task: ScheduledTask, held: boolean, nowMs: number) {
+function taskScheduleLine(
+  task: ScheduledTask,
+  timeZone: string | undefined,
+  held: boolean,
+  nowMs: number,
+) {
   return (
     <>
-      {scheduleLabel(task.schedule)}
+      {scheduleLabel(task.schedule, timeZone, task.nextRunAt)}
       {task.blockedByPolicy !== undefined ? (
         ` · ${task.blockedByPolicy}`
       ) : !task.enabled ? (
@@ -275,13 +281,13 @@ export function ThreadAutomationsPanel(props: {
                   {task.title}
                 </span>
                 <p className="truncate text-2xs text-muted-foreground">
-                  {taskScheduleLine(task, isHeld(task), nowMs)}
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone, isHeld(task), nowMs)}
                 </p>
               </TooltipTrigger>
               <TooltipPopup side="left">
                 <p className="font-medium">{task.title}</p>
                 <p className="text-muted-foreground">
-                  {taskScheduleLine(task, isHeld(task), nowMs)}
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone, isHeld(task), nowMs)}
                 </p>
               </TooltipPopup>
             </Tooltip>

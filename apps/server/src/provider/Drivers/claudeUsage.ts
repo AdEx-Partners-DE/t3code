@@ -16,10 +16,9 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 export const CLAUDE_SYNTHETIC_MODEL = "<synthetic>";
 
 /**
- * Claude Code writes one record per assistant *content block*, all sharing the message's
- * `dedupeKey`, so summing them overcounts. The copies do not always agree: subagent transcripts
- * put the stream-start snapshot, a few output tokens, on the first block and the final usage on
- * the last. The caller keeps each channel's maximum per key (`mergeUsageCopies`).
+ * Claude Code repeats a message's `dedupeKey` for each assistant content block.
+ * Subagent blocks can progress from stream-start to final usage, so callers
+ * must count each key once using the maximum of each token channel.
  */
 export function parseClaudeLine(line: string): readonly UsageRecord[] {
   let parsed: unknown;

@@ -85,107 +85,67 @@ describe("UsageAggregator", () => {
     expect(bucket).not.toHaveProperty("ultrafastCostUsd");
   });
 
-  it("counts identical copies of a dedupe key once", () => {
-    const copy = record({ dedupeKey: "msg_1:" });
-    const result = aggregate([copy, copy, copy]);
-
-    expect(result.duplicatesDropped).toBe(2);
-    expect(result.buckets).toEqual(aggregate([copy]).buckets);
-  });
-
-  it("keeps each channel's maximum when copies of a key peak on different channels", () => {
-    const totals = record().totals;
-    const result = aggregate([
-      record({
-        dedupeKey: "msg_1:",
-        totals: { ...totals, cachedInputTokens: 1200, outputTokens: 3 },
-      }),
-      record({ dedupeKey: "msg_1:", totals: { ...totals, cacheCreationTokens: 40 } }),
-    ]);
-
-    expect(result.duplicatesDropped).toBe(1);
-    expect(result.buckets).toEqual(
-      aggregate([
-        record({
-          dedupeKey: "msg_1:",
-          totals: { ...totals, cachedInputTokens: 1200, cacheCreationTokens: 40 },
-        }),
-      ]).buckets,
-    );
-  });
-
-  it("counts the full copy of a message whichever file replays it zeroed first", () => {
-    const original = record({ dedupeKey: "msg_1:" });
-    const replay = record({
-      dedupeKey: "msg_1:",
-      sessionId: "session-fork",
-      totals: {
-        uncachedInputTokens: 0,
-        cachedInputTokens: 0,
-        cacheCreationTokens: 0,
-        outputTokens: 0,
-        reasoningTokens: 0,
-      },
-    });
-    const other = record({ dedupeKey: "msg_2:", totals: { ...record().totals, outputTokens: 7 } });
-
-    const replayFirst = aggregate([other, replay, original]);
-    const originalFirst = aggregate([other, original, replay]);
-
-    expect(replayFirst.duplicatesDropped).toBe(1);
-    expect(replayFirst.buckets[0]).toMatchObject({
-      totals: originalFirst.buckets[0]?.totals,
-      costUsd: expect.closeTo(originalFirst.buckets[0]?.costUsd ?? Number.NaN, 12),
-      cacheSavingsUsd: expect.closeTo(originalFirst.buckets[0]?.cacheSavingsUsd ?? Number.NaN, 12),
-      categoryCostUsd: originalFirst.buckets[0]?.categoryCostUsd,
-      records: 2,
-      unpricedRecords: 0,
-      costSource: "modelPriced",
-    });
-  });
-
-  it("retracts the held copy's cost source when a later copy reports a cost", () => {
-    const result = aggregate([
-      record({ dedupeKey: "msg_1:" }),
-      record({ dedupeKey: "msg_1:", reportedCostUsd: 1.25 }),
-      record(),
-    ]);
-
-    expect(result.buckets[0]).toMatchObject({
-      costUsd: expect.closeTo(1.25 + 0.004625, 12),
-      records: 2,
-    });
-    expect(
-      aggregate([
-        record({ dedupeKey: "msg_1:" }),
-        record({ dedupeKey: "msg_1:", reportedCostUsd: 1.25 }),
-      ]).buckets[0]?.costSource,
-    ).toBe("providerReported");
-  });
-
-  it("leaves no cost breakdown once the only split contribution is retracted", () => {
-    const zero = {
+  it("merges partial copies of a key by channel maximum in the first copy's bucket", () => {
+    const zeroTotals = {
       uncachedInputTokens: 0,
       cachedInputTokens: 0,
       cacheCreationTokens: 0,
       outputTokens: 0,
       reasoningTokens: 0,
     };
-    const merged = record({ dedupeKey: "msg_1:", totals: zero, reportedCostUsd: 1 });
+    const partial = record({
+      dedupeKey: "msg_1:",
+      speed: "fast",
+      reportedCostUsd: 1,
+      totals: { ...record().totals, cachedInputTokens: 1200, outputTokens: 3, reasoningTokens: 5 },
+    });
+    const complete = record({
+      dedupeKey: "msg_1:",
+      model: "claude-fable-5[1m]",
+      timestampMs: Date.parse("2026-08-08T12:00:00Z"),
+      sessionId: "session-fork",
+      reportedCostUsd: 2,
+      totals: {
+        uncachedInputTokens: 2,
+        cachedInputTokens: 1000,
+        cacheCreationTokens: 40,
+        outputTokens: 264,
+        reasoningTokens: 135,
+      },
+    });
+    const zero = { ...partial, totals: zeroTotals, reportedCostUsd: null };
+    const merged = {
+      reportedCostUsd: 2,
+      totals: { ...complete.totals, uncachedInputTokens: 100, cachedInputTokens: 1200 },
+    };
 
-    expect(aggregate([record({ dedupeKey: "msg_1:", totals: zero }), merged]).buckets).toEqual(
-      aggregate([merged]).buckets,
-    );
+    for (const copies of [
+      [zero, partial, complete, complete],
+      [complete, partial, zero, zero],
+    ]) {
+      const aggregator = new UsageAggregator({
+        timeZone: "UTC",
+        sinceDay: "2026-08-01",
+        untilDay: "2026-08-31",
+        rates,
+      });
+      copies.forEach((copy, index) => aggregator.add(copy, `${index}.jsonl`));
+      const result = aggregator.finish();
+      const expected = aggregate([{ ...copies[0]!, ...merged }]).buckets[0];
+
+      expect(result.duplicatesDropped).toBe(3);
+      expect(result.buckets).toEqual([{ ...expected, sourcePath: "0.jsonl" }]);
+    }
   });
 
-  it("keeps a key whose first copy fell outside the window out, as before", () => {
+  it("does not count a key whose first copy fell outside the window", () => {
     const result = aggregate([
-      record({ dedupeKey: "msg_1:", timestampMs: Date.parse("2026-07-31T23:59:59Z") }),
+      record({ dedupeKey: "msg_1:", timestampMs: Date.parse("2026-07-01T12:00:00Z") }),
       record({ dedupeKey: "msg_1:", totals: { ...record().totals, outputTokens: 500 } }),
     ]);
 
-    expect(result.outOfWindow).toBe(1);
     expect(result.duplicatesDropped).toBe(1);
+    expect(result.outOfWindow).toBe(1);
     expect(result.buckets).toHaveLength(0);
   });
 

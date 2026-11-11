@@ -53,8 +53,6 @@ interface MutableBucket {
   costUsd: number;
   cacheSavingsUsd: number;
   categoryCostUsd: UsageCategoryCost | null;
-  /** Retracting the last split contribution must leave no breakdown, not a zero one. */
-  categorizedRecords: number;
   fastCostUsd: number;
   ultrafastCostUsd: number;
   speedPremiumUsd: number;
@@ -131,8 +129,10 @@ export interface AggregateResult {
   readonly outOfWindow: number;
 }
 
-// Transcript copies may contain partial counts; merge per-channel maxima.
-// Keep the original bucket and object identity when the copy adds nothing.
+/**
+ * Partial copies share a billed message's key: keep each token channel's maximum and the larger
+ * reported cost, and the first copy's time, model, session and speed so it stays in its bucket.
+ */
 export function mergeUsageCopies(held: UsageRecord, copy: UsageRecord): UsageRecord {
   const a = held.totals;
   const b = copy.totals;
@@ -163,16 +163,13 @@ export function mergeUsageCopies(held: UsageRecord, copy: UsageRecord): UsageRec
   };
 }
 
-const ZERO_CATEGORY_COST: UsageCategoryCost = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
-
 interface Contribution {
   record: UsageRecord;
   /** Null when the first copy fell outside the window. */
   readonly bucket: MutableBucket | null;
 }
 
-// Resumed and forked transcripts share billed messages across files.
-// Replace a partial copy's contribution when a richer duplicate arrives.
+/** Deduplicates across the whole scan; Claude copies records into resumed/forked transcripts. */
 export class UsageAggregator {
   readonly #buckets = new Map<string, MutableBucket>();
   readonly #seen = new Map<string, Contribution>();
@@ -213,14 +210,7 @@ export class UsageAggregator {
       const held = this.#seen.get(record.dedupeKey);
       if (held !== undefined) {
         this.#duplicatesDropped += 1;
-        const merged = mergeUsageCopies(held.record, record);
-        if (merged !== held.record) {
-          if (held.bucket !== null) {
-            this.#accumulate(held.bucket, held.record, -1);
-            this.#accumulate(held.bucket, merged, 1);
-          }
-          held.record = merged;
-        }
+        if (held.bucket !== null) held.record = mergeUsageCopies(held.record, record);
         return false;
       }
     }
@@ -231,7 +221,8 @@ export class UsageAggregator {
       this.#outOfWindow += 1;
       return false;
     }
-    this.#accumulate(bucket, record, 1);
+    // Keyed usage is counted in finish(), once all its copies are merged.
+    if (record.dedupeKey === null) this.#accumulate(bucket, record);
     if (record.sessionId.length > 0) bucket.sessions.add(record.sessionId);
     return true;
   }
@@ -260,38 +251,40 @@ export class UsageAggregator {
     return this.#bucketFor(day, hourIndex, record.provider, record.model, source);
   }
 
-  #accumulate(bucket: MutableBucket, record: UsageRecord, sign: 1 | -1): void {
+  #accumulate(bucket: MutableBucket, record: UsageRecord): void {
     const priced = priceUsage(this.#options.rates, record, this.#options.priceOverrides);
 
     const totals = bucket.totals;
-    totals.uncachedInputTokens += sign * record.totals.uncachedInputTokens;
-    totals.cachedInputTokens += sign * record.totals.cachedInputTokens;
-    totals.cacheCreationTokens += sign * record.totals.cacheCreationTokens;
-    totals.outputTokens += sign * record.totals.outputTokens;
-    totals.reasoningTokens += sign * record.totals.reasoningTokens;
-    bucket.costUsd += sign * priced.costUsd;
+    totals.uncachedInputTokens += record.totals.uncachedInputTokens;
+    totals.cachedInputTokens += record.totals.cachedInputTokens;
+    totals.cacheCreationTokens += record.totals.cacheCreationTokens;
+    totals.outputTokens += record.totals.outputTokens;
+    totals.reasoningTokens += record.totals.reasoningTokens;
+    bucket.costUsd += priced.costUsd;
     if (priced.categoryCostUsd !== null) {
-      bucket.categorizedRecords += sign;
-      const sum = bucket.categoryCostUsd ?? ZERO_CATEGORY_COST;
+      const sum = bucket.categoryCostUsd;
       const add = priced.categoryCostUsd;
       bucket.categoryCostUsd =
-        bucket.categorizedRecords === 0
-          ? null
+        sum === null
+          ? add
           : {
-              input: sum.input + sign * add.input,
-              cacheRead: sum.cacheRead + sign * add.cacheRead,
-              cacheWrite: sum.cacheWrite + sign * add.cacheWrite,
-              output: sum.output + sign * add.output,
+              input: sum.input + add.input,
+              cacheRead: sum.cacheRead + add.cacheRead,
+              cacheWrite: sum.cacheWrite + add.cacheWrite,
+              output: sum.output + add.output,
             };
     }
-    if (record.speed === "fast") bucket.fastCostUsd += sign * priced.costUsd;
-    if (record.speed === "ultrafast") bucket.ultrafastCostUsd += sign * priced.costUsd;
-    bucket.speedPremiumUsd += sign * priced.speedPremiumUsd;
-    bucket.cacheSavingsUsd +=
-      sign * cacheSavingsUsd(this.#options.rates, record, this.#options.priceOverrides);
-    bucket.records += sign;
-    if (priced.costSource === "unpriced") bucket.unpricedRecords += sign;
-    if (priced.costSource === "providerReported") bucket.providerReportedRecords += sign;
+    if (record.speed === "fast") bucket.fastCostUsd += priced.costUsd;
+    if (record.speed === "ultrafast") bucket.ultrafastCostUsd += priced.costUsd;
+    bucket.speedPremiumUsd += priced.speedPremiumUsd;
+    bucket.cacheSavingsUsd += cacheSavingsUsd(
+      this.#options.rates,
+      record,
+      this.#options.priceOverrides,
+    );
+    bucket.records += 1;
+    if (priced.costSource === "unpriced") bucket.unpricedRecords += 1;
+    if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;
   }
 
   // Aliases use the target's rate, replacing provider-specific rateModel.
@@ -332,7 +325,6 @@ export class UsageAggregator {
         costUsd: 0,
         cacheSavingsUsd: 0,
         categoryCostUsd: null,
-        categorizedRecords: 0,
         fastCostUsd: 0,
         ultrafastCostUsd: 0,
         speedPremiumUsd: 0,
@@ -348,6 +340,10 @@ export class UsageAggregator {
   }
 
   finish(): AggregateResult {
+    for (const { record, bucket } of this.#seen.values()) {
+      if (bucket !== null) this.#accumulate(bucket, record);
+    }
+    this.#seen.clear();
     const buckets: UsageBucket[] = [];
     for (const [key, bucket] of this.#buckets) {
       const [day = "", hourStart = "", provider = "", model = "", sourcePath = ""] =

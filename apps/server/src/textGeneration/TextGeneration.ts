@@ -1,7 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type { ModelSelection, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
 import {
   isProviderAvailable,
   isProviderTextGenerationCapable,
@@ -85,6 +85,7 @@ export const make = Effect.gen(function* () {
   const generate = Effect.fn("TextGeneration.generate")(function* <A>(
     operation: TextGenerationOp,
     selection: ModelSelection,
+    projectId: ProjectId | null | undefined,
     invoke: (
       service: ProviderTextGeneration,
       modelSelection: ModelSelection,
@@ -133,7 +134,7 @@ export const make = Effect.gen(function* () {
             return (
               instanceId !== selection.instanceId &&
               provider?.enabled === true &&
-              resolveProjectProviderInstanceEnabled(settings, null, instanceId) &&
+              resolveProjectProviderInstanceEnabled(settings, projectId ?? null, instanceId) &&
               provider.installed &&
               provider.auth.status !== "unauthenticated" &&
               provider.status !== "error" &&
@@ -159,48 +160,68 @@ export const make = Effect.gen(function* () {
   });
   return TextGeneration.of({
     generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {
-      return generate("generateCommitMessage", input.modelSelection, (service, modelSelection) =>
-        service.generateCommitMessage({ ...input, modelSelection }),
+      return generate(
+        "generateCommitMessage",
+        input.modelSelection,
+        input.projectId,
+        (service, modelSelection) => service.generateCommitMessage({ ...input, modelSelection }),
       );
     }),
     generatePrContent: Effect.fn("TextGeneration.generatePrContent")(function (input) {
-      return generate("generatePrContent", input.modelSelection, (service, modelSelection) =>
-        service.generatePrContent({ ...input, modelSelection }),
+      return generate(
+        "generatePrContent",
+        input.modelSelection,
+        input.projectId,
+        (service, modelSelection) => service.generatePrContent({ ...input, modelSelection }),
       );
     }),
     generateBranchName: Effect.fn("TextGeneration.generateBranchName")(function (input) {
-      return generate("generateBranchName", input.modelSelection, (service, modelSelection) =>
-        service.generateBranchName({ ...input, modelSelection }),
+      return generate(
+        "generateBranchName",
+        input.modelSelection,
+        input.projectId,
+        (service, modelSelection) => service.generateBranchName({ ...input, modelSelection }),
       );
     }),
     generateThreadChecklist: Effect.fn("TextGeneration.generateThreadChecklist")(function (input) {
-      return generate("generateThreadChecklist", input.modelSelection, (service, modelSelection) =>
-        service.generateThreadChecklist === undefined
-          ? Effect.fail(
-              new TextGenerationError({
-                operation: "generateThreadChecklist",
-                detail:
-                  "This provider cannot write checklists. Choose another text generation model.",
-              }),
-            )
-          : service.generateThreadChecklist({ ...input, modelSelection }),
+      return generate(
+        "generateThreadChecklist",
+        input.modelSelection,
+        undefined,
+        (service, modelSelection) =>
+          service.generateThreadChecklist === undefined
+            ? Effect.fail(
+                new TextGenerationError({
+                  operation: "generateThreadChecklist",
+                  detail:
+                    "This provider cannot write checklists. Choose another text generation model.",
+                }),
+              )
+            : service.generateThreadChecklist({ ...input, modelSelection }),
       );
     }),
     judgeThreadBlocker: Effect.fn("TextGeneration.judgeThreadBlocker")(function (input) {
-      return generate("judgeThreadBlocker", input.modelSelection, (service, modelSelection) =>
-        service.judgeThreadBlocker === undefined
-          ? Effect.fail(
-              new TextGenerationError({
-                operation: "judgeThreadBlocker",
-                detail: "This provider cannot judge blockers. Choose another model.",
-              }),
-            )
-          : service.judgeThreadBlocker({ ...input, modelSelection }),
+      return generate(
+        "judgeThreadBlocker",
+        input.modelSelection,
+        undefined,
+        (service, modelSelection) =>
+          service.judgeThreadBlocker === undefined
+            ? Effect.fail(
+                new TextGenerationError({
+                  operation: "judgeThreadBlocker",
+                  detail: "This provider cannot judge blockers. Choose another model.",
+                }),
+              )
+            : service.judgeThreadBlocker({ ...input, modelSelection }),
       );
     }),
     generateReviewGuide: Effect.fn("TextGeneration.generateReviewGuide")(function (input) {
-      return generate("generateReviewGuide", input.modelSelection, (service, modelSelection) =>
-        service.generateReviewGuide({ ...input, modelSelection }),
+      return generate(
+        "generateReviewGuide",
+        input.modelSelection,
+        input.projectId,
+        (service, modelSelection) => service.generateReviewGuide({ ...input, modelSelection }),
       );
     }),
     generateTranscriptionPostProcessing: Effect.fn(
@@ -209,6 +230,7 @@ export const make = Effect.gen(function* () {
       return generate(
         "generateTranscriptionPostProcessing",
         input.modelSelection,
+        null,
         (service, modelSelection) =>
           service.generateTranscriptionPostProcessing({ ...input, modelSelection }),
       );
@@ -217,6 +239,7 @@ export const make = Effect.gen(function* () {
       return generate(
         "generateThreadTitle",
         input.modelSelection,
+        input.projectId,
         (textGeneration, modelSelection) =>
           Effect.gen(function* () {
             const linkedContext =

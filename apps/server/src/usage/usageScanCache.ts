@@ -6,20 +6,21 @@ import type {
 } from "@t3tools/provider-core/server/usage";
 import * as Schema from "effect/Schema";
 
-import { mergeUsageCopies } from "./usageAggregation.ts";
 import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
+import { mergeUsageCopies } from "./usageAggregation.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-const USAGE_SCAN_CACHE_VERSION = 11 as const;
+const USAGE_SCAN_CACHE_VERSION = 12 as const;
 const SPEED_COMPATIBLE_SINCE_VERSION = 4;
 
 /**
  * An older server sharing that directory cannot read a newer cache and would
  * replace it, dropping saved usage for deleted transcripts. Separate files keep
- * both.
+ * the newer one; older files are removed once it is saved.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v11.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v12.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
+  "usage-scan-cache-v11.json",
   "usage-scan-cache-v10.json",
   "usage-scan-cache-v9.json",
   "usage-scan-cache-v8.json",
@@ -135,32 +136,28 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
   };
 }
 
-/** Memoizes immutable entries by identity; growing intern tables preserve indexes, retaining unused strings until restart. */
+/** Yields the document in pieces so large caches never become one string; growing intern tables preserve indexes, retaining unused strings until restart. */
 export function makeScanCacheWriter(): (
   cache: ScanCache,
   extra: Readonly<Record<string, unknown>>,
-) => string {
+) => Iterable<string> {
   const tables = makeInternTables();
-  const fragments = new WeakMap<CachedFile, string>();
-  return (cache, extra) => {
-    const files: string[] = [];
-    for (const [path, entry] of cache) {
-      let fragment = fragments.get(entry);
-      if (fragment === undefined) {
-        fragment = JSON.stringify(serializeFile(entry, tables));
-        fragments.set(entry, fragment);
-      }
-      files.push(`${JSON.stringify(path)}:${fragment}`);
+  function* encode(entries: readonly (readonly [string, CachedFile])[], extra: object) {
+    yield '{"files":{';
+    for (const [index, [path, entry]] of entries.entries()) {
+      yield `${index === 0 ? "" : ","}${JSON.stringify(path)}:${JSON.stringify(serializeFile(entry, tables))}`;
     }
     // Encoded after the files, which may have added to the intern tables.
-    const head = JSON.stringify({
+    const tail = JSON.stringify({
       ...extra,
       version: USAGE_SCAN_CACHE_VERSION,
       models: tables.models,
       sessions: tables.sessions,
     });
-    return `${head.slice(0, -1)},"files":{${files.join(",")}}}`;
-  };
+    yield `},${tail.slice(1)}`;
+  }
+  // Snapshot now: the encoding runs later, while the file is written.
+  return (cache, extra) => encode([...cache], extra);
 }
 
 function isRecordArray(value: unknown): value is readonly unknown[] {
@@ -293,15 +290,13 @@ export function decodeScanCache(
       continue;
     }
     // Keep history for deleted rollouts, but re-parse incompatible reducer state.
-    // Pre-v6 rows can be partial copies, so every format re-parses them.
     // v9 and v11 repair skipped Codex requests; clean v8+ entries stay served while unchanged.
-    // v10 adds Claude advisor calls, which no older Claude entry holds.
+    // v10 adds Claude advisor calls; before v12 a repeated Claude key kept its first, possibly partial, copy.
     const legacy =
-      version < 6 ||
-      (entry.p === "claude" && version < 10) ||
+      (entry.p === "claude" && version < 12) ||
       (format.state !== undefined &&
-        entry.p === "codex" &&
-        (version < 8 || (version < 11 && malformedRecords > 0)));
+        (version < 6 ||
+          (entry.p === "codex" && (version < 8 || (version < 11 && malformedRecords > 0)))));
     // A corrupt state disqualifies the entry: resuming with it would attach
     // appended usage to the wrong model or replay fork-copied history.
     if (!legacy && !isValidState.get(entry.p)?.(entry.cs)) continue;
@@ -360,11 +355,7 @@ export function pruneScanCache(cache: ScanCache, retentionCutoffMs: number): num
   return removed;
 }
 
-/**
- * Folds each repeated `dedupeKey` into its first record with `mergeUsageCopies`. Callers pass only
- * newline-terminated records: an unterminated tail can still change, so its copies stay separate
- * and the aggregator merges them for that scan.
- */
+/** Pass only newline-terminated records: an unterminated tail can still change, so the aggregator merges it per scan. */
 export function dedupeWithinFile(records: readonly UsageRecord[]): readonly UsageRecord[] {
   const kept: UsageRecord[] = [];
   const firstIndex = new Map<string, number>();
