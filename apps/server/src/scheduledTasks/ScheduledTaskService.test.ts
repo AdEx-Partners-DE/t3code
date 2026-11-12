@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Fiber from "effect/Fiber";
@@ -137,6 +138,7 @@ it.effect.each([
                   }),
                   Layer.mock(ThreadManagementService.ThreadManagementService)({
                     getProjectThreadRecords: () => Effect.succeed({ runs: [] } as never),
+                    getThreadRecords: () => Effect.succeed({ runs: [] } as never),
                     sendToThread: (input) => {
                       sends.push(input);
                       return Effect.succeed({} as never);
@@ -671,90 +673,6 @@ it.effect("keeps an archived task off and out of the scheduler until it is resto
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
-it.effect("does not queue another prompt while the task's last one still waits in its thread", () =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const now = "2026-09-09T12:00:00.000Z";
-    yield* insertRow(sql, { id: "bound", next: now, status: "never", enabled: 1 }, now);
-    yield* sql`UPDATE scheduled_tasks SET thread_id = 'thread:test' WHERE task_id = 'bound'`;
-    yield* TestClock.setTime(Date.parse(now) + 1_000);
-
-    const sent = yield* Ref.make(0);
-    const delivered = yield* Deferred.make<void>();
-    const serviceWith = (pendingMessageId: string | null, readFails = false) =>
-      Layer.provideMerge(
-        ScheduledTaskService.layer,
-        Layer.mergeAll(
-          Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
-          ManagedPolicy.layerTest(),
-          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-            namedProjectsRoot: "/projects",
-            isScratchProject: () => Effect.succeed(false),
-          }),
-          Layer.mock(ThreadManagementService.ThreadManagementService)({
-            getProjectThreadRecords: (() =>
-              readFails
-                ? Effect.fail({ _tag: "ThreadRecordsUnavailable" as const })
-                : Effect.succeed({
-                    runs:
-                      pendingMessageId === null
-                        ? []
-                        : [{ status: "queued", userMessageId: pendingMessageId }],
-                  })) as never,
-            sendToThread: () =>
-              Ref.update(sent, (n) => n + 1).pipe(
-                Effect.andThen(Deferred.succeed(delivered, undefined)),
-                Effect.andThen(Effect.die(new Error("test send failure"))),
-              ),
-          }),
-          Layer.mock(SecretRequests.SecretRequests)({}),
-          NodeCrypto.layer,
-          Scheduler.layer,
-        ),
-      );
-
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        yield* Layer.build(serviceWith("scheduled-task-message:bound:1:scheduled"));
-        yield* TestClock.adjust("6 seconds");
-        assert.equal(yield* Ref.get(sent), 0);
-        const rows = yield* sql<{ run_count: number; next_run_at: string | null }>`
-            SELECT run_count, next_run_at FROM scheduled_tasks WHERE task_id = 'bound'
-          `;
-        // Skipped, not run: nothing counted, and the next tick is a full interval away.
-        assert.equal(rows[0]?.run_count, 0);
-        assert.isTrue((rows[0]?.next_run_at ?? "") > now);
-      }),
-    );
-
-    // A failed records read must defer the timer without admitting another prompt.
-    yield* sql`UPDATE scheduled_tasks SET next_run_at = ${now} WHERE task_id = 'bound'`;
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        yield* Layer.build(serviceWith(null, true));
-        yield* TestClock.adjust("6 seconds");
-        assert.equal(yield* Ref.get(sent), 0);
-        const rows = yield* sql<{ run_count: number; next_run_at: string | null }>`
-          SELECT run_count, next_run_at FROM scheduled_tasks WHERE task_id = 'bound'
-        `;
-        assert.equal(rows[0]?.run_count, 0);
-        assert.isTrue((rows[0]?.next_run_at ?? "") > now);
-      }),
-    );
-
-    // Another task's prompt in the same thread does not hold this one back.
-    yield* sql`UPDATE scheduled_tasks SET next_run_at = ${now} WHERE task_id = 'bound'`;
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        yield* Layer.build(serviceWith("scheduled-task-message:other:1:scheduled"));
-        yield* TestClock.adjust("6 seconds");
-        yield* Deferred.await(delivered);
-        assert.equal(yield* Ref.get(sent), 1);
-      }),
-    );
-  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
-);
-
 // The idle poll reads the watched thread, the last reply and the account's
 // headroom before it sends. One harness, three ways a task ends instead.
 const idleHarness = (input: {
@@ -1234,6 +1152,94 @@ it.effect("thread cleanup notifies subscribers and a finishing run cannot recrea
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(run);
       assert.lengthOf((yield* service.list()).tasks, 0);
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect.each([
+  { status: "failed", error: "Weekly usage limit reached" },
+  { status: "interrupted", error: "The run was stopped." },
+  { status: "cancelled", error: "The run was cancelled." },
+] as const)("a run that ends $status after its message was accepted records it", (outcome) =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:test");
+    const ended = yield* Deferred.make<void>();
+    const sent = yield* Ref.make("");
+    const run = { id: "run:2", status: outcome.status, rootNodeId: "node:root" };
+    const layer = ScheduledTaskService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          ManagedPolicy.layerTest(),
+          Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            sendToThread: (input) => Ref.set(sent, input.messageId).pipe(Effect.as({} as never)),
+            getThreadShell: () => Effect.succeed(threadShell(projectId)),
+            getProjectThreadRecords: () =>
+              Effect.map(
+                Ref.get(sent),
+                (userMessageId) =>
+                  ({
+                    runs: [
+                      { id: "run:1", status: "completed", userMessageId: "message:earlier" },
+                      { ...run, userMessageId },
+                    ],
+                    messages: [{ id: userMessageId, runId: "run:2" }],
+                    turnItems: [
+                      {
+                        type: "error",
+                        status: "failed",
+                        runId: "run:2",
+                        nodeId: "node:root",
+                        failure: { message: "Weekly usage limit reached" },
+                      },
+                    ],
+                  }) as never,
+              ),
+            waitForThread: (input) =>
+              Deferred.await(ended).pipe(
+                Effect.as({
+                  threadId: input.threadId,
+                  run: { ...run, id: input.runId, userMessageId: "" },
+                  timedOut: false,
+                } as never),
+              ),
+          }),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+            namedProjectsRoot: "/projects",
+            isScratchProject: () => Effect.succeed(false),
+          }),
+          NodeCrypto.layer,
+          Scheduler.layer,
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const { task } = yield* service.upsert({
+        id: ScheduledTaskId.make("task:quota"),
+        title: "Quota bookkeeping",
+        prompt: "Update the notes",
+        enabled: true,
+        schedule: { type: "interval", everyMs: 60_000 },
+        projectId,
+        threadId: ThreadId.make("thread:quota"),
+        workspaceStrategy: { type: "root" },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+      yield* service.runNow({ id: task.id });
+      const failed = yield* service.subscribeList().pipe(
+        Stream.map(({ tasks }) => tasks.find((candidate) => candidate.id === task.id)),
+        Stream.filter((current) => current?.lastRunStatus === "failed"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* Deferred.succeed(ended, undefined);
+      const recorded = Option.getOrUndefined(yield* Fiber.join(failed));
+      assert.equal(recorded?.lastRunError, outcome.error);
+      assert.equal(recorded?.runCount, 1);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

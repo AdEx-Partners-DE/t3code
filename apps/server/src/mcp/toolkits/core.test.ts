@@ -288,7 +288,10 @@ it.effect("returns an HTML render reference that Codex and Claude tool rows both
       server
         .callTool({
           name,
-          arguments: { path: "/t3-missing-dir/revenue.html", title: "Revenue", height: 240 },
+          arguments: {
+            path: "/t3-missing-dir/revenue.html",
+            ...(name === "html_render" ? { title: "Revenue", height: 240 } : {}),
+          },
         })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, caller),
@@ -405,7 +408,7 @@ it.effect("rejects an unknown organize target instead of archiving the calling t
     expect(dispatched).toEqual([]);
     expect(outcome).toMatchObject({
       _tag: "Failure",
-      failure: { message: expect.stringContaining("Expected no excess property") },
+      failure: { message: expect.stringContaining('Unknown argument "threadIds"') },
     });
   }).pipe(
     Effect.provide(
@@ -719,6 +722,11 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
       enabled: false,
     });
     expect(allowed.isError).toBe(false);
+    const fresh = yield* call("schedule_task", {
+      scheduledTaskId: "task-auto",
+      freshSession: true,
+    });
+    expect(fresh.structuredContent).toMatchObject({ freshSession: true });
     const incomplete = yield* call("schedule_task", { prompt: "Run nightly" });
     expect(declaredFailure(incomplete)).toMatchObject({ code: "invalid_request" });
   }).pipe(
@@ -745,8 +753,17 @@ it.effect("a caller cannot rewrite a scheduled task that runs above its own mode
               } as never),
           }),
         ),
-        Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
-        Layer.provide(Layer.mock(GitWorkflow.GitWorkflowService)({})),
+        // The fork moves a saved worktree to root when the project is not a Git repository.
+        Layer.provide(
+          Layer.mock(ProjectService.ProjectService)({
+            getById: () => Effect.succeedSome({ workspaceRoot: "/repo" } as never),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(GitWorkflow.GitWorkflowService)({
+            repositoryRoot: () => Effect.succeed("/repo"),
+          }),
+        ),
         Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
         Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
         Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
@@ -1205,7 +1222,21 @@ it.effect(
           Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
           Layer.provide(Layer.mock(GitWorkflow.GitWorkflowService)({})),
           Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
-          Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+          Layer.provide(
+            Layer.mock(ProjectService.ProjectService)({
+              getById: (projectId) =>
+                Effect.succeedSome({
+                  id: projectId,
+                  title: "MCP test",
+                  workspaceRoot: "/repo",
+                  defaultModelSelection: null,
+                  scripts: [],
+                  createdAt: "2026-10-18T00:00:00.000Z",
+                  updatedAt: "2026-10-18T00:00:00.000Z",
+                  deletedAt: null,
+                }),
+            }),
+          ),
           Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
           Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
           Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),

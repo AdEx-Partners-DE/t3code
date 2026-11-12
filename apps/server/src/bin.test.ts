@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
 const runCli = vi.fn();
-const runLauncher = vi.fn<() => Promise<void>>();
+const runLauncher = vi.fn<(options?: unknown) => Promise<void>>();
 const runAcp = vi.fn<() => Promise<void>>();
 
 const loadBin = (
@@ -41,7 +41,11 @@ afterEach(() => {
 describe("CLI entry dispatch", () => {
   it("starts the bare service launcher without evaluating the full CLI", async () => {
     await loadBin(["__service-launcher"], { rejectFullCli: true });
-    expect(runLauncher).toHaveBeenCalledExactlyOnceWith();
+    expect(runLauncher).toHaveBeenCalledExactlyOnceWith({
+      baseDir: undefined,
+      logFile: undefined,
+      serviceUnit: undefined,
+    });
     expect(runCli).not.toHaveBeenCalled();
   });
 

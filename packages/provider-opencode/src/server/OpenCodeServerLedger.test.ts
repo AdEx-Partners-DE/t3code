@@ -246,12 +246,22 @@ const isAlive = (pid: number) => {
 const spawnWindowsProcess = (command: string, args: ReadonlyArray<string>) =>
   Effect.acquireRelease(
     Effect.gen(function* () {
-      const child = NodeChildProcess.spawn(command, args, { stdio: "ignore", windowsHide: true });
+      const child = NodeChildProcess.spawn(command, args, {
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+      });
       const exited = yield* Deferred.make<void>();
+      const ready = yield* Deferred.make<void>();
       child.once("exit", () => Deferred.doneUnsafe(exited, Effect.void));
+      child.stdout.once("data", () => Deferred.doneUnsafe(ready, Effect.void));
       const pid = child.pid;
       if (pid === undefined) return yield* Effect.die("spawn failed");
-      return { pid, kill: () => child.kill(), exited: Deferred.await(exited) };
+      return {
+        pid,
+        kill: () => child.kill(),
+        exited: Deferred.await(exited),
+        ready: Deferred.await(ready),
+      };
     }),
     ({ kill }) => Effect.sync(kill),
   );
@@ -270,7 +280,8 @@ const failedQuery = () =>
     getInputFd: () => Sink.drain,
     getOutputFd: () => Stream.empty,
   });
-const IDLE_SCRIPT = "setInterval(() => {}, 1e6)";
+// Prints once running, so a test can wait for a process started behind a wrapper.
+const IDLE_SCRIPT = "process.stdout.write('ready'); setInterval(() => {}, 1e6)";
 const spawnWindowsServer = (args: ReadonlyArray<string>) =>
   spawnWindowsProcess(process.execPath, ["-e", IDLE_SCRIPT, ...args]);
 
@@ -307,223 +318,196 @@ describe.runIf(hostPlatform === "win32")("OpenCodeServerLedger on Windows", () =
       );
     });
 
-  it.live(
-    "stops a server left by a T3 server that was killed",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
-        const orphan = yield* spawnWindowsServer(SERVE_ARGS);
-        yield* recordFromKilledServer(stateDir, orphan.pid);
-        expect(yield* entries(stateDir)).toHaveLength(1);
+  it.live("stops a server left by a T3 server that was killed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+      const orphan = yield* spawnWindowsServer(SERVE_ARGS);
+      yield* recordFromKilledServer(stateDir, orphan.pid);
+      expect(yield* entries(stateDir)).toHaveLength(1);
 
-        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
-        yield* ledger.reapOrphans;
+      const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+      yield* ledger.reapOrphans;
 
-        yield* orphan.exited.pipe(Effect.timeout("10 seconds"));
-        expect(yield* entries(stateDir)).toHaveLength(0);
-      }).pipe(provideHost),
-    60_000,
+      yield* orphan.exited.pipe(Effect.timeout("10 seconds"));
+      expect(yield* entries(stateDir)).toHaveLength(0);
+    }).pipe(provideHost),
   );
 
-  it.live(
-    "records and stops the server under npm's shell wrapper, not the wrapper",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
-        // `cmd /c` stays the parent of the server, as with npm's `opencode.cmd` shim.
-        const wrapper = yield* spawnWindowsProcess("cmd.exe", [
-          "/d",
-          "/c",
-          process.execPath,
-          "-e",
-          IDLE_SCRIPT,
-          ...SERVE_ARGS,
-        ]);
-        // The server is the wrapper's child; give cmd a moment to start it.
-        yield* Effect.sleep("500 millis");
-        yield* recordFromKilledServer(stateDir, wrapper.pid);
-        const [recorded] = yield* entries(stateDir);
-        expect(recorded?.entry.pid).not.toBe(wrapper.pid);
-        const serverPid = recorded!.entry.pid;
-        // A killed wrapper leaves its child running.
-        wrapper.kill();
-        yield* wrapper.exited;
-        expect(isAlive(serverPid)).toBe(true);
+  it.live("records and stops the server under npm's shell wrapper, not the wrapper", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+      // `cmd /c` stays the parent of the server, as with npm's `opencode.cmd` shim.
+      const wrapper = yield* spawnWindowsProcess("cmd.exe", [
+        "/d",
+        "/c",
+        process.execPath,
+        "-e",
+        IDLE_SCRIPT,
+        ...SERVE_ARGS,
+      ]);
+      // The server is the wrapper's child; its output arrives through cmd once it runs.
+      yield* wrapper.ready;
+      yield* recordFromKilledServer(stateDir, wrapper.pid);
+      const [recorded] = yield* entries(stateDir);
+      expect(recorded?.entry.pid).not.toBe(wrapper.pid);
+      const serverPid = recorded!.entry.pid;
+      // A killed wrapper leaves its child running.
+      wrapper.kill();
+      yield* wrapper.exited;
+      expect(isAlive(serverPid)).toBe(true);
 
-        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
-        yield* ledger.reapOrphans;
+      const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+      yield* ledger.reapOrphans;
 
-        expect(isAlive(serverPid)).toBe(false);
-        expect(yield* entries(stateDir)).toHaveLength(0);
-      }).pipe(provideHost),
-    60_000,
+      expect(isAlive(serverPid)).toBe(false);
+      expect(yield* entries(stateDir)).toHaveLength(0);
+    }).pipe(provideHost),
   );
 
-  it.live(
-    "forgetting a server cancels its pending recording and leaves no entry",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
-        const server = yield* spawnWindowsServer(SERVE_ARGS);
-        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
-        // Returns at once: the process queries run in the background.
-        const forget = yield* ledger.track({ pid: server.pid, port: 4096, args: SERVE_ARGS });
-        yield* forget;
-        expect(yield* entries(stateDir)).toHaveLength(0);
-      }).pipe(provideHost),
-    60_000,
+  it.live("forgetting a server cancels its pending recording and leaves no entry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+      const server = yield* spawnWindowsServer(SERVE_ARGS);
+      const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+      // Returns at once: the process queries run in the background.
+      const forget = yield* ledger.track({ pid: server.pid, port: 4096, args: SERVE_ARGS });
+      yield* forget;
+      expect(yield* entries(stateDir)).toHaveLength(0);
+    }).pipe(provideHost),
   );
 
-  it.live(
-    "stops nothing and keeps the entry when the process query fails",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
-        const server = yield* spawnWindowsServer(SERVE_ARGS);
-        yield* recordFromKilledServer(stateDir, server.pid);
+  it.live("stops nothing and keeps the entry when the process query fails", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+      const server = yield* spawnWindowsServer(SERVE_ARGS);
+      yield* recordFromKilledServer(stateDir, server.pid);
 
-        // PowerShell that exits without output, as a CIM failure on a busy machine does.
-        const failingQueries = ChildProcessSpawner.make(() =>
-          Effect.succeed(
-            ChildProcessSpawner.makeHandle({
-              pid: ChildProcessSpawner.ProcessId(1),
-              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
-              isRunning: Effect.succeed(false),
-              kill: () => Effect.void,
-              unref: Effect.succeed(Effect.void),
-              stdin: Sink.drain,
-              stdout: Stream.empty,
-              stderr: Stream.empty,
-              all: Stream.empty,
-              getInputFd: () => Sink.drain,
-              getOutputFd: () => Stream.empty,
-            }),
-          ),
-        );
-        const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failingQueries),
-        );
-        yield* ledger.reapOrphans;
+      // PowerShell that exits without output, as a CIM failure on a busy machine does.
+      const failingQueries = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.void,
+            unref: Effect.succeed(Effect.void),
+            stdin: Sink.drain,
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        ),
+      );
+      const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failingQueries),
+      );
+      yield* ledger.reapOrphans;
 
-        expect(isAlive(server.pid)).toBe(true);
-        expect(yield* entries(stateDir)).toHaveLength(1);
-      }).pipe(provideHost),
-    60_000,
+      expect(isAlive(server.pid)).toBe(true);
+      expect(yield* entries(stateDir)).toHaveLength(1);
+    }).pipe(provideHost),
   );
 
-  it.live(
-    "keeps the entry when taskkill does not stop the server",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
-        const server = yield* spawnWindowsServer(SERVE_ARGS);
-        yield* recordFromKilledServer(stateDir, server.pid);
+  it.live("keeps the entry when taskkill does not stop the server", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+      const server = yield* spawnWindowsServer(SERVE_ARGS);
+      yield* recordFromKilledServer(stateDir, server.pid);
 
-        // Real process queries, but a taskkill that stops nothing.
-        const real = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const noTaskkill = ChildProcessSpawner.make((command) =>
-          (command as unknown as { readonly command: string }).command === "taskkill"
-            ? real.spawn(ChildProcess.make("cmd.exe", ["/d", "/c", "exit 1"]))
+      // Real process queries, but a taskkill that stops nothing.
+      const real = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const noTaskkill = ChildProcessSpawner.make((command) =>
+        (command as unknown as { readonly command: string }).command === "taskkill"
+          ? real.spawn(ChildProcess.make("cmd.exe", ["/d", "/c", "exit 1"]))
+          : real.spawn(command),
+      );
+      const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noTaskkill),
+      );
+      yield* ledger.reapOrphans;
+
+      expect(isAlive(server.pid)).toBe(true);
+      expect(yield* entries(stateDir)).toHaveLength(1);
+    }).pipe(provideHost),
+  );
+
+  it.live("records on a later try after its process queries kept failing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+      const server = yield* spawnWindowsServer(SERVE_ARGS);
+
+      // The first three PowerShell queries fail (the owner query and its two retries).
+      const real = yield* ChildProcessSpawner.ChildProcessSpawner;
+      let failuresLeft = 3;
+      // Decided when each attempt runs: a retry runs the same spawn effect again.
+      const flaky = ChildProcessSpawner.make((command) =>
+        Effect.suspend(() =>
+          (command as unknown as { readonly command: string }).command === "powershell.exe" &&
+          failuresLeft-- > 0
+            ? Effect.succeed(failedQuery())
             : real.spawn(command),
-        );
-        const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noTaskkill),
-        );
-        yield* ledger.reapOrphans;
+        ),
+      );
+      const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, flaky),
+      );
+      const recordServer = ledger
+        .record({ pid: server.pid, port: 4096, args: SERVE_ARGS })
+        .pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, flaky));
 
-        expect(isAlive(server.pid)).toBe(true);
-        expect(yield* entries(stateDir)).toHaveLength(1);
-      }).pipe(provideHost),
-    60_000,
+      yield* Effect.asVoid(recordServer);
+      expect(yield* entries(stateDir)).toHaveLength(0);
+      // The failed owner query was not kept, so the next recording asks again and succeeds.
+      yield* Effect.asVoid(recordServer);
+      expect(yield* entries(stateDir)).toHaveLength(1);
+    }).pipe(provideHost),
   );
 
-  it.live(
-    "records on a later try after its process queries kept failing",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
-        const server = yield* spawnWindowsServer(SERVE_ARGS);
+  it.live("leaves the servers of a running T3 server alone", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+      const server = yield* spawnWindowsServer(SERVE_ARGS);
+      const runningOwner = yield* spawnWindowsServer([]);
+      const ownerLedger = yield* OpenCodeServerLedger.make({
+        stateDir,
+        ownerPid: runningOwner.pid,
+      });
+      yield* Effect.asVoid(ownerLedger.record({ pid: server.pid, port: 4096, args: SERVE_ARGS }));
 
-        // The first three PowerShell queries fail (the owner query and its two retries).
-        const real = yield* ChildProcessSpawner.ChildProcessSpawner;
-        let failuresLeft = 3;
-        // Decided when each attempt runs: a retry runs the same spawn effect again.
-        const flaky = ChildProcessSpawner.make((command) =>
-          Effect.suspend(() =>
-            (command as unknown as { readonly command: string }).command === "powershell.exe" &&
-            failuresLeft-- > 0
-              ? Effect.succeed(failedQuery())
-              : real.spawn(command),
-          ),
-        );
-        const ledger = yield* OpenCodeServerLedger.make({ stateDir }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, flaky),
-        );
-        const recordServer = ledger
-          .record({ pid: server.pid, port: 4096, args: SERVE_ARGS })
-          .pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, flaky));
+      const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+      yield* ledger.reapOrphans;
 
-        yield* Effect.asVoid(recordServer);
-        expect(yield* entries(stateDir)).toHaveLength(0);
-        // The failed owner query was not kept, so the next recording asks again and succeeds.
-        yield* Effect.asVoid(recordServer);
-        expect(yield* entries(stateDir)).toHaveLength(1);
-      }).pipe(provideHost),
-    60_000,
+      expect(isAlive(server.pid)).toBe(true);
+      expect(yield* entries(stateDir)).toHaveLength(1);
+    }).pipe(provideHost),
   );
 
-  it.live(
-    "leaves the servers of a running T3 server alone",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
-        const server = yield* spawnWindowsServer(SERVE_ARGS);
-        const runningOwner = yield* spawnWindowsServer([]);
-        const ownerLedger = yield* OpenCodeServerLedger.make({
-          stateDir,
-          ownerPid: runningOwner.pid,
-        });
-        yield* Effect.asVoid(ownerLedger.record({ pid: server.pid, port: 4096, args: SERVE_ARGS }));
+  it.live("leaves a recycled pid alone when its start time does not match", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
+      const server = yield* spawnWindowsServer(SERVE_ARGS);
+      yield* recordFromKilledServer(stateDir, server.pid);
+      const path = yield* Path.Path;
+      const [recorded] = yield* entries(stateDir);
+      const entryPath = path.join(stateDir, "opencode-servers", recorded!.name);
+      yield* fs.writeFileString(entryPath, JSON.stringify({ ...recorded!.entry, startTime: "0" }));
 
-        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
-        yield* ledger.reapOrphans;
+      const ledger = yield* OpenCodeServerLedger.make({ stateDir });
+      yield* ledger.reapOrphans;
 
-        expect(isAlive(server.pid)).toBe(true);
-        expect(yield* entries(stateDir)).toHaveLength(1);
-      }).pipe(provideHost),
-    60_000,
-  );
-
-  it.live(
-    "leaves a recycled pid alone when its start time does not match",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-ledger-" });
-        const server = yield* spawnWindowsServer(SERVE_ARGS);
-        yield* recordFromKilledServer(stateDir, server.pid);
-        const path = yield* Path.Path;
-        const [recorded] = yield* entries(stateDir);
-        const entryPath = path.join(stateDir, "opencode-servers", recorded!.name);
-        yield* fs.writeFileString(
-          entryPath,
-          JSON.stringify({ ...recorded!.entry, startTime: "0" }),
-        );
-
-        const ledger = yield* OpenCodeServerLedger.make({ stateDir });
-        yield* ledger.reapOrphans;
-
-        expect(isAlive(server.pid)).toBe(true);
-        expect(yield* entries(stateDir)).toHaveLength(0);
-      }).pipe(provideHost),
-    60_000,
+      expect(isAlive(server.pid)).toBe(true);
+      expect(yield* entries(stateDir)).toHaveLength(0);
+    }).pipe(provideHost),
   );
 });
 
@@ -580,6 +564,65 @@ describe.skipIf(observedPlatforms.length === 0)("OpenCode server startup", () =>
       expect(groupExists(pgid)).toBe(true);
 
       yield* Fiber.interrupt(starting);
+      yield* Scope.close(serverScope, Exit.void);
+
+      expect(groupExists(pgid)).toBe(false);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  // Runs on the test clock, which never advances here: a teardown that sleeps
+  // out its grace instead of watching the group would never finish.
+  it.effect("stops a running server as soon as its group exits", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-stop-" });
+      const binaryPath = path.join(tempDir, "opencode");
+      // The background child shares the leader's group. The leader reaps it before exiting, so no
+      // zombie keeps the group alive under an init that does not reap. The trap is set after the
+      // fork: a child forked with the trap already set can swallow the signal before it execs.
+      yield* fs.writeFileString(
+        binaryPath,
+        [
+          "#!/bin/sh",
+          "sleep 600 &",
+          "trap 'wait; exit 0' TERM",
+          'echo "opencode server listening on http://127.0.0.1:4096"',
+          "wait",
+          "",
+        ].join("\n"),
+      );
+      yield* fs.chmod(binaryPath, 0o755);
+
+      const tracked = yield* Deferred.make<number>();
+      const layerRuntime = OpenCodeRuntime.layer.pipe(
+        Layer.provide(
+          Layer.succeed(
+            OpenCodeServerLedger.OpenCodeServerLedger,
+            OpenCodeServerLedger.OpenCodeServerLedger.of({
+              track: (server) => Deferred.succeed(tracked, server.pid).pipe(Effect.as(Effect.void)),
+            }),
+          ),
+        ),
+      );
+
+      const serverScope = yield* Scope.make();
+      const server = yield* OpenCodeRuntime.OpenCodeRuntime.pipe(
+        Effect.flatMap((runtime) =>
+          runtime.startOpenCodeServerProcess({
+            binaryPath,
+            directory: tempDir,
+            port: 4096,
+            verify: () => Effect.succeed("1.0.0"),
+          }),
+        ),
+        Effect.provideService(Scope.Scope, serverScope),
+        Effect.provide(layerRuntime),
+      );
+      const pgid = yield* Deferred.await(tracked);
+      yield* Effect.addFinalizer(() => killGroup(pgid));
+      expect(yield* server.isRunning).toBe(true);
+
       yield* Scope.close(serverScope, Exit.void);
 
       expect(groupExists(pgid)).toBe(false);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { buildThreadChecklistPrompt, buildThreadTitlePrompt } from "./textGenerationPrompts.ts";
 import { normalizeCliError } from "./textGenerationUtils.ts";
-import { buildThreadChecklistPrompt } from "./textGenerationPrompts.ts";
 
 describe("normalizeCliError", () => {
   it("does not expose CLI failure details in the public error message", () => {
@@ -28,5 +28,18 @@ describe("buildThreadChecklistPrompt", () => {
     });
     expect(prompt).toContain("- [done, set by the user] Deploy the fix");
     expect(prompt).toContain("- [open] Write docs");
+  });
+});
+
+describe("buildThreadTitlePrompt", () => {
+  it("names the project to leave out of initial and regenerated titles", () => {
+    for (const previousTitle of [undefined, "Hyperdrive Config Crash"]) {
+      const { prompt } = buildThreadTitlePrompt({
+        message: "hyperdrive init crashes without a config",
+        previousTitle,
+        projectTitle: "Hyperdrive",
+      });
+      expect(prompt).toContain('Never include the project name ("Hyperdrive")');
+    }
   });
 });

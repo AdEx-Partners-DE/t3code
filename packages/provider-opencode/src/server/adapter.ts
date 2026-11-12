@@ -1007,6 +1007,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>();
         let nativeStreamFailure: OrchestrationV2ProviderFailure | null = null;
         const threads = new Map<string, OpenCodeThreadState>();
+        const variantCache: OpenCodeRuntime.OpenCodeVariantCache = new Map();
         const commandReceipts = new Map<string, Deferred.Deferred<void>>();
         const commandControllers = new Map<string, Set<AbortController>>();
         const pendingRequests = new Map<string, PendingOpenCodeRequest>();
@@ -1352,7 +1353,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const childSessionId = taskSessionId(part);
           if (childSessionId !== null && context.childSessionId === null) {
             context.childSessionId = childSessionId;
-            context.childThreadId = idAllocator.derive.threadFromProviderThread({
+            context.childThreadId = idAllocator.derive.subagentThread({
               driver: OPENCODE_PROVIDER,
               nativeThreadId: childSessionId,
             });
@@ -3005,12 +3006,24 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const submitPrompt = Effect.fn("OpenCode.submitPrompt")(function* (
           state: OpenCodeThreadState,
           turn: ActiveOpenCodeTurn,
-          payload: Parameters<typeof client.session.promptAsync>[0] & {
+          inputPayload: Parameters<typeof client.session.promptAsync>[0] & {
             messageID: string;
             sessionID: string;
           },
           abortController: AbortController,
         ) {
+          const { variant, ...payloadWithoutVariant } = inputPayload;
+          const selectedVariant = yield* OpenCodeRuntime.resolveOpenCodeVariant(
+            client,
+            inputPayload.model,
+            variant,
+            abortController.signal,
+            variantCache,
+          );
+          const payload = {
+            ...payloadWithoutVariant,
+            ...(selectedVariant === undefined ? {} : { variant: selectedVariant }),
+          };
           const text = payload.parts
             ?.filter((part) => part.type === "text")
             .map((part) => part.text)
@@ -3516,8 +3529,20 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 ...(text.length === 0 ? [] : [{ type: "text" as const, text }]),
                 ...files,
               ];
+              const admissionMessageId = yield* makeOpenCodeMessageId(messageIdClock);
+              while (turn.admissionAbortController !== null) {
+                const pendingAdmission = turn.admissionSettled;
+                yield* Deferred.await(pendingAdmission);
+                // Another waiting steer may have claimed admission first.
+                if (turn.admissionSettled === pendingAdmission) break;
+              }
+              if (state.activeTurn !== turn || turn.finalized || turn.interrupted) {
+                return yield* protocolError(
+                  `OpenCode turn ${steerInput.providerTurnId} is not active`,
+                );
+              }
               turn.admissionGeneration = state.nextAdmissionGeneration++;
-              turn.admissionMessageId = yield* makeOpenCodeMessageId(messageIdClock);
+              turn.admissionMessageId = admissionMessageId;
               turn.admissionPending = true;
               turn.admissionAccepted = false;
               turn.admissionMessageObserved = false;
@@ -3552,7 +3577,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   ]).pipe(Effect.asVoid),
                 ),
               );
-              if (state.activeTurn === turn && !turn.finalized) {
+              if (state.activeTurn === turn && !turn.finalized && !turn.interrupted) {
                 const admissionAction = advanceOpenCodePromptAdmission(turn, "accepted");
                 if (admissionAction === "reconcile-idle") {
                   yield* reconcilePromptAdmission(state, turn);

@@ -236,7 +236,7 @@ it.effect.each(["provider-turn.start", "provider-turn.restart"] as const)(
           (yield* Effect.flip(drain.execute({ operation: "acquire", leaseId }))).reason,
           "busy",
         );
-        const running = yield* worker.runOnce.pipe(Effect.forkChild({ startImmediately: true }));
+        const running = yield* worker.runOnce().pipe(Effect.forkChild({ startImmediately: true }));
         yield* Deferred.await(executing);
         const acquiring = yield* drain
           .execute({ operation: "acquire", leaseId })
@@ -250,7 +250,7 @@ it.effect.each(["provider-turn.start", "provider-turn.restart"] as const)(
         assert.isTrue(Option.isSome(row) && row.value.status === "succeeded");
         const sql = yield* SqlClient.SqlClient;
         yield* sql`UPDATE orchestration_v2_effect_outbox SET status = 'pending', available_at = '2999-01-01T00:00:00.000Z' WHERE effect_id = ${id}`;
-        assert.isFalse(yield* worker.runOnce);
+        assert.isFalse(yield* worker.runOnce());
         assert.equal(
           (yield* Effect.flip(drain.execute({ operation: "acquire", leaseId }))).reason,
           "busy",
@@ -420,9 +420,10 @@ it.effect.each(["cancel", "expiry", "queue held", "queues paused"] as const)(
       const queued = before.runs.find((run) => run.status === "queued")!;
       assert.isDefined(queued);
       assert.isTrue(queued.queueHeld);
+      assert.equal((yield* drain.execute({ operation: "acquire", leaseId })).state, "held");
       if (mode !== "queue held") {
-        // Seed a deliverable queue without publishing an event that could
-        // promote it before this test closes admission.
+        // Seed a deliverable queue without publishing an event. Admission is already
+        // closed, so the stop's asynchronous queue promotion cannot start it either.
         yield* projections.apply({
           id: EventId.make("deliverable"),
           type: "run.updated",
@@ -432,7 +433,6 @@ it.effect.each(["cancel", "expiry", "queue held", "queues paused"] as const)(
           payload: { ...queued, queueHeld: false },
         });
       }
-      assert.equal((yield* drain.execute({ operation: "acquire", leaseId })).state, "held");
       yield* orchestrator.resumeQueuedRuns;
       assert.equal(
         (yield* orchestrator.getThreadProjection(threadId)).runs.find((run) => run.id === queued.id)
