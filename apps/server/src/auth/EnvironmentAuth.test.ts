@@ -7,9 +7,11 @@ import {
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import { makeDpopKey } from "./dpop.testkit.ts";
@@ -80,6 +82,51 @@ const requestMetadata = {
 it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
   "EnvironmentAuth.layer",
   (it) => {
+    it.effect.each(["browser", "mobile"] as const)(
+      "keeps a paired %s session valid for 900 days and permits immediate revocation",
+      (client) =>
+        Effect.gen(function* () {
+          const auth = yield* EnvironmentAuth.EnvironmentAuth;
+          const sessions = yield* SessionStore.SessionStore;
+          const pairing = yield* auth.createPairingLink();
+          const token =
+            client === "browser"
+              ? (yield* auth.createBrowserSession(pairing.credential, requestMetadata)).sessionToken
+              : (yield* auth.exchangeBootstrapCredentialForAccessToken(
+                  pairing.credential,
+                  undefined,
+                  { ...requestMetadata, deviceType: "mobile" },
+                )).access_token;
+          const original = yield* sessions.verify(token);
+
+          yield* TestClock.adjust(Duration.days(31));
+          expect((yield* sessions.verify(token)).sessionId).toBe(original.sessionId);
+          yield* TestClock.adjust(Duration.days(868));
+          expect((yield* sessions.verify(token)).sessionId).toBe(original.sessionId);
+          const ticket = yield* sessions.issueWebSocketToken(original.sessionId);
+          expect((yield* sessions.verifyWebSocketToken(ticket.token)).sessionId).toBe(
+            original.sessionId,
+          );
+
+          const otherPairing = yield* auth.createPairingLink();
+          const other = yield* auth.exchangeBootstrapCredentialForAccessToken(
+            otherPairing.credential,
+            undefined,
+            requestMetadata,
+          );
+          const otherSession = yield* sessions.verify(other.access_token);
+          yield* sessions.revoke(otherSession.sessionId);
+          expect((yield* Effect.flip(sessions.verify(other.access_token)))._tag).toBe(
+            "SessionTokenRevokedError",
+          );
+
+          yield* TestClock.adjust(Duration.days(1));
+          expect((yield* Effect.flip(sessions.verify(token)))._tag).toBe(
+            "SessionTokenExpiredError",
+          );
+        }).pipe(Effect.provide(Layer.merge(layerEnvironmentAuth(), TestClock.layer()))),
+    );
+
     it.effect("uses the reusable dev cookie without overriding a normal scoped cookie", () =>
       Effect.gen(function* () {
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -805,6 +852,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
           { proofKeyThumbprint: key.thumbprint },
         );
         const session = yield* sessions.verify(exchanged.access_token);
+        expect(exchanged.expires_in).toBe(3_600);
         const host = "192.168.1.50:3773";
         const socketUrl = `http://${host}/ws`;
         const iat = Math.floor((yield* DateTime.now).epochMilliseconds / 1_000);

@@ -131,6 +131,10 @@ created in Settings can only be copied from the client that created them while
 its Sharing & access page stays open. If you leave or reload that page, create
 another link to share.
 
+In the Alpha fork, newly paired browser and mobile sessions last 900 days.
+Older sessions keep their original expiry; pair again to get the longer lifetime.
+Revoke a device in **Settings → Sharing & access** to end its access sooner.
+
 ### Reach one machine several ways
 
 A machine can have more than one route: LAN, Tailscale, another VPN, a public
