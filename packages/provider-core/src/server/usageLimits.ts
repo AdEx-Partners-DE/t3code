@@ -101,6 +101,7 @@ export function applyUsageLimitsUpdate(input: {
     ...(previous?.credentialFingerprint !== undefined
       ? { credentialFingerprint: previous.credentialFingerprint }
       : {}),
+    ...(previous?.zeroSpendCap ? { zeroSpendCap: true } : {}),
     ...(unavailable !== undefined ? { unavailable } : {}),
   };
 }

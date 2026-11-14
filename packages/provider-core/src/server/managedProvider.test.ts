@@ -7,8 +7,8 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
-import * as DateTime from "effect/DateTime";
 import * as Cache from "effect/Cache";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -103,6 +103,7 @@ function layerProviderHost(input: {
   readonly runBackgroundWork: boolean;
   readonly demand?: "generic" | "instance";
   readonly settings?: Pick<ProviderHost.ProviderHost["Service"], "settings">["settings"];
+  readonly awaitServerReady?: Effect.Effect<void>;
 }) {
   return Layer.succeed(
     ProviderHost.ProviderHost,
@@ -129,6 +130,7 @@ function layerProviderHost(input: {
                   ? scope.instanceId === undefined
                   : scope.instanceId === initialSnapshot.instanceId))),
         ),
+      ...(input.awaitServerReady ? { awaitServerReady: input.awaitServerReady } : {}),
       resolveAttachmentPath: () => null,
       credentials: () => Effect.die("unused"),
     }),
@@ -286,6 +288,61 @@ describe("makeManagedServerProvider", () => {
       }),
     ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
+  it.effect("re-reads cached usage on an explicit refresh once the reading passes the floor", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const cache = yield* Cache.makeWith(
+          () =>
+            Effect.gen(function* () {
+              const count = yield* Ref.updateAndGet(calls, (count) => count + 1);
+              const checkedAt = DateTime.formatIso(yield* DateTime.now);
+              return {
+                ...refreshedSnapshot,
+                usageLimits: {
+                  checkedAt,
+                  windows: [
+                    {
+                      id: "five_hour",
+                      kind: "session",
+                      label: "Session",
+                      usedPercent: count === 1 ? 20 : 100,
+                    },
+                  ],
+                },
+              } satisfies ServerProvider;
+            }),
+          { capacity: 1, timeToLive: () => "5 minutes" },
+        );
+        const warmed = yield* Cache.get(cache, "claude");
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: () => false,
+          initialSnapshot: () => Effect.succeed(warmed),
+          checkProvider: Cache.get(cache, "claude"),
+          invalidateUsageCache: Cache.invalidateAll(cache),
+          refreshOnInterval: false,
+        });
+        yield* provider.streamChanges.pipe(Stream.take(1), Stream.runDrain);
+
+        const withinFloor = yield* provider.refresh;
+        assert.strictEqual(yield* Ref.get(calls), 1);
+        assert.strictEqual(withinFloor.usageLimits?.windows[0]?.usedPercent, 20);
+
+        yield* TestClock.adjust("1 minute");
+        // A live reading of one window must not hold back re-reading the rest.
+        yield* provider.applyUsageLimits({
+          checkedAt: DateTime.formatIso(yield* DateTime.now),
+          windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 50 }],
+        });
+        const pastFloor = yield* provider.refresh;
+        assert.strictEqual(yield* Ref.get(calls), 2);
+        assert.strictEqual(pastFloor.usageLimits?.windows[0]?.usedPercent, 100);
+      }),
+    ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
   it.effect("keeps the waiting usage refresh's claim when the running one is interrupted", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -378,6 +435,49 @@ describe("makeManagedServerProvider", () => {
           assert.strictEqual(yield* Ref.get(checkCalls), 1);
         }),
       ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
+
+  it.effect("holds the first provider check until server startup finishes", () =>
+    Effect.gen(function* () {
+      const serverReady = yield* Deferred.make<void>();
+      const checkStarted = yield* Deferred.make<void>();
+      const checkCalls = yield* Ref.make(0);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const provider = yield* makeManagedServerProvider<TestSettings>({
+            resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+            getSettings: Effect.succeed({ enabled: true }),
+            streamSettings: Stream.empty,
+            haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+            initialSnapshot: () => Effect.succeed(initialSnapshot),
+            checkProvider: Ref.update(checkCalls, (count) => count + 1).pipe(
+              Effect.andThen(Deferred.succeed(checkStarted, undefined)),
+              Effect.as(refreshedSnapshot),
+            ),
+            refreshInterval: "1 hour",
+          });
+
+          yield* TestClock.adjust("10 seconds");
+          assert.strictEqual(yield* Ref.get(checkCalls), 0);
+          assert.deepStrictEqual(yield* provider.getSnapshot, initialSnapshot);
+          assert.isTrue(yield* provider.isAwaitingFirstCheck!);
+
+          yield* Deferred.succeed(serverReady, undefined);
+          yield* Deferred.await(checkStarted);
+          assert.strictEqual(yield* Ref.get(checkCalls), 1);
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            layerProviderHost({
+              runBackgroundWork: false,
+              awaitServerReady: Deferred.await(serverReady),
+            }),
+            TestClock.layer(),
+          ),
+        ),
+      );
+    }),
   );
 
   it.effect("skips periodic provider refreshes without foreground provider-status demand", () =>

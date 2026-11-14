@@ -25,6 +25,7 @@ const OpenCodeServerEntry = Schema.Struct({
   pid: Schema.Int,
   startTime: Schema.String,
   command: Schema.String,
+  args: Schema.optionalKey(Schema.Array(Schema.String)),
   port: Schema.Int,
   stateDir: Schema.String,
   owner: ProcessIdentity,
@@ -348,6 +349,7 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
         pid: member.pid,
         startTime: member.startTime,
         command: member.command,
+        args: server.args,
         port: server.port,
         stateDir: input.stateDir,
         owner,
@@ -391,7 +393,8 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
         });
 
   // Signals only a group whose recorded member still has the same pid, start
-  // time, group, and full command line, so a recycled pid is never touched.
+  // time, and group and still has the same command line or serve arguments, so
+  // a recycled pid is never touched.
   // Returns false when the recorded process could not be queried, so its entry is kept.
   const stopOrphan = Effect.fn("OpenCodeServerLedger.stopOrphan")(function* (
     entry: OpenCodeServerEntry,
@@ -403,7 +406,8 @@ export const make = Effect.fn("OpenCodeServerLedger.make")(function* (input: {
       observed.zombie ||
       observed.startTime !== entry.startTime ||
       (platform !== "win32" && observed.pgid !== entry.pgid) ||
-      observed.command !== entry.command
+      (observed.command !== entry.command &&
+        (entry.args === undefined || !endsWithServeArgs(observed.command, entry.args, platform)))
     ) {
       return true;
     }

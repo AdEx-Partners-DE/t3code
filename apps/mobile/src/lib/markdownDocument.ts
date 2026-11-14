@@ -2,7 +2,10 @@ import type { Root, RootContent } from "mdast";
 import { unified, type Processor } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
-import { remarkKeepWindowsProsePaths } from "@t3tools/shared/markdownWindowsPaths";
+import {
+  escapeWindowsPathBackslashes,
+  remarkKeepWindowsProsePaths,
+} from "@t3tools/shared/markdownWindowsPaths";
 import { absoluteFilePathMatches, parseMarkdownFileLink } from "@t3tools/shared/markdownLinks";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 
@@ -78,7 +81,7 @@ function attribute(tag: string, name: string): string | null {
 }
 
 function markdownDestination(url: string): string {
-  return `<${url.replace(/&/g, "\\&").replace(/</g, "%3C").replace(/>/g, "%3E").replace(/\|/g, "%7C").replace(/\n/g, "")}>`;
+  return `<${url.replace(/&/g, "&amp;").replace(/</g, "%3C").replace(/>/g, "%3E").replace(/\|/g, "%7C").replace(/\n/g, "")}>`;
 }
 
 const ANCHOR_TAG = /^<\/?a[\s/>]/i;
@@ -284,6 +287,41 @@ export function markdownWithHtml(markdown: string): string {
   return applyMarkdownEdits(markdown, edits);
 }
 
+/** Reference definitions as authored, one line each, so a Windows destination keeps its backslashes. */
+export function markdownReferenceDefinitions(markdown: string): string[] {
+  if (!markdown.includes("]:")) return [];
+  // Flattened as the renderer does it: a raw HTML block hides the definitions inside it.
+  const flattened = markdownWithHtml(markdown);
+  const definitions: string[] = [];
+  const visit = (node: MarkdownNode, quotes: number) => {
+    if (node.type === "definition") {
+      // A wrapped definition drops its indent and the enclosing quotes' markers, not a literal ">".
+      const wrap = new RegExp(`(?:\\r\\n|\\r|\\n)(?:[ \\t]*>){0,${quotes}}[ \\t]*`, "g");
+      definitions.push(
+        flattened.slice(node.position?.start.offset, node.position?.end.offset).replace(wrap, " "),
+      );
+    }
+    if (!("children" in node)) return;
+    for (const child of node.children) visit(child, quotes + (node.type === "blockquote" ? 1 : 0));
+  };
+  visit(parser.parse(flattened), 0);
+  return definitions;
+}
+
+/**
+ * A reply split into folds and cards renders each fragment as its own document, so each one
+ * carries the reply's definitions. The first definition of a label wins, so the fragment's own
+ * lead: the renderer then prefers them by its own label matching, with none reimplemented here.
+ */
+export function withReferenceDefinitions(
+  fragment: string,
+  replyDefinitions: ReadonlyArray<string>,
+): string {
+  if (replyDefinitions.length === 0 || !fragment.includes("[")) return fragment;
+  const definitions = new Set([...markdownReferenceDefinitions(fragment), ...replyDefinitions]);
+  return `${[...definitions].join("\n")}\n\n${fragment}`;
+}
+
 // Start only at the beginning of a backtick run to avoid retrying every suffix.
 const INLINE_CODE_SPAN = /(?<!`)`+([^`\r\n]+)`+/g;
 
@@ -416,9 +454,9 @@ interface DestinationToken {
 }
 
 /**
- * Markdown reads `C:\work\.t3` as `C:\work.t3`. Web keeps authored Windows destinations
- * literally (see `remarkKeepWindowsPaths` in shared), so escape their backslashes to give
- * both parsers here the same path. `\&` stays an escape, as `markdownWithHtml` emits it.
+ * Markdown reads `C:\work\.t3` as `C:\work.t3`. Escape every Windows destination
+ * backslash so both parsers here preserve separators while decoding character references,
+ * matching `remarkKeepWindowsPaths` in shared.
  * Expects authored Markdown: already escaped output would be escaped twice.
  */
 function markdownWithWindowsPathDestinations(markdown: string): string {
@@ -435,7 +473,7 @@ function markdownWithWindowsPathDestinations(markdown: string): string {
       return;
     const start = token.start.offset;
     const end = token.end.offset;
-    const escaped = authored.replace(/\\(?!&)/g, "\\\\");
+    const escaped = escapeWindowsPathBackslashes(authored);
     // A bare destination ends at an unescaped `)`, so wrap it to keep `\)` inside.
     const angled = markdown[start - 1] === "<";
     edits.push({ start, end, content: angled ? escaped : `<${escaped}>` });

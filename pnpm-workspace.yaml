@@ -23,7 +23,7 @@ allowBuilds:
   node-pty: true
   # Ships N-API prebuilds; its install script only rebuilds from source.
   objc-js: false
-  "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.18-0dc7ed81.tgz": true
+  "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.18-16db4c75.tgz": true
   sharp: true
   utf-8-validate: false
   workerd: false
@@ -89,6 +89,7 @@ catalog:
   mdast-util-directive: 3.1.0
   micromark-extension-directive: 4.0.0
   micromark-util-character: 2.1.1
+  micromark-util-decode-string: 2.0.1
   micromark-util-types: 2.0.2
   rehype-raw: 7.0.0
   rehype-sanitize: 6.0.0

@@ -1,3 +1,4 @@
+import { decodeString } from "micromark-util-decode-string";
 import type { Processor } from "unified";
 import { isWindowsAbsolutePath } from "./path.ts";
 
@@ -7,13 +8,20 @@ interface DestinationCompileContext {
   sliceSerialize(token: unknown): string;
 }
 
+/** Escapes every Windows path separator for a Markdown destination. */
+export function escapeWindowsPathBackslashes(path: string): string {
+  return path.replace(/\\/g, "\\\\");
+}
+
 function keepWindowsPathDestination(this: DestinationCompileContext, token: unknown) {
   const decoded = this.resume();
   const authored = this.sliceSerialize(token);
   const node = this.stack.at(-1);
-  // Character references still need decoding, so those destinations keep the parsed URL.
+  // Escaping each separator keeps it while character references still decode.
   if (node)
-    node.url = isWindowsAbsolutePath(authored) && !authored.includes("&") ? authored : decoded;
+    node.url = isWindowsAbsolutePath(authored)
+      ? decodeString(escapeWindowsPathBackslashes(authored))
+      : decoded;
 }
 
 // A drive path that has not reached whitespace yet: `C:`, `C:\Users\me`, `C:/work`.
@@ -64,7 +72,8 @@ export function remarkKeepWindowsProsePaths(this: Processor) {
 /**
  * CommonMark reads the `\.` in `C:\me\.t3\shot.png` as an escape. Every backslash in a
  * Windows path is a separator, so link, image, and definition destinations that are
- * Windows paths keep the text as written, and so do escapes inside drive paths.
+ * Windows paths keep their separators while character references decode. Escapes inside
+ * drive paths in prose keep their backslashes too.
  */
 export function remarkKeepWindowsPaths(this: Processor) {
   (this.data().fromMarkdownExtensions ??= []).push({
