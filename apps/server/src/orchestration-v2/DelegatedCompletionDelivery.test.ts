@@ -159,7 +159,7 @@ const layerTest = Layer.mergeAll(
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
   Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
+  Layer.provideMerge(ServerSettings.layerTest()),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerPlatformTest),
 );
@@ -4925,6 +4925,16 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
 
   it.effect("holding a follow-up during runtime recovery makes its parent task idle", () =>
     Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const previous = yield* settings.getSettings;
+      yield* settings.updateSettings({ continueThreadsAfterServerUpdate: false });
+      yield* Effect.addFinalizer(() =>
+        settings
+          .updateSettings({
+            continueThreadsAfterServerUpdate: previous.continueThreadsAfterServerUpdate,
+          })
+          .pipe(Effect.orDie),
+      );
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const sink = yield* EventSink.EventSinkV2;
       const now = yield* DateTime.now;
@@ -5012,7 +5022,7 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
       const queued = (yield* orchestrator.getThreadProjection(child.childThreadId)).runs.at(-1)!;
       assert.equal(queued.status, "queued");
       assert.isTrue(queued.queueHeld);
-    }),
+    }).pipe(Effect.scoped),
   );
 
   it.effect("settles a child whose provider failure holds its queued wakes", () =>
