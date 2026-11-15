@@ -1,5 +1,5 @@
 import { RegistryContext } from "@effect/atom-react";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
@@ -133,6 +133,15 @@ vi.mock(import("../../state/server"), async (original) => {
         ...actual.serverEnvironment.deleteScheduledTask,
         run: state.remove,
       },
+      setScheduledTaskArchived: {
+        ...actual.serverEnvironment.setScheduledTaskArchived,
+        run: vi.fn<typeof actual.serverEnvironment.setScheduledTaskArchived.run>(
+          async (_registry, args) => {
+            state.commands.push(args);
+            return AsyncResult.success({ task });
+          },
+        ),
+      },
       upsertScheduledTask: {
         ...actual.serverEnvironment.upsertScheduledTask,
         permissionAtom: (id: string | null) => permissions.get(id ?? "")!,
@@ -159,13 +168,6 @@ vi.mock(import("../../state/query"), async (original) => ({
     isPending: false,
     refresh: vi.fn(),
   })) as never,
-}));
-vi.mock(import("../../state/use-atom-command"), async (original) => ({
-  ...(await original()),
-  useAtomCommand: (() => async (args: { readonly input: unknown }) => {
-    state.commands.push(args);
-    return { _tag: "Success" };
-  }) as never,
 }));
 vi.mock(import("~/state/session"), async (original) => ({
   ...(await original()),
