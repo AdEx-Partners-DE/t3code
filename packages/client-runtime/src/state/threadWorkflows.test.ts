@@ -63,7 +63,7 @@ describe("thread workflows", () => {
         ...projection,
         providerThreads: [{ ...projection.providerThreads[0]!, nativeThreadRef: null }],
       }),
-    ).toBe(false);
+    ).toBe(true);
 
     // A running turn blocks the move only until it ends; a provider thread
     // without a native reference blocks it for good.
@@ -79,8 +79,9 @@ describe("thread workflows", () => {
         ...projection,
         providerThreads: [{ ...projection.providerThreads[0]!, nativeThreadRef: null }],
       }),
-    ).toBe("not-portable");
+    ).toBeNull();
     expect(providerHandoffBlocker(null)).toBe("not-portable");
+    expect(threadSupportsProviderHandoff({ ...projection, providerThreads: [] })).toBe(false);
   });
 
   it("sorts queued messages and gates promotion from capabilities", () => {

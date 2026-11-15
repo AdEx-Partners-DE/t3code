@@ -77,27 +77,19 @@ it.each(plugins)("%s finds each escape's word after earlier escapes in the text"
 });
 
 it.each([
-  [String.raw`C:\work\&stuff\x.png`, String.raw`C:\work\&stuff\x.png`],
   [String.raw`\\server\share\&amp;stuff\x.png`, String.raw`\\server\share\&stuff\x.png`],
   [String.raw`C:\R&D folder\.t3\shot.png`, String.raw`C:\R&D folder\.t3\shot.png`],
   [String.raw`C:\R&amp;D folder\.t3\shot.png`, String.raw`C:\R&D folder\.t3\shot.png`],
-])(
-  "keeps separators in Windows destinations containing ampersands: %s",
-  (destination, expected) => {
-    const processor = unified().use(remarkParse).use(remarkKeepWindowsPaths);
-    const markdown = `![shot](<${destination}>) [link](<${destination}>)\n\n[ref]: <${destination}>`;
-    expect(processor.parse(markdown)).toMatchObject({
-      children: [
-        {
-          type: "paragraph",
-          children: [
-            { type: "image", url: expected },
-            { type: "text" },
-            { type: "link", url: expected },
-          ],
-        },
-        { type: "definition", url: expected },
-      ],
+  [String.raw`C:\work\&stuff\.t3\shot.png`, String.raw`C:\work\&stuff\.t3\shot.png`],
+  [String.raw`C:\work\&amp;lt;\.t3\shot.png`, String.raw`C:\work\&lt;\.t3\shot.png`],
+])("preserves separators and decodes references once in %s", (authored, expected) => {
+  const parser = unified().use(remarkParse).use(remarkKeepWindowsPaths);
+  for (const prefix of ["", "!"]) {
+    expect(parser.parse(`${prefix}[shot](<${authored}>)`)).toMatchObject({
+      children: [{ children: [{ url: expected }] }],
     });
-  },
-);
+  }
+  expect(parser.parse(`[shot]: <${authored}>`)).toMatchObject({
+    children: [{ type: "definition", url: expected }],
+  });
+});

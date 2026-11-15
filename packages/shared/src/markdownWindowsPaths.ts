@@ -1,5 +1,5 @@
-import { decodeString } from "micromark-util-decode-string";
 import type { Processor } from "unified";
+import { decodeString } from "micromark-util-decode-string";
 import { isWindowsAbsolutePath } from "./path.ts";
 
 interface DestinationCompileContext {
@@ -17,15 +17,14 @@ function keepWindowsPathDestination(this: DestinationCompileContext, token: unkn
   const decoded = this.resume();
   const authored = this.sliceSerialize(token);
   const node = this.stack.at(-1);
-  // Escaping each separator keeps it while character references still decode.
   if (node)
     node.url = isWindowsAbsolutePath(authored)
-      ? decodeString(escapeWindowsPathBackslashes(authored))
+      ? decodeString(authored.replaceAll("\\", "\\\\"))
       : decoded;
 }
 
 // A drive path that has not reached whitespace yet: `C:`, `C:\Users\me`, `C:/work`.
-const UNFINISHED_DRIVE_PATH = /(?:^|\W)[A-Za-z]:(?:[\\/]\S*)?$/;
+export const UNFINISHED_DRIVE_PATH = /(?:^|\W)[A-Za-z]:(?:[\\/]\S*)?$/;
 
 interface EscapeCompileContext {
   readonly stack: ReadonlyArray<{
