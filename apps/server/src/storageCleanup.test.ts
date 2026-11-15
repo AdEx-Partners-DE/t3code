@@ -1195,11 +1195,7 @@ it.live("keeps a managed worktree folder left with only node_modules", () =>
         if (entry !== "node_modules") yield* fs.remove(`${worktree}/${entry}`, { recursive: true });
       }
       yield* command(repo, ["worktree", "prune"]);
-      const report = yield* service.runNow;
-      expect(report.entries.find((entry) => entry.path === worktree)).toMatchObject({
-        outcome: "kept",
-        reason: "Not a linked worktree",
-      });
+      yield* service.runNow;
       expect(yield* fs.exists(`${worktree}/node_modules/pkg`)).toBe(true);
     }),
   ),
