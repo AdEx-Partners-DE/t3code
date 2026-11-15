@@ -680,7 +680,9 @@ it.effect.each([
         : [],
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
-    Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true })),
+    Layer.provide(
+      ServerSettings.layerTest({ continueThreadsAfterServerUpdate: scenario !== "queued" }),
+    ),
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ProjectionStore.ProjectionStoreV2)({

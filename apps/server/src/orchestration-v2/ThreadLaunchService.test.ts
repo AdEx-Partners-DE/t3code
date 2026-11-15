@@ -518,7 +518,6 @@ it.effect.each([
   { switchedTo: "another account of the same provider", selection: otherCodexModelSelection },
 ])("runs a thread-bound automation on $switchedTo the thread uses now", ({ selection }) => {
   const harness = makeHarness({
-    adapters: [adapter, claudeAdapter],
     serverSettings: {
       providerInstances: {
         [otherCodexModelSelection.instanceId]: { driver: adapter.driver, config: {} },
