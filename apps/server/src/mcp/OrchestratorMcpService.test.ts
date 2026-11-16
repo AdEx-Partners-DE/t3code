@@ -2781,6 +2781,10 @@ describe("OrchestratorMcpService provider resolution", () => {
               { slug: "claude-opus-4-1", isLegacy: true },
               ...Array.from({ length: 9 }, (_, index) => ({ slug: `claude-opus-5-${index + 1}` })),
             ].map((model) => ({ ...model, name: model.slug, isCustom: false, capabilities: null })),
+            version: "2.1.302",
+            updateRequiredModels: [
+              { slug: "claude-fable-5-2", name: "Claude Fable 5.2", minVersion: "2.1.321" },
+            ],
           },
         ]),
         adapterRegistryLayer([codexInstanceId]),
@@ -2818,6 +2822,11 @@ describe("OrchestratorMcpService provider resolution", () => {
             "claude-opus-5-6, claude-opus-5-7, claude-opus-5-8 and 2 more; " +
             "orchestrator_capabilities with search finds them.",
         );
+
+        const updateRequired = yield* refuse("claude-fable-5-2");
+        assert.equal(updateRequired.code, "model_unavailable");
+        assert.include(updateRequired.message, "v2.1.302");
+        assert.include(updateRequired.message, "2.1.321");
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
     }),
   );
@@ -4038,6 +4047,10 @@ describe("OrchestratorMcpService provider resolution", () => {
       saved: Ref.Ref<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>,
       task: ScheduledTask = existing,
       inputs?: Ref.Ref<ReadonlyArray<ScheduledTaskUpsertInput>>,
+      defaults: {
+        readonly project: ScheduledTask["modelSelection"] | null;
+        readonly environment?: ScheduledTask["modelSelection"];
+      } = { project: existing.modelSelection },
     ) =>
       OrchestratorMcpService.layer.pipe(
         Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
@@ -4049,7 +4062,11 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.mock(ThreadManagementService.ThreadManagementService)({
               getThreadShell: () => Effect.succeed(null),
             }),
-            ServerSettings.layerTest(),
+            ServerSettings.layerTest(
+              defaults.environment === undefined
+                ? {}
+                : { defaultModelSelection: defaults.environment },
+            ),
             Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
             Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
               list: () => Effect.succeed([]),
@@ -4059,7 +4076,7 @@ describe("OrchestratorMcpService provider resolution", () => {
                 Effect.succeedSome({
                   id: projectId,
                   workspaceRoot,
-                  defaultModelSelection: existing.modelSelection,
+                  defaultModelSelection: defaults.project,
                 } as never),
             }),
             Layer.mock(SecretRequests.SecretRequests)({}),
@@ -4097,6 +4114,38 @@ describe("OrchestratorMcpService provider resolution", () => {
         assert.deepEqual(yield* Ref.get(saved), [
           { type: "worktree", baseRef: "origin/master", startFromOrigin: true },
         ]);
+      }).pipe(
+        Effect.provide(
+          Layer.mock(GitWorkflow.GitWorkflowService)({
+            repositoryRoot: (cwd) => Effect.succeed(cwd),
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses the environment's default model when the project inherits it", () =>
+      Effect.gen(function* () {
+        const environmentDefault = {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-5-5",
+        };
+        const inputs = yield* Ref.make<ReadonlyArray<ScheduledTaskUpsertInput>>([]);
+        const mcp = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+          Effect.provide(
+            service(
+              masterRepository,
+              yield* Ref.make<ReadonlyArray<ScheduledTask["workspaceStrategy"]>>([]),
+              existing,
+              inputs,
+              { project: null, environment: environmentDefault },
+            ),
+          ),
+        );
+        yield* mcp.scheduleTask(client, { projectId, prompt: "Check the build", schedule });
+        assert.deepEqual(
+          (yield* Ref.get(inputs)).map((input) => input.modelSelection),
+          [environmentDefault],
+        );
       }).pipe(
         Effect.provide(
           Layer.mock(GitWorkflow.GitWorkflowService)({
@@ -5267,11 +5316,18 @@ describe("OrchestratorMcpService thread list", () => {
     capabilities: new Set(["orchestration"]),
     issuedAt: 1,
   };
-  const shell = (id: string, projectId: string, snoozed: boolean, waiting = false) => ({
+  const shell = (
+    id: string,
+    projectId: string,
+    snoozed: boolean,
+    waiting = false,
+    pinned = false,
+  ) => ({
     ...liveThreadShell(ThreadId.make(id)),
     projectId: ProjectId.make(projectId),
     status: "completed" as const,
     snoozedUntil: snoozed ? DateTime.makeUnsafe("2099-01-01T00:00:00Z") : null,
+    pinnedAt: pinned ? DateTime.makeUnsafe("2026-01-01T00:00:00Z") : null,
     blockedOnThreadWait: waiting,
     pendingBackgroundTasks: waiting
       ? [
@@ -5290,7 +5346,7 @@ describe("OrchestratorMcpService thread list", () => {
   const shells = [
     shell("thread:a-snoozed", "project:a", true),
     shell("thread:a-awake", "project:a", false),
-    shell("thread:b-snoozed", "project:b", true, true),
+    shell("thread:b-snoozed", "project:b", true, true, true),
     {
       ...shell("thread:a-awaiting-command", "project:a", false),
       activityRunStatus: null,
@@ -5363,6 +5419,10 @@ describe("OrchestratorMcpService thread list", () => {
           ["thread:a-snoozed", "project:a"],
           ["thread:b-snoozed", "project:b"],
         ],
+      );
+      assert.deepStrictEqual(
+        listed.threads.map((thread) => thread.pinned),
+        [false, true],
       );
       assert.deepStrictEqual(
         listed.threads.map((thread) => [thread.blockedOnThreadWait, thread.pendingBackgroundTasks]),
