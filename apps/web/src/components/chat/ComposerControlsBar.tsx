@@ -4,6 +4,7 @@ import type { ChatComposerProps } from "./ChatComposer";
 import type { PromptUltrathink } from "./TraitsPicker";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { type AppModelOption } from "../../modelSelection";
+import { T, useGT, useMessages } from "gt-react";
 import { CircleAlertIcon } from "lucide-react";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerControl } from "./ComposerControl";
@@ -156,6 +157,8 @@ export function ComposerControlsBar(props: {
     measuredHiddenBlockCount,
   });
   const controlSize = composerControlsCollapsed ? "xs" : "sm";
+  const gt = useGT();
+  const m = useMessages();
   const applyThreadModelPick = useApplyThreadModelPick();
   const applyRouteThreadModelPick = useStableCallback(() => applyThreadModelPick(routeThreadRef));
   const traitsInput = resolveComposerTraitsInput({
@@ -172,7 +175,7 @@ export function ComposerControlsBar(props: {
     promptUltrathink,
     onPromptEdit,
   });
-  const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize);
+  const effort = describeComposerEffort(traitsInput, props.effortDisplay, controlSize, m);
   const restingBlockDefs = showModeBlock
     ? [
         {
@@ -202,17 +205,22 @@ export function ComposerControlsBar(props: {
                 size="xs"
                 variant="ghost-muted"
                 data-testid="composer-model-switch-marker"
-                aria-label={`Use this thread's model, ${threadModelSwitch.from}`}
+                aria-label={gt("Use this thread's model, {model}", {
+                  model: threadModelSwitch.from,
+                })}
                 onClick={() =>
                   onProviderModelSelect(threadModelSwitch.instanceId, threadModelSwitch.model)
                 }
               >
-                switches model
+                <T>switches model</T>
               </Button>
             }
           />
           <TooltipPopup>
-            {`This thread runs on ${threadModelSwitch.from}. Your next message would move it to ${threadModelSwitch.to}. Click to stay on ${threadModelSwitch.from}.`}
+            {gt(
+              "This thread runs on {from}. Your next message would move it to {to}. Click to stay on {from}.",
+              { from: threadModelSwitch.from, to: threadModelSwitch.to },
+            )}
           </TooltipPopup>
         </Tooltip>
       ) : null}
@@ -294,7 +302,7 @@ export function ComposerControlsBar(props: {
       className="shrink-0"
     >
       <CircleAlertIcon className="size-4" />
-      {providerSetupInstanceId ? "Open provider settings" : "No provider available"}
+      {providerSetupInstanceId ? gt("Open provider settings") : gt("No provider available")}
     </ComposerControl>
   ) : (
     <>

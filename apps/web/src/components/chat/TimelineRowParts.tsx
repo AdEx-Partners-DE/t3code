@@ -1,5 +1,6 @@
 import type { HandoffTimelineRun } from "./V2LifecycleRow";
 import type { ServerProvider } from "@t3tools/contracts";
+import { useMessages } from "gt-react";
 import { type ReactNode } from "react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
@@ -26,6 +27,7 @@ export function TimelineRowTimestamp({
   /** A second line for the tooltip, e.g. the model and account a turn ran on. */
   detail?: string | undefined;
 }) {
+  const m = useMessages();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -39,10 +41,10 @@ export function TimelineRowTimestamp({
           />
         }
       >
-        {formatDayAwareTimestamp(createdAt, timestampFormat)}
+        {formatDayAwareTimestamp(createdAt, timestampFormat, undefined, undefined, m)}
       </TooltipTrigger>
       <TooltipPopup>
-        {formatChatTimestampTooltip(createdAt, timestampFormat)}
+        {formatChatTimestampTooltip(createdAt, timestampFormat, m)}
         {detail ? (
           <>
             <br />

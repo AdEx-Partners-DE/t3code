@@ -23,12 +23,13 @@ import {
   LocateFixedIcon,
   MessageSquarePlusIcon,
   RefreshCwIcon,
-  SparklesIcon,
+  Undo2Icon,
 } from "lucide-react";
+import { msg, T, useGT, useMessages } from "gt-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { resolveComposerDraftKey, useComposerDraftStore } from "../../composerDraftStore";
-import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
+import { namedClipboardTarget, writeTextToClipboard } from "../../hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useEnvironmentQuery } from "../../state/query";
@@ -107,10 +108,10 @@ const SET_STATUS_ACTIONS: ReadonlyArray<{
   readonly status: ThreadChecklistItem["status"];
   readonly label: string;
 }> = [
-  { status: "done", label: "Mark done" },
-  { status: "backlog", label: "Move to backlog" },
-  { status: "open", label: "Mark open" },
-  { status: "attention", label: "Needs me" },
+  { status: "done", label: msg("Mark done") },
+  { status: "backlog", label: msg("Move to backlog") },
+  { status: "open", label: msg("Mark open") },
+  { status: "attention", label: msg("Needs me", { $context: "checklist item status" }) },
 ];
 
 /** A checklist item as a row that opens what can be done with it. */
@@ -128,6 +129,7 @@ export function ChecklistItemMenu(props: {
   readonly onRelease?: (() => void) | undefined;
 }) {
   const { item } = props;
+  const messages = useMessages();
   return (
     <Menu>
       <MenuTrigger
@@ -166,27 +168,32 @@ export function ChecklistItemMenu(props: {
         {props.onFollowUp === undefined ? null : (
           <MenuItem onClick={props.onFollowUp}>
             <MessageSquarePlusIcon />
-            Start a new thread with this
+            <T>Start a new thread with this</T>
           </MenuItem>
         )}
         <MenuItem
-          onClick={() => void writeTextToClipboard(checklistItemText(item), "checklist item")}
+          onClick={() =>
+            void writeTextToClipboard(
+              checklistItemText(item),
+              namedClipboardTarget("checklist item"),
+            )
+          }
         >
           <CopyIcon />
-          Copy
+          <T>Copy</T>
         </MenuItem>
         {props.onSetStatus === undefined
           ? null
           : SET_STATUS_ACTIONS.filter((action) => action.status !== item.status).map((action) => (
               <MenuItem key={action.status} onClick={() => props.onSetStatus?.(action.status)}>
                 <ChecklistStatusIcon status={action.status} />
-                {action.label}
+                {messages(action.label)}
               </MenuItem>
             ))}
         {props.onRelease === undefined || item.setByUser !== true ? null : (
           <MenuItem onClick={props.onRelease}>
-            <SparklesIcon />
-            Let the checklist decide
+            <Undo2Icon />
+            <T>Let the checklist decide</T>
           </MenuItem>
         )}
       </MenuPopup>
@@ -218,6 +225,7 @@ export function ThreadChecklistPanel(props: {
   readonly threadId: ThreadId;
 }) {
   const { environmentId, threadId } = props;
+  const gt = useGT();
   const input = { threadId };
   const stored = useEnvironmentQuery(serverEnvironment.threadChecklist({ environmentId, input }));
   const shell = useThreadShell(scopeThreadRef(environmentId, threadId));
@@ -255,7 +263,7 @@ export function ThreadChecklistPanel(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not update the checklist",
+          title: gt("Could not update the checklist"),
           description: String(squashAtomCommandFailure(result)),
         }),
       );
@@ -274,7 +282,7 @@ export function ThreadChecklistPanel(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not change the checklist item",
+          title: gt("Could not change the checklist item"),
           description: String(squashAtomCommandFailure(result)),
         }),
       );
@@ -296,7 +304,7 @@ export function ThreadChecklistPanel(props: {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not give the item back to the checklist",
+          title: gt("Could not give the item back to the checklist"),
           description: String(squashAtomCommandFailure(result)),
         }),
       );
@@ -372,12 +380,12 @@ export function ThreadChecklistPanel(props: {
         type: "info",
         title:
           item.messageId === undefined
-            ? "No place in the thread recorded for this item"
-            : "That part of the thread is not loaded",
+            ? gt("No place in the thread recorded for this item")
+            : gt("That part of the thread is not loaded"),
         description:
           item.messageId === undefined
-            ? "Update the checklist once; items written from now on know their place."
-            : "Scroll up to load earlier turns, then try again.",
+            ? gt("Update the checklist once; items written from now on know their place.")
+            : gt("Scroll up to load earlier turns, then try again."),
       }),
     );
   };
@@ -389,7 +397,7 @@ export function ThreadChecklistPanel(props: {
   return (
     <ThreadDetailsSection
       headingId="thread-details-checklist-heading"
-      title="Checklist"
+      title={gt("Checklist")}
       data-thread-checklist-panel
       actions={
         <>
@@ -400,17 +408,21 @@ export function ThreadChecklistPanel(props: {
                   size="xs"
                   variant="ghost"
                   aria-pressed={auto}
-                  aria-label="Update the checklist automatically"
+                  aria-label={gt("Update the checklist automatically")}
                   onClick={() => setAuto((value) => !value)}
                 >
-                  {auto ? "Auto" : "Manual"}
+                  {auto
+                    ? gt("Auto", { $context: "checklist updates automatically" })
+                    : gt("Manual", { $context: "checklist updates by hand" })}
                 </ThreadDetailsControl>
               }
             />
             <TooltipPopup>
               {auto
-                ? "While this thread is open: rewritten by a model once it has finished 3 more turns and stands still, at most every 15 minutes. Threads you are not looking at are never rewritten on their own."
-                : "Rewritten only when you press update."}
+                ? gt(
+                    "While this thread is open: rewritten by a model once it has finished 3 more turns and stands still, at most every 15 minutes. Threads you are not looking at are never rewritten on their own.",
+                  )
+                : gt("Rewritten only when you press update.")}
             </TooltipPopup>
           </Tooltip>
           <Tooltip>
@@ -420,7 +432,7 @@ export function ThreadChecklistPanel(props: {
                   size="icon-xs"
                   variant="ghost"
                   part="icon"
-                  aria-label="Update the checklist now"
+                  aria-label={gt("Update the checklist now")}
                   disabled={busy || !allowed || !hasRun}
                   onClick={() => void run(false)}
                 >
@@ -428,7 +440,9 @@ export function ThreadChecklistPanel(props: {
                 </ThreadDetailsControl>
               }
             />
-            <TooltipPopup>Have a model read the thread and rewrite the checklist</TooltipPopup>
+            <TooltipPopup>
+              <T>Have a model read the thread and rewrite the checklist</T>
+            </TooltipPopup>
           </Tooltip>
         </>
       }
@@ -436,18 +450,20 @@ export function ThreadChecklistPanel(props: {
       <div className="flex flex-col gap-2 px-1.5 text-xs">
         {busy ? (
           <p className="text-muted-foreground" role="status">
-            Reading the thread…
+            <T>Reading the thread…</T>
           </p>
         ) : null}
         {checklist === null && !busy ? (
           <p className="text-muted-foreground">
             {hasRun
-              ? "No checklist yet. Press update to have a model write one from this thread."
-              : "The checklist appears once the thread has done a turn."}
+              ? gt("No checklist yet. Press update to have a model write one from this thread.")
+              : gt("The checklist appears once the thread has done a turn.")}
           </p>
         ) : null}
         {checklist !== null && checklist.items.length === 0 && !busy ? (
-          <p className="text-muted-foreground">Nothing to list for this thread.</p>
+          <p className="text-muted-foreground">
+            <T>Nothing to list for this thread.</T>
+          </p>
         ) : null}
         {groups.map((group) => {
           const shown =
@@ -464,9 +480,9 @@ export function ThreadChecklistPanel(props: {
                   <li key={`${item.status}:${item.text}`}>
                     <ChecklistItemMenu
                       item={item}
-                      showLabel="Show in thread"
+                      showLabel={gt("Show in thread")}
                       onShow={() => void showInThread(item)}
-                      takeUpLabel="Take up in the composer"
+                      takeUpLabel={gt("Take up in the composer")}
                       onTakeUp={() =>
                         quoteChecklistItem(scopeThreadRef(environmentId, threadId), item)
                       }
@@ -493,7 +509,9 @@ export function ThreadChecklistPanel(props: {
                   onClick={() => setShowAllDone((value) => !value)}
                   className="cursor-pointer self-start rounded-sm text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
                 >
-                  {showAllDone ? "Show fewer" : `Show ${group.items.length - DONE_SHOWN} more done`}
+                  {showAllDone
+                    ? gt("Show fewer")
+                    : gt("Show {count} more done", { count: group.items.length - DONE_SHOWN })}
                 </button>
               ) : null}
             </div>
@@ -501,8 +519,11 @@ export function ThreadChecklistPanel(props: {
         })}
         {checklist !== null ? (
           <p className="text-2xs text-muted-foreground">
-            Updated {relativeLabel(checklist.generatedAt)}
-            {stale ? " · the thread has moved on since" : ""}
+            {stale
+              ? gt("Updated {time} · the thread has moved on since", {
+                  time: relativeLabel(checklist.generatedAt),
+                })
+              : gt("Updated {time}", { time: relativeLabel(checklist.generatedAt) })}
           </p>
         ) : null}
       </div>
