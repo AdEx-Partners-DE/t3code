@@ -2504,10 +2504,11 @@ effectIt.effect.each([["node_modules"], ["node_modules", ".next"]])(
         path,
         failReadsAfterRunning: true,
       });
-      // `git worktree add` refuses a non-empty target, so the leftover must be gone first.
+      // `git worktree add` refuses a non-empty target, so the leftovers must be gone first; the
+      // folder itself stays, since Windows cannot remove a folder that is still someone's cwd.
       harness.createWorktree.mockImplementation(() =>
-        fileSystem.exists(worktreePath).pipe(
-          Effect.tap((exists) => Effect.sync(() => expect(exists).toBe(false))),
+        fileSystem.readDirectory(worktreePath).pipe(
+          Effect.tap((entries) => Effect.sync(() => expect(entries).toEqual([]))),
           Effect.as({} as never),
           Effect.orDie,
         ),
