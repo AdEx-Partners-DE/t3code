@@ -878,23 +878,35 @@ function withWorkspaceWriteConfigRead(
   const frame = entries[turnStart]?.type === "runtime_exit" ? undefined : entries[turnStart]?.frame;
   if (!Predicate.isObject(frame) || typeof frame.id !== "number") return [...entries];
   const id = frame.id;
+  const params = Predicate.isObject(frame.params) ? frame.params : {};
   return [
     ...entries.slice(0, turnStart),
+    // The first turn on a connection names the native thread before it reads the config.
+    {
+      type: "expect_outbound",
+      label: "thread/name/set",
+      frame: {
+        id,
+        method: "thread/name/set",
+        params: { threadId: params.threadId, name: CODEX_TEST_THREAD_TITLE },
+      },
+    },
+    { type: "emit_inbound", label: "thread/name/set", frame: { id, result: {} } },
     {
       type: "expect_outbound",
       label: "config/read",
-      frame: { id, method: "config/read", params: { cwd: "/workspace" } },
+      frame: { id: id + 1, method: "config/read", params: { cwd: "/workspace" } },
     },
     {
       type: "emit_inbound",
       label: "config/read",
-      frame: { id, result: { config: {}, origins: {} } },
+      frame: { id: id + 1, result: { config: {}, origins: {} } },
     },
     ...entries
       .slice(turnStart)
       .map((entry) =>
         entry.type !== "runtime_exit" && Predicate.isObject(entry.frame) && entry.frame.id === id
-          ? withReplayRequestId(entry, id + 1)
+          ? withReplayRequestId(entry, id + 2)
           : entry,
       ),
   ];
@@ -3372,15 +3384,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     const nativeThreadId = `${input.scenario}-thread`;
     const nativeTurnId = `${input.scenario}-turn`;
     const preamble = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "fetch" });
-    const turnStartId = input.requirementsReply === undefined ? 4 : 5;
+    const turnStartId = input.requirementsReply === undefined ? 5 : 6;
     return makeCodexReplayTranscript({
       scenario: input.scenario,
       entries: [
         ...preamble.slice(0, 5),
+        // The first turn on a connection names the native thread after the T3 title.
+        {
+          type: "expect_outbound",
+          label: "thread/name/set",
+          frame: {
+            id: 3,
+            method: "thread/name/set",
+            params: { threadId: nativeThreadId, name: CODEX_TEST_THREAD_TITLE },
+          },
+        },
+        { type: "emit_inbound", label: "thread/name/set", frame: { id: 3, result: {} } },
         {
           type: "expect_outbound",
           label: "config/read",
-          frame: { id: 3, method: "config/read", params: { cwd: "/workspace" } },
+          frame: { id: 4, method: "config/read", params: { cwd: "/workspace" } },
         },
         ...(input.configReadReply === undefined
           ? []
@@ -3388,7 +3411,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               {
                 type: "emit_inbound" as const,
                 label: "config/read",
-                frame: { id: 3, ...input.configReadReply },
+                frame: { id: 4, ...input.configReadReply },
               },
             ]),
         ...(input.requirementsReply === undefined
@@ -3397,12 +3420,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               {
                 type: "expect_outbound" as const,
                 label: "configRequirements/read",
-                frame: { id: 4, method: "configRequirements/read" },
+                frame: { id: 5, method: "configRequirements/read" },
               },
               {
                 type: "emit_inbound" as const,
                 label: "configRequirements/read",
-                frame: { id: 4, ...input.requirementsReply },
+                frame: { id: 5, ...input.requirementsReply },
               },
             ]),
         {
@@ -3642,6 +3665,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, runtimeMode: "auto" },
         })
         .pipe(Effect.forkScoped);
+      // The thread name is set before config/read, so its timer starts after one more round trip.
+      yield* TestClock.adjust("1 millis");
       yield* TestClock.adjust("5 seconds");
       yield* Fiber.join(started);
       yield* harness.firstTerminal;

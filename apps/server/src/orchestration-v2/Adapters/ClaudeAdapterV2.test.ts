@@ -26001,7 +26001,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }
           assert.isTrue(Exit.isSuccess(steered));
           assert.equal(harness.offeredMessages.length, offered + 1);
-          assert.equal(harness.offeredMessages.at(-1)?.priority, "now");
+          assert.equal(harness.offeredMessages.at(-1)?.priority, "next");
           if (backgrounding === "never answers") {
             for (let repeat = 1; repeat <= 2; repeat++) {
               const again = yield* Effect.forkScoped(steer, { startImmediately: true });
