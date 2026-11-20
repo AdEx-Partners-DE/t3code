@@ -234,6 +234,7 @@ const EMPTY_DRAFT: DraftState = {
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
   threadId: "",
+  savedThreadId: "",
   threadMode: "new_thread",
   workspaceMode: "worktree",
   baseRef: "",
@@ -2154,6 +2155,10 @@ function ScheduledTaskEditorForm({
               baseRef: worktreeBaseRef,
               startFromOrigin: draft.startFromOrigin,
             };
+    const boundThreadId =
+      draft.threadId && !(schedule.type === "idle" && schedule.allOpenThreads)
+        ? (draft.threadId as ThreadId)
+        : null;
     const input: ScheduledTaskUpsertInput = {
       ...(draft.editingId ? { id: draft.editingId as ScheduledTaskId, requireExisting: true } : {}),
       title: draft.title.trim(),
@@ -2161,10 +2166,8 @@ function ScheduledTaskEditorForm({
       enabled: draft.enabled,
       schedule,
       projectId: selectedProjectId as ProjectId,
-      threadId:
-        draft.threadId && !(schedule.type === "idle" && schedule.allOpenThreads)
-          ? (draft.threadId as ThreadId)
-          : null,
+      threadId: boundThreadId,
+      ...(boundThreadId === null && draft.savedThreadId !== "" ? { unbindThread: true } : {}),
       ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
       workspaceStrategy,
       modelSelection,
