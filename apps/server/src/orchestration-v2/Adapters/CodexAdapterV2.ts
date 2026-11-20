@@ -120,6 +120,7 @@ import {
   toMcpElicitationResponse,
 } from "../../provider/CodexMcpElicitation.ts";
 import {
+  codexHomeLaunchArgs,
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
 } from "../../provider/Drivers/CodexHomeLayout.ts";
@@ -275,6 +276,7 @@ export const CodexProviderCapabilitiesV2 = {
     canRollbackThread: true,
     canForkThread: true,
     canForkFromTurn: true,
+    canForkWhileSourceRunning: true,
     canForkFromSubagentThread: true,
     exposesNativeThreadId: true,
   },
@@ -283,6 +285,7 @@ export const CodexProviderCapabilitiesV2 = {
     emitsTurnStarted: true,
     emitsTurnCompleted: true,
     supportsInterrupt: true,
+    supportsNativeResume: true,
     supportsActiveSteering: true,
     activeSteeringDuringCompaction: true,
     supportsSteeringByInterruptRestart: true,
@@ -1951,6 +1954,7 @@ export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapter
     enabled,
     binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
     homePath: homeLayout.effectiveHomePath ?? "",
+    launchArgs: codexHomeLaunchArgs(yield* Path.Path, homeLayout, config.launchArgs),
   } satisfies CodexSettings;
 
   return yield* makeCodexAdapterV2({
@@ -2248,6 +2252,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           string,
           { readonly runtimeMode: RuntimeMode; readonly kinds: Set<ProviderRequestKind> }
         >();
+        // `codex resume` and the Codex app list the native name. A failed rename, including on a
+        // Codex without thread/name/set, is forgotten so the next turn sends it again.
+        const appliedThreadNames = new Map<string, string>();
+        const applyThreadName = Effect.fn("CodexAdapterV2.applyThreadName")(function* (
+          threadId: string,
+          name: string,
+        ) {
+          if (appliedThreadNames.get(threadId) === name) return;
+          const renamed = yield* client
+            .request("thread/name/set", { threadId, name })
+            .pipe(Effect.timeout("10 seconds"), Effect.isSuccess);
+          if (renamed) appliedThreadNames.set(threadId, name);
+          else appliedThreadNames.delete(threadId);
+        });
         /** Bind answers to the request's approval set so mode changes invalidate late answers. */
         const endSessionApprovalsOnModeChange = (context: ActiveCodexTurnContext) => {
           const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
@@ -7766,6 +7784,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const activation = { stopped: false };
           goalActivations.set(threadId, activation);
           yield* Effect.gen(function* () {
+            yield* applyThreadName(threadId, turnInput.appThread.title);
             yield* startNativeTurn(turnInput, yield* codexInput);
             if (activation.stopped) return;
             const { goal } = yield* client.request("thread/goal/set", {
@@ -7898,6 +7917,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             payload: cause,
           });
         // Codex unloads idle threads; MCP requests against one fail until it is resumed.
+        // The session's model and cwd belong to whichever thread opened this shared
+        // app-server, so leave them out: Codex resumes with the thread's saved settings
+        // and loads that workspace's project MCP servers.
         const withLoadedThread = <A, E, R>(
           providerThread: OrchestrationV2ProviderThread,
           threadId: string,
@@ -7912,8 +7934,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     ...codexThreadRuntimeParams({
                       threadId: providerThread.appThreadId,
                       mcpSession,
-                      modelSelection: input.modelSelection,
-                      runtimePolicy: input.runtimePolicy,
                     }),
                   }),
                 ),
@@ -8174,11 +8194,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     : { runtimePolicy: threadInput.runtimePolicy }),
                 }),
               });
+              // Codex resumes an active goal's turns right after the response; own them before it.
+              const previousRoot = rootProviderThreads.get(nativeThreadId);
+              rootProviderThreads.set(nativeThreadId, threadInput.providerThread);
+              goalUpdatesHeld.add(nativeThreadId);
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(resume),
                 Effect.flatMap(decodeCodexResumeMetadata),
+                // Stay registered: a lost or undecodable response may still have resumed the thread.
+                Effect.onError(() =>
+                  Effect.suspend(() => {
+                    if (previousRoot !== undefined) {
+                      rootProviderThreads.set(nativeThreadId, previousRoot);
+                    }
+                    return releaseGoalUpdates(nativeThreadId);
+                  }),
+                ),
               );
-              return {
+              const resumed = {
                 ...threadInput.providerThread,
                 providerSessionId: input.providerSessionId,
                 providerInstanceId: adapterOptions.instanceId,
@@ -8191,6 +8224,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 nativeConversationHeadRef: threadInput.providerThread.nativeConversationHeadRef,
                 updatedAt: codexTimestamp(response.thread.updatedAt),
               } satisfies OrchestrationV2ProviderThread;
+              rootProviderThreads.set(nativeThreadId, resumed);
+              yield* releaseGoalUpdates(nativeThreadId);
+              return rootProviderThreads.get(nativeThreadId) ?? resumed;
             },
             (effect, threadInput) =>
               effect.pipe(
@@ -8283,6 +8319,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 goalsByNativeThread.get(nativeThreadId)?.status === "paused"
               ) {
                 return yield* activateGoal(turnInput, nativeThreadId, toCodexInput(turnInput));
+              }
+              // Not in startNativeTurn: a capacity retry would replay its captured, possibly stale title.
+              if (nativeThreadId != null) {
+                yield* applyThreadName(nativeThreadId, turnInput.appThread.title);
               }
               const input =
                 !continuation || turnInput.nativeThreadHasTurns === false
@@ -8398,6 +8438,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               ),
           ),
+          applyThreadTitle: Effect.fn("CodexAdapterV2.applyThreadTitle")(function* ({
+            providerThread,
+            title,
+          }) {
+            const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
+            if (nativeThreadId != null) yield* applyThreadName(nativeThreadId, title);
+          }),
           applyModelSelection: Effect.fn("CodexAdapterV2.applyModelSelection")(function* ({
             providerThread,
             modelSelection,
@@ -9053,14 +9100,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 });
               }
               // thread/revert requires the thread loaded in this app-server; resume after restart or idle release.
+              // Like withLoadedThread, resume with the thread's saved model and cwd, not the session's.
               if (!loaded) {
                 yield* resumeNativeThread(threadId, {
                   excludeTurns: true,
                   ...codexThreadRuntimeParams({
                     threadId: threadInput.providerThread.appThreadId,
                     mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
-                    modelSelection: input.modelSelection,
-                    runtimePolicy: input.runtimePolicy,
                   }),
                 });
               }

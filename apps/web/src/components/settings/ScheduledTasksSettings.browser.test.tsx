@@ -1,5 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
-import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+import * as Effect from "effect/Effect";
+import { Atom, AtomRegistry } from "effect/reactivity";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
@@ -69,7 +70,7 @@ const permissions = new Map<string, Atom.Writable<boolean>>();
 function setup() {
   state.connected = true;
   state.tasksLoaded = true;
-  state.remove.mockReset().mockResolvedValue({ _tag: "Success", value: { id: task.id } });
+  state.remove.mockReset().mockReturnValue(Effect.succeed({ id: task.id }));
   state.secondary = false;
   state.paused = false;
   state.extraTasks = [];
@@ -136,10 +137,11 @@ vi.mock(import("../../state/server"), async (original) => {
       setScheduledTaskArchived: {
         ...actual.serverEnvironment.setScheduledTaskArchived,
         run: vi.fn<typeof actual.serverEnvironment.setScheduledTaskArchived.run>(
-          async (_registry, args) => {
-            state.commands.push(args);
-            return AsyncResult.success({ task });
-          },
+          (_registry, args) =>
+            Effect.sync(() => {
+              state.commands.push(args);
+              return { task };
+            }),
         ),
       },
       upsertScheduledTask: {
