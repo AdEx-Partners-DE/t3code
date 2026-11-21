@@ -193,18 +193,18 @@ const isWsl = Effect.fn("isWsl")(function* () {
   return kernelRelease.toLowerCase().includes("microsoft");
 });
 
+// Names this environment instead of the machine, e.g. for staged demos and scenario captures.
+const labelOverride = Config.String("T3CODE_ENVIRONMENT_LABEL").pipe(
+  Config.option,
+  Config.map(Option.flatMap((label) => Option.fromNullishOr(normalizeLabel(label)))),
+);
+
 export const resolveServerEnvironmentLabel = Effect.fn("resolveServerEnvironmentLabel")(function* (
   input: ResolveServerEnvironmentLabelInput,
 ) {
-  // A second server on the same machine (a fork beside the installed app)
-  // would otherwise show up under the same hostname in every client.
-  const configured = yield* Config.String("T3CODE_ENVIRONMENT_LABEL").pipe(
-    Config.option,
-    Effect.orElseSucceed(() => Option.none<string>()),
-  );
-  const configuredLabel = normalizeLabel(Option.getOrUndefined(configured));
-  if (configuredLabel) {
-    return configuredLabel;
+  const override = yield* labelOverride.pipe(Effect.orElseSucceed(() => Option.none<string>()));
+  if (Option.isSome(override)) {
+    return override.value;
   }
 
   const friendlyHostLabel = yield* resolveFriendlyHostLabel();
