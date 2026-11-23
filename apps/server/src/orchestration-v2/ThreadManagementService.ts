@@ -1194,7 +1194,12 @@ const make = Effect.gen(function* () {
   const configureModelSelection = Effect.fn(
     "orchestrationV2.threadManagement.configureModelSelection",
   )(function* (input: Parameters<ThreadManagementServiceShape["configureModelSelection"]>[0]) {
-    const target = yield* getProjectThreadRecords(input, ["runs", "providerTurns"]);
+    const target = yield* getProjectThreadRecords(input, [
+      "runs",
+      "providerTurns",
+      "providerThreads",
+      "providerSessions",
+    ]);
     const activeRun = latestActiveRun(target);
     if (
       modelSelectionsEqual(
@@ -1216,6 +1221,22 @@ const make = Effect.gen(function* () {
       return yield* new ThreadManagementNoSteerableRunError({
         threadId: input.threadId,
         mode: "restart",
+      });
+    }
+    const providerThread = target.providerThreads.find(
+      (thread) => thread.id === activeRun.providerThreadId,
+    );
+    const turns = target.providerSessions.find(
+      (session) => session.id === providerThread?.providerSessionId,
+    )?.capabilities.turns;
+    if (
+      turns !== undefined &&
+      (!turns.supportsInterrupt || !turns.supportsSteeringByInterruptRestart)
+    ) {
+      return yield* new Orchestrator.OrchestratorDispatchError({
+        commandId: input.commandId,
+        commandType: "message.dispatch",
+        cause: "The current provider cannot restart the active run with a new model selection.",
       });
     }
     // Persist the replacement input with the selection before interrupting the

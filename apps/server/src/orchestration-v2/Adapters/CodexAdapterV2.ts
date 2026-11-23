@@ -2326,18 +2326,29 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           retired ? Effect.fail(new CodexAppServerRetiredError()) : Effect.void,
         );
         yield* client.awaitTermination.pipe(Effect.catch(retireAppServer), Effect.forkScoped);
+        let requestsWithDeadline = 0;
         // The outcome of an unanswered request is unknown, so it fails rather than retries.
         const withAppServerDeadline =
           (method: string) =>
           <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-            effect.pipe(
-              Effect.timeoutOrElse({
-                duration: CODEX_APP_SERVER_REQUEST_DEADLINE,
-                orElse: () => {
-                  const error = new CodexAppServerUnresponsiveError({ method });
-                  return retireAppServer(error).pipe(Effect.andThen(Effect.fail(error)));
-                },
+            Effect.acquireUseRelease(
+              Effect.sync(() => {
+                requestsWithDeadline += 1;
               }),
+              () =>
+                effect.pipe(
+                  Effect.timeoutOrElse({
+                    duration: CODEX_APP_SERVER_REQUEST_DEADLINE,
+                    orElse: () => {
+                      const error = new CodexAppServerUnresponsiveError({ method });
+                      return retireAppServer(error).pipe(Effect.andThen(Effect.fail(error)));
+                    },
+                  }),
+                ),
+              () =>
+                Effect.sync(() => {
+                  requestsWithDeadline -= 1;
+                }),
             );
         // Read per thread: a workspace's project config can add its own servers.
         const readStdioMcpServers = (cwd: string | null | undefined) =>
@@ -8244,22 +8255,26 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const unresponsive = Effect.gen(function* () {
           while (true) {
             yield* Effect.sleep(CODEX_LIVENESS_PROBE_INTERVAL);
+            if (retired) return;
+            // In-flight requests already have their own deadline and failure reason.
+            if (requestsWithDeadline > 0) continue;
             const answered = yield* client
               .request("thread/loaded/list", { limit: 1 })
               .pipe(
                 Effect.catchTags({ CodexAppServerRequestError: () => Effect.void }),
                 Effect.timeoutOption(CODEX_LIVENESS_PROBE_TIMEOUT),
               );
-            if (Option.isNone(answered)) {
-              return new ProviderUnresponsiveError({
-                provider: "Codex",
-                timeout: CODEX_LIVENESS_PROBE_TIMEOUT,
-              });
+            if (Option.isNone(answered) && requestsWithDeadline === 0 && !retired) {
+              return yield* retireAppServer(
+                new ProviderUnresponsiveError({
+                  provider: "Codex",
+                  timeout: CODEX_LIVENESS_PROBE_TIMEOUT,
+                }),
+              );
             }
           }
         });
         yield* unresponsive.pipe(
-          Effect.flatMap(retireAppServer),
           Effect.catch(() => Effect.void),
           Effect.forkIn(scope),
         );

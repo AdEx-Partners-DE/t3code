@@ -210,7 +210,7 @@ describe("parseCodexLine", () => {
     expect({
       requests: records.length,
       processedTokens: records.reduce((sum, record) => sum + totalTokens(record.totals), 0),
-      skipped: codexUsageFormat.readMalformedRecords?.(state),
+      skipped: codexUsageFormat.readMalformedRecords?.(state).length,
     }).toEqual({ requests: 3, processedTokens: 1440, skipped: 0 });
   });
 
@@ -220,7 +220,7 @@ describe("parseCodexLine", () => {
     parseCodexLine(counted(counters(1000, 200), counters(1000, 200)), state);
 
     expect(parseCodexLine(counted(counters(100, 20), counters(90, 20)), state)).toBeNull();
-    expect(codexUsageFormat.readMalformedRecords?.(state)).toBe(1);
+    expect(codexUsageFormat.readMalformedRecords?.(state)).toHaveLength(1);
   });
 
   it("ignores a replay of the current sequence's first request without moving the baseline back", () => {
@@ -239,7 +239,7 @@ describe("parseCodexLine", () => {
 
     expect({
       processed,
-      skipped: codexUsageFormat.readMalformedRecords?.(state),
+      skipped: codexUsageFormat.readMalformedRecords?.(state).length,
     }).toEqual({ processed: [120, 120, 0, 120], skipped: 0 });
   });
 

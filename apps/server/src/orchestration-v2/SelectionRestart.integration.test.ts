@@ -1322,8 +1322,8 @@ it.live("a queued run moved off a pooled session opens the target under its own 
           dispatchMode: { type: "start_immediately" },
         });
         yield* Fiber.join(firstRunning);
-        const activeRunId = (yield* orchestrator.getThreadProjection(threadId)).runs[0]?.id;
-        if (activeRunId === undefined) {
+        const activeRun = (yield* orchestrator.getThreadProjection(threadId)).runs[0];
+        if (activeRun === undefined) {
           return yield* Effect.die("first run never started");
         }
         yield* orchestrator.dispatch({
@@ -1338,7 +1338,30 @@ it.live("a queued run moved off a pooled session opens the target under its own 
           modelSelection: initialSelection,
           dispatchMode: { type: "queue_after_active" },
         });
-        // The queued run keeps the pooled provider thread it was queued on.
+        yield* orchestrator.dispatch({
+          type: "queue.hold",
+          commandId: CommandId.make("command:queued-pooled-handoff:hold"),
+          threadId,
+        });
+        const beforeInterrupt = yield* orchestrator.getThreadEventSequence(threadId);
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make("command:queued-pooled-handoff:interrupt"),
+          threadId,
+          runId: activeRun.id,
+        });
+        yield* orchestrator
+          .streamStoredEventsFrom({ threadId, afterSequence: beforeInterrupt })
+          .pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.type === "run.updated" &&
+                event.payload.id === activeRun.id &&
+                event.payload.status === "interrupted",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+          );
         yield* orchestrator.dispatch({
           type: "thread.model-selection.set",
           commandId: CommandId.make("command:queued-pooled-handoff:move"),
@@ -1346,11 +1369,16 @@ it.live("a queued run moved off a pooled session opens the target under its own 
           modelSelection: handoffSelection,
           includeQueuedRuns: true,
         });
+        const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.status === "queued",
+        );
+        assert.isDefined(queued);
+        assert.strictEqual(queued?.providerThreadId, activeRun.providerThreadId);
+        assert.deepEqual(queued?.modelSelection, handoffSelection);
         yield* orchestrator.dispatch({
-          type: "run.interrupt",
-          commandId: CommandId.make("command:queued-pooled-handoff:interrupt"),
+          type: "queue.resume",
+          commandId: CommandId.make("command:queued-pooled-handoff:resume"),
           threadId,
-          runId: activeRunId,
         });
         yield* Deferred.await(targetStarted);
       }).pipe(
