@@ -1,3 +1,10 @@
+> [!IMPORTANT]
+> **Unofficial personal fork. This is not T3 Code.**
+>
+> This repository is one person's working copy of [pingdotgg/t3code](https://github.com/pingdotgg/t3code), used to try changes on their own machine. It is not affiliated with, endorsed by or supported by T3 Tools Inc. or the T3 Code team. We publish no builds or releases and do not promote this fork. "T3 Code" and its logos belong to their owners.
+>
+> Everything below this note is the upstream README, left unchanged so upstream updates merge cleanly. Its download and app links lead to the official T3 Code, not to this fork. For T3 Code itself, go to [t3.codes](https://t3.codes) or the [official repository](https://github.com/pingdotgg/t3code), and please do not report problems from this fork upstream.
+
 <p align="center">
   <a href="https://t3.codes">
     <img src="./assets/prod/t3-black-web-icon-192x192.png" width="80" height="80" alt="T3 Code logo" />
