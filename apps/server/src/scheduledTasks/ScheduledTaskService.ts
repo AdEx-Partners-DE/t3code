@@ -3,6 +3,7 @@ import {
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProjectId,
+  type ProviderInstanceId,
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
@@ -222,6 +223,9 @@ const decodeWorkspaceStrategyJson = Schema.decodeUnknownEffect(
 const decodeModelSelectionJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ScheduledTask.fields.modelSelection),
 );
+const encodeModelSelectionJson = Schema.encodeEffect(
+  Schema.fromJsonString(ScheduledTask.fields.modelSelection),
+);
 const HeadersJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const MissingFieldsJson = Schema.fromJsonString(Schema.Array(Schema.String));
 const decodeHeadersJson = Schema.decodeUnknownOption(HeadersJson);
@@ -310,6 +314,15 @@ export class ScheduledTaskService extends Context.Service<
       readonly threadIds: ReadonlyArray<ThreadId>;
       readonly projectId: ProjectId;
     }) => Effect.Effect<void, ScheduledTaskError>;
+    /**
+     * Points every task whose model selection is on `fromInstanceId` at `toInstanceId`, keeping
+     * model and options, and reports how many moved. Bound tasks follow their thread at run
+     * time, but their own selection is what a new thread starts with.
+     */
+    readonly retargetProviderInstance: (input: {
+      readonly fromInstanceId: ProviderInstanceId;
+      readonly toInstanceId: ProviderInstanceId;
+    }) => Effect.Effect<number, ScheduledTaskError>;
     /** The dispatched thread, or null if dispatch failed; leaves the task's binding unchanged. */
     readonly runNow: (
       input: ScheduledTaskRunNowInput,
@@ -2446,6 +2459,40 @@ export const layer = Layer.effect(
       if (moved.length > 0) yield* notifyChanged;
     });
 
+    const retargetProviderInstance: ScheduledTaskService["Service"]["retargetProviderInstance"] =
+      Effect.fn("ScheduledTaskService.retargetProviderInstance")(
+        function* (input) {
+          const rows = yield* sql<{ task_id: ScheduledTaskId; model_selection_json: string }>`
+            SELECT task_id, model_selection_json FROM scheduled_tasks
+          `;
+          const updatedAt = iso(yield* localNow);
+          let moved = 0;
+          for (const row of rows) {
+            const selection = yield* decodeModelSelectionJson(row.model_selection_json).pipe(
+              Effect.orElseSucceed(() => null),
+            );
+            if (selection?.instanceId !== input.fromInstanceId) continue;
+            const next = yield* encodeModelSelectionJson({
+              ...selection,
+              instanceId: input.toInstanceId,
+            });
+            yield* sql`
+              UPDATE scheduled_tasks
+              SET model_selection_json = ${next}, updated_at = ${updatedAt}
+              WHERE task_id = ${row.task_id}
+            `;
+            moved += 1;
+          }
+          if (moved > 0) yield* notifyChanged;
+          return moved;
+        },
+        Effect.mapError((cause) =>
+          isScheduledTaskError(cause)
+            ? cause
+            : taskError("Could not move the schedule tasks to the other account.", { cause }),
+        ),
+      );
+
     const runNow: ScheduledTaskService["Service"]["runNow"] = Effect.fn(
       "ScheduledTaskService.runNow",
     )(function* (input: ScheduledTaskRunNowInput) {
@@ -3390,6 +3437,7 @@ export const layer = Layer.effect(
       delete: deleteTask,
       deleteForThread,
       moveThreadTasks,
+      retargetProviderInstance,
       runNow,
       rotateWebhookToken,
       listWebhookDeliveries,

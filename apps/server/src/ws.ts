@@ -301,6 +301,7 @@ import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitHistory from "./usage/UsageLimitHistory.ts";
 import * as OpenThreadModelOverride from "./orchestration-v2/OpenThreadModelOverride.ts";
+import * as ProviderInstanceSwap from "./orchestration-v2/ProviderInstanceSwap.ts";
 import * as OpenThreadNudge from "./orchestration-v2/OpenThreadNudge.ts";
 import * as ThreadChecklist from "./orchestration-v2/ThreadChecklist.ts";
 import { currentUpdateHold } from "./scheduledTasks/updateHold.ts";
@@ -1551,6 +1552,7 @@ export const layerWsRpc = (
       const usage = yield* UsageService.UsageService;
       const usageLimitHistory = yield* UsageLimitHistory.UsageLimitHistory;
       const openThreadModelOverride = yield* OpenThreadModelOverride.make;
+      const providerInstanceSwap = yield* ProviderInstanceSwap.ProviderInstanceSwap;
       const openThreadNudge = yield* OpenThreadNudge.make;
       const threadChecklist = yield* ThreadChecklist.ThreadChecklist;
       const queueOverview = yield* QueueOverview.make;
@@ -2366,6 +2368,21 @@ export const layerWsRpc = (
                     }),
                 ),
               );
+            case "swapProviderInstance": {
+              const { action, ...request } = input;
+              return providerInstanceSwap.swap(request).pipe(
+                Effect.map((result) => ({ action, ...result })),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2DispatchCommandError({
+                      commandId: input.commandId,
+                      commandType: "thread.model-selection.set",
+                      message: cause.message,
+                      cause,
+                    }),
+                ),
+              );
+            }
           }
         },
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>

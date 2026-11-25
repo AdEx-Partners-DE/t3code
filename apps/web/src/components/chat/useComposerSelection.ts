@@ -31,6 +31,7 @@ import {
   useComposerDraftStore,
 } from "../../composerDraftStore";
 import { cancelHeldComposerSend } from "./preparingComposerImages";
+import { modelPickOptions } from "./useComposerSelection.logic";
 import {
   getStartedThreadModelChangeBlockReason,
   deriveLockedProvider,
@@ -204,17 +205,21 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     const threadSelection = activeThread.modelSelection;
     // This pick replaces the stored options, so the thread's own model carries them over.
     const pickOptions =
-      rememberedOptions !== undefined && rememberedOptions.length > 0
+      entry === undefined
         ? rememberedOptions
-        : threadSelection.instanceId === instanceId &&
-            entry !== undefined &&
-            isSameModel(
+        : modelPickOptions({
+            pick: { instanceId, driver: entry.driver },
+            thread: threadSelection,
+            threadDriver: providerStatuses.find(
+              (snapshot) => snapshot.instanceId === threadSelection.instanceId,
+            )?.driver,
+            sameModel: isSameModel(
               { providers: providerStatuses, selectedProvider: entry.driver, settings },
               threadSelection,
               { instanceId, model: resolvedModel },
-            )
-          ? threadSelection.options
-          : undefined;
+            ),
+            remembered: rememberedOptions,
+          });
     const nextModelSelection: ModelSelection =
       pickOptions !== undefined && pickOptions.length > 0
         ? { instanceId, model: resolvedModel, options: [...pickOptions] }

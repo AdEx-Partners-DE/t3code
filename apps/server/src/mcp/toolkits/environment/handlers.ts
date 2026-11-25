@@ -1,6 +1,8 @@
-import { OrchestratorMcpFailure, type ServerSettings } from "@t3tools/contracts";
+import { CommandId, OrchestratorMcpFailure, type ServerSettings } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
+import * as ProviderInstanceSwap from "../../../orchestration-v2/ProviderInstanceSwap.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as Settings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -106,6 +108,25 @@ export const layer = McpToolAccess.toLayer(EnvironmentToolkit, {
       return yield* scope.thread === undefined
         ? update
         : executor.withLock(scope.thread.threadId, update);
+    }),
+  ),
+  t3_provider_instance_swap: McpToolAccess.writesEnvironment(({ environmentId: _, ...input }) =>
+    Effect.gen(function* () {
+      yield* access;
+      const swap = yield* ProviderInstanceSwap.ProviderInstanceSwap;
+      const at = yield* Clock.currentTimeMillis;
+      const commandId = CommandId.make(
+        `mcp:provider-swap:${input.fromInstanceId}:${input.toInstanceId}:${at}`,
+      );
+      return yield* swap
+        .swap({ ...input, commandId })
+        .pipe(
+          Effect.mapError((cause) =>
+            cause._tag === "ProviderInstanceSwapError"
+              ? new OrchestratorMcpFailure({ code: "invalid_request", message: cause.detail })
+              : unavailable(),
+          ),
+        );
     }),
   ),
 });

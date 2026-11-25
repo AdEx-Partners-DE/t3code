@@ -4,12 +4,15 @@ import {
   ExecutionEnvironmentDescriptor,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
+  OrchestrationV2RpcSchemas,
+  ProviderInstanceId,
   ServerSettings,
   ServerSettingsPatch,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
+import * as ProviderInstanceSwap from "../../../orchestration-v2/ProviderInstanceSwap.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Settings from "../../../serverSettings.ts";
@@ -41,6 +44,7 @@ const shared = {
     ServerEnvironment.ServerEnvironment,
     Settings.ServerSettingsService,
     ThreadCommandExecutor.ThreadCommandExecutor,
+    ProviderInstanceSwap.ProviderInstanceSwap,
   ],
 };
 const EnvironmentReadTool = Tool.make("t3_environment_read", {
@@ -77,4 +81,21 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
   }),
   success: Schema.Struct(PreferenceFields),
 }).annotate(Tool.Destructive, true);
-export const EnvironmentToolkit = Toolkit.make(EnvironmentReadTool, EnvironmentPreferencesTool);
+const ProviderInstanceSwapTool = Tool.make("t3_provider_instance_swap", {
+  ...shared,
+  description:
+    "Move every thread and scheduled task from one instance to another account of the same provider, keeping model and options. Threads mid-run, this one included, stay and come back as `busy`. Same access as preferences.",
+  parameters: Schema.Struct({
+    environmentId: OrchestratorMcpEnvironmentTarget,
+    fromInstanceId: ProviderInstanceId,
+    toInstanceId: ProviderInstanceId,
+    includeArchived: Schema.optional(Schema.Boolean),
+    includeTextGeneration: Schema.optional(Schema.Boolean),
+  }),
+  success: OrchestrationV2RpcSchemas.swapProviderInstance.output,
+}).annotate(Tool.Destructive, true);
+export const EnvironmentToolkit = Toolkit.make(
+  EnvironmentReadTool,
+  EnvironmentPreferencesTool,
+  ProviderInstanceSwapTool,
+);

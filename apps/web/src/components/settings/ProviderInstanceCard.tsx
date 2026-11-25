@@ -718,6 +718,8 @@ interface ProviderInstanceCardProps {
   readonly headerAction?: ReactNode | undefined;
   readonly setup?: ReactNode;
   readonly runtime?: ReactNode;
+  /** A row under the name for this account's threads, such as moving them to another account. */
+  readonly threads?: ReactNode;
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
@@ -792,6 +794,7 @@ export function ProviderInstanceCard({
   headerAction,
   setup,
   runtime,
+  threads,
   hiddenModels,
   favoriteModels,
   modelOrder,
@@ -1389,6 +1392,7 @@ export function ProviderInstanceCard({
             </div>
           }
         />
+        {threads}
       </SettingsSection>
 
       {setup || environmentFields.length > 0 ? (
