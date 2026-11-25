@@ -16666,6 +16666,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return {
           events: plans.flatMap((plan) => plan.events),
           effects: plans.flatMap((plan) => plan.effects),
+          // A continuation would hold off the purge, and a late title would bring text back.
+          cancelUnsettledEffects: {
+            effectTypes: ["provider-runtime.continue", "thread-title.generate"],
+            reason: "Thread deleted.",
+          },
         };
       }
       case "thread.archive":
@@ -17418,6 +17423,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.sourcePoint.type === "latest_stable"
       ) {
         yield* awaitLatestRunCapture(command.sourceThreadId);
+      }
+      // A send that overrides the pause of all queues has no later retry: once the capture
+      // commits, the paused queue stays put. So it starts only after that capture.
+      if (
+        command.type === "queued-run.start" ||
+        (command.type === "queue.resume" && command.startNextDespitePause === true)
+      ) {
+        yield* awaitLatestRunCapture(command.threadId);
       }
       const dispatch = threadDispatch.withLock(
         commandThreadId(command),

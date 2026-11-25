@@ -1,6 +1,5 @@
-import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
-import * as TestClock from "effect/testing/TestClock";
 import {
   SourceControlProviderKind,
   type VcsError,
@@ -266,27 +265,37 @@ it.effect.each(["darwin", "linux"] as const)(
   },
 );
 
-/** A discovery whose `jj` probe counts its spawns; `jjDelay` keeps a scan in flight. */
-const makeCachingDiscoveryTest = (jjDelay?: Duration.Input) => {
-  let jjSpawns = 0;
+/**
+ * A discovery whose `git` probe counts its spawns; `gate` holds a scan in flight. Only git is
+ * probed for real: discovery skips CLIs that are not on PATH, and git is wherever tests run.
+ */
+const makeCachingDiscoveryTest = (gate?: {
+  readonly started: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+}) => {
+  let gitSpawns = 0;
   const processMock = {
     // Counts when the spawn runs, as a real process start would, not when it is built.
     run: (input: VcsProcess.VcsProcessInput) =>
       Effect.suspend(() => {
-        if (input.command === "git") {
-          return Effect.succeed(TestSourceControlHost.processOutput("git version 2.51.0\n"));
+        if (input.command !== "git") {
+          return Effect.fail(
+            new VcsProcessSpawnError({
+              operation: input.operation,
+              command: input.command,
+              cwd: input.cwd,
+              cause: new Error(`${input.command} not found`),
+            }),
+          );
         }
-        const spawnFailure = new VcsProcessSpawnError({
-          operation: input.operation,
-          command: input.command,
-          cwd: input.cwd,
-          cause: new Error(`${input.command} not found`),
-        });
-        if (input.command !== "jj") return Effect.fail(spawnFailure);
-        jjSpawns += 1;
-        return jjDelay === undefined
-          ? Effect.fail(spawnFailure)
-          : Effect.sleep(jjDelay).pipe(Effect.andThen(Effect.fail(spawnFailure)));
+        gitSpawns += 1;
+        const output = Effect.succeed(TestSourceControlHost.processOutput("git version 2.51.0\n"));
+        return gate === undefined
+          ? output
+          : Deferred.succeed(gate.started, undefined).pipe(
+              Effect.andThen(Deferred.await(gate.release)),
+              Effect.andThen(output),
+            );
       }),
   } satisfies Partial<VcsProcess.VcsProcess["Service"]>;
   const layer = SourceControlDiscovery.layer.pipe(
@@ -302,7 +311,7 @@ const makeCachingDiscoveryTest = (jjDelay?: Duration.Input) => {
     ),
     Layer.provideMerge(NodeServices.layer),
   );
-  return { layer, jjSpawns: () => jjSpawns };
+  return { layer, gitSpawns: () => gitSpawns };
 };
 
 it.effect("keeps a scan for repeated discovers and scans again on rescan", () => {
@@ -311,26 +320,29 @@ it.effect("keeps a scan for repeated discovers and scans again on rescan", () =>
     const discovery = yield* SourceControlDiscovery.SourceControlDiscovery;
     yield* discovery.discover;
     yield* discovery.discover;
-    assert.strictEqual(test.jjSpawns(), 1);
+    assert.strictEqual(test.gitSpawns(), 1);
     yield* discovery.rescan;
-    assert.strictEqual(test.jjSpawns(), 2);
+    assert.strictEqual(test.gitSpawns(), 2);
     yield* discovery.discover;
-    assert.strictEqual(test.jjSpawns(), 2);
+    assert.strictEqual(test.gitSpawns(), 2);
   }).pipe(Effect.provide(test.layer));
 });
 
-it.effect("keeps the scan when the client that started it leaves before it ends", () => {
-  const test = makeCachingDiscoveryTest("1 second");
-  return Effect.gen(function* () {
-    const discovery = yield* SourceControlDiscovery.SourceControlDiscovery;
-    const leaving = yield* Effect.forkChild(discovery.discover);
-    yield* TestClock.adjust("10 millis");
-    yield* Fiber.interrupt(leaving);
-    yield* TestClock.adjust("2 seconds");
-    yield* discovery.discover;
-    assert.strictEqual(test.jjSpawns(), 1);
-  }).pipe(Effect.provide(test.layer));
-});
+it.effect("keeps the scan when the client that started it leaves before it ends", () =>
+  Effect.gen(function* () {
+    const gate = { started: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
+    const test = makeCachingDiscoveryTest(gate);
+    yield* Effect.gen(function* () {
+      const discovery = yield* SourceControlDiscovery.SourceControlDiscovery;
+      const leaving = yield* Effect.forkChild(discovery.discover);
+      yield* Deferred.await(gate.started);
+      yield* Fiber.interrupt(leaving);
+      yield* Deferred.succeed(gate.release, undefined);
+      yield* discovery.discover;
+      assert.strictEqual(test.gitSpawns(), 1);
+    }).pipe(Effect.provide(test.layer));
+  }),
+);
 // Spawns a real login shell and `jj`, so it runs on wall-clock time; the fixture shell is POSIX sh.
 it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "rescans with tools the login shell gained after the server started",

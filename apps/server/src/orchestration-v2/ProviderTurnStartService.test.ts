@@ -80,6 +80,7 @@ import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -1506,6 +1507,7 @@ function layerStartEffectWorker(
         Layer.mock(ThreadTitleRegenerationService.ThreadTitleRegenerationService)({}),
         Layer.mock(ThreadManagementService.ThreadManagementService)({}),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+        Layer.mock(ProjectionMaintenance.ProjectionMaintenanceV2)({}),
         ServerSettings.layerTest(),
       ),
     ),
@@ -2952,9 +2954,13 @@ effectIt.effect.each([["node_modules"], ["node_modules", ".next"]])(
       });
       // `git worktree add` refuses a non-empty target, so the leftovers must be gone first; the
       // folder itself stays, since Windows cannot remove a folder that is still someone's cwd.
+      // Like `git worktree add`, leave a `.git` link, or the restored start sees leftovers again.
       harness.createWorktree.mockImplementation(() =>
         fileSystem.readDirectory(worktreePath).pipe(
           Effect.tap((entries) => Effect.sync(() => expect(entries).toEqual([]))),
+          Effect.andThen(
+            fileSystem.writeFileString(path.join(worktreePath, ".git"), "gitdir: x\n"),
+          ),
           Effect.as({} as never),
           Effect.orDie,
         ),
