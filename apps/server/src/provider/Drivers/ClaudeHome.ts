@@ -147,15 +147,22 @@ export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationG
   function* (
     config: Pick<ClaudeSettings, "homePath">,
     environment?: NodeJS.ProcessEnv,
-  ): Effect.fn.Return<string, never, FileSystem.FileSystem | Path.Path> {
+  ): Effect.fn.Return<string, never, Path.Path | FileSystem.FileSystem> {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const projectsPath = path.join(yield* resolveClaudeHomePath(config, environment), "projects");
+    const resolvedHomePath = yield* resolveClaudeHomePath(config, environment);
+    // Two instances that reach one Claude home through a symlink share sessions, so they can resume.
+    // Only the key uses the real path: the spawn keeps the literal path, which names the Keychain login.
+    const canonicalHomePath = yield* fileSystem
+      .realPath(resolvedHomePath)
+      .pipe(Effect.orElseSucceed(() => resolvedHomePath));
     // Auth-overlay homes symlink `projects` to a shared store and resume its transcripts.
     const transcriptsPath = yield* fileSystem
-      .realPath(projectsPath)
-      .pipe(Effect.orElseSucceed(() => projectsPath));
-    return `claude:projects:${transcriptsPath}`;
+      .realPath(path.join(canonicalHomePath, "projects"))
+      .pipe(Effect.orElseSucceed(() => path.join(canonicalHomePath, "projects")));
+    return path.basename(transcriptsPath) === "projects"
+      ? `claude:home:${path.dirname(transcriptsPath)}`
+      : `claude:projects:${transcriptsPath}`;
   },
 );
 

@@ -26,9 +26,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
 
         expect(yield* resolveClaudeHomePath({ homePath })).toBe(resolved);
         expect((yield* makeClaudeEnvironment({ homePath })).CLAUDE_CONFIG_DIR).toBe(resolved);
-        expect(yield* makeClaudeContinuationGroupKey({ homePath })).toBe(
-          `claude:projects:${path.join(resolved, "projects")}`,
-        );
+        expect(yield* makeClaudeContinuationGroupKey({ homePath })).toBe(`claude:home:${resolved}`);
         expect(yield* makeClaudeCapabilitiesCacheKey({ binaryPath: "claude", homePath })).toBe(
           `claude\0${resolved}\0`,
         );
@@ -43,7 +41,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
 
         expect(yield* resolveClaudeHomePath({ homePath: "" }, environment)).toBe(inherited);
         expect(yield* makeClaudeContinuationGroupKey({ homePath: "" }, environment)).toBe(
-          `claude:projects:${path.join(inherited, "projects")}`,
+          `claude:home:${inherited}`,
         );
 
         const explicit = path.resolve(NodeOS.homedir(), ".claude-work");
@@ -84,20 +82,19 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
     });
     const keyFor = (homePath: string, environment?: NodeJS.ProcessEnv) =>
       makeClaudeContinuationGroupKey({ homePath }, environment);
-    const ownProjectsKey = (homePath: string) =>
-      Effect.map(Path.Path, (path) => `claude:projects:${path.join(homePath, "projects")}`);
+    const ownHomeKey = (homePath: string) => Effect.succeed(`claude:home:${homePath}`);
 
     it.effect("groups auth-overlay homes with the home their projects link points at", () =>
       Effect.gen(function* () {
         const home = yield* makeClaudeHomes;
-        const sharedKey = yield* ownProjectsKey(home("shared"));
+        const sharedKey = yield* ownHomeKey(home("shared"));
 
         expect(yield* keyFor(home("shared"))).toBe(sharedKey);
         expect(yield* keyFor(home("overlay"))).toBe(sharedKey);
         expect(yield* keyFor(home("chained"))).toBe(sharedKey);
         expect(yield* keyFor(home("alias"))).toBe(sharedKey);
         expect(yield* keyFor("", { CLAUDE_CONFIG_DIR: home("overlay") })).toBe(sharedKey);
-        expect(yield* keyFor(home("separate"))).toBe(yield* ownProjectsKey(home("separate")));
+        expect(yield* keyFor(home("separate"))).toBe(yield* ownHomeKey(home("separate")));
       }),
     );
 
@@ -105,9 +102,9 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
       Effect.gen(function* () {
         const home = yield* makeClaudeHomes;
 
-        expect(yield* keyFor(home("fresh"))).toBe(yield* ownProjectsKey(home("fresh")));
-        expect(yield* keyFor(home("dangling"))).toBe(yield* ownProjectsKey(home("dangling")));
-        expect(yield* keyFor(home("missing"))).toBe(yield* ownProjectsKey(home("missing")));
+        expect(yield* keyFor(home("fresh"))).toBe(yield* ownHomeKey(home("fresh")));
+        expect(yield* keyFor(home("dangling"))).toBe(yield* ownHomeKey(home("dangling")));
+        expect(yield* keyFor(home("missing"))).toBe(yield* ownHomeKey(home("missing")));
       }),
     );
 
@@ -117,6 +114,26 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
 
         expect(yield* keyFor(home("personal"))).not.toBe(yield* keyFor(home("work")));
       }),
+    );
+
+    it.effect("gives a symlinked Claude home the continuation key of its target", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.realPath(yield* fileSystem.makeTempDirectoryScoped());
+        const target = path.join(root, ".claude");
+        const link = path.join(root, ".claude-second-account");
+        yield* fileSystem.makeDirectory(target);
+        yield* fileSystem.symlink(target, link);
+
+        const direct = yield* makeClaudeContinuationGroupKey({ homePath: target });
+        expect(yield* makeClaudeContinuationGroupKey({ homePath: link })).toBe(direct);
+        expect(
+          yield* makeClaudeContinuationGroupKey({ homePath: "" }, { CLAUDE_CONFIG_DIR: link }),
+        ).toBe(direct);
+        // The spawned process keeps the literal path, because Claude keys its login by that path.
+        expect((yield* makeClaudeEnvironment({ homePath: link })).CLAUDE_CONFIG_DIR).toBe(link);
+      }).pipe(Effect.scoped),
     );
 
     it.effect("separates capability probes by cwd", () =>

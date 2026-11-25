@@ -18,6 +18,7 @@ import {
   detailFromCause,
   failedProbeHint,
   firstNonEmptyLine,
+  isExecutableOnPath,
 } from "@t3tools/source-control-core/server/discovery";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
 
@@ -68,7 +69,7 @@ const VCS_PROBES: ReadonlyArray<VcsProbe> = [
 export class SourceControlDiscovery extends Context.Service<
   SourceControlDiscovery,
   {
-    /** The last scan, at most ten minutes old. Clients ask on every connect. */
+    /** The last scan, at most an hour old. Clients ask on every connect. */
     readonly discover: Effect.Effect<SourceControlDiscoveryResult>;
     /** Scans again now and keeps the result for the next `discover`. */
     readonly rescan: Effect.Effect<SourceControlDiscoveryResult>;
@@ -143,14 +144,29 @@ export const make = Effect.gen(function* () {
     refreshPath,
     Effect.all({
       versionControlSystems: Effect.all(
-        VCS_PROBES.map((entry) => probe(entry)) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
+        VCS_PROBES.map((entry) =>
+          Effect.flatMap(isExecutableOnPath(entry.executable), (found) =>
+            found
+              ? probe(entry)
+              : Effect.succeed({
+                  kind: entry.kind,
+                  label: entry.label,
+                  executable: entry.executable,
+                  implemented: entry.implemented,
+                  status: "missing" as const,
+                  version: Option.none<string>(),
+                  installHint: entry.installHint,
+                  detail: Option.none<string>(),
+                }),
+          ),
+        ) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
         { concurrency: "unbounded" },
       ),
       sourceControlProviders: sourceControlProviders.discover,
     }),
   );
-  // A scan spawns every CLI (a failed process start per missing one on Windows) and clients scan
-  // on every connect, so it is cached for an hour; Settings → Source Control rescans on demand.
+  // A scan spawns every installed CLI and clients scan on every connect, so it is cached for an
+  // hour; Settings → Source Control rescans on demand.
   // It runs detached so a client leaving early does not interrupt it and the result is kept.
   const [cachedScan, invalidate] = yield* Effect.cachedInvalidateWithTTL(
     scan,

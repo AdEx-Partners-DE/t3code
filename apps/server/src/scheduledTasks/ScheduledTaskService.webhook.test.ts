@@ -35,6 +35,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 import { renderWebhookPrompt } from "./webhookTemplate.ts";
+import { RelayClientTracer, withRelayClientTracing } from "@t3tools/shared/relayTracing";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
@@ -419,6 +420,34 @@ it.effect.each(["pending", "running"] as const)(
         assert.equal(yield* Queue.size(sends), 0);
       }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(dependencies))));
     }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("a relay-delivered webhook keeps the run it starts off the relay tracer", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      const relaySpans: Array<string> = [];
+      const relayTracer = Tracer.make({
+        span: (options) => {
+          relaySpans.push(options.name);
+          return new Tracer.NativeSpan(options);
+        },
+      });
+
+      const result = yield* service
+        .triggerWebhook(requestFor(task))
+        .pipe(
+          withRelayClientTracing,
+          Effect.provideService(RelayClientTracer, Option.some(relayTracer)),
+        );
+      assert.equal(result._tag, "accepted");
+      yield* Queue.take(launches);
+
+      assert.include(relaySpans, "ScheduledTaskService.triggerWebhook");
+      assert.notInclude(relaySpans, "ScheduledTaskService.runWebhookDelivery");
+      assert.notInclude(relaySpans, "ScheduledTaskService.runTask");
+    }),
+  ),
 );
 
 it("builds the relay hook URL from the managed tunnel's key, never the environment id", () => {
