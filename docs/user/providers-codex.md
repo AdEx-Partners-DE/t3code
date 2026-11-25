@@ -111,7 +111,13 @@ from the other home.
 
 Choose the other account from the thread's model picker. T3 Code offers compatible
 Codex instances that share the thread's **CODEX_HOME path**. Changing accounts does
-not move the conversation into a separate Codex home.
+not move the conversation into a separate Codex home. Picking the same model on the
+other account keeps the thread's options, such as reasoning effort.
+
+To move every thread of one account at once, open that account in
+**Settings → Providers** and choose **Move threads to…**. Model, options and
+scheduled tasks move along; threads with a turn under way stay where they are and
+can be moved once they finish. The other account's card moves them back.
 
 If the account is missing from the picker, compare the home paths in provider
 settings. If two instances show the same unexpected account or models, check their

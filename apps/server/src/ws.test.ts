@@ -153,6 +153,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadChecklist from "./orchestration-v2/ThreadChecklist.ts";
+import * as ProviderInstanceSwap from "./orchestration-v2/ProviderInstanceSwap.ts";
 import * as UsageLimitHistory from "./usage/UsageLimitHistory.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
@@ -910,6 +911,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(ThreadManagement.ThreadManagementService)({}),
   Layer.mock(ThreadChecklist.ThreadChecklist)({}),
+  Layer.mock(ProviderInstanceSwap.ProviderInstanceSwap)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(UsageLimitHistory.UsageLimitHistory)({}),
   Layer.mock(UsageService.UsageService)({}),

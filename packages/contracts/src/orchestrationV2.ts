@@ -5086,6 +5086,28 @@ export const OrchestrationV2RpcSchemas = {
       heldBack: Schema.optional(NonNegativeInt),
     }),
   },
+  /**
+   * Moves every thread on one provider instance to another instance of the same driver (another
+   * account), keeping model and options. Threads with a run under way stay and come back as
+   * `busy`. Swapping back is the same call with the instances exchanged.
+   */
+  swapProviderInstance: {
+    input: Schema.Struct({
+      commandId: CommandId,
+      fromInstanceId: ProviderInstanceId,
+      toInstanceId: ProviderInstanceId,
+      includeArchived: Schema.optional(Schema.Boolean),
+      /** Also move the text generation model when it is on `fromInstanceId`. Needs settings write. */
+      includeTextGeneration: Schema.optional(Schema.Boolean),
+    }),
+    output: Schema.Struct({
+      moved: NonNegativeInt,
+      busy: Schema.Array(ThreadId),
+      failed: Schema.Array(Schema.Struct({ threadId: ThreadId, reason: Schema.String })),
+      scheduledTasksMoved: NonNegativeInt,
+      textGenerationMoved: Schema.Boolean,
+    }),
+  },
   subscribeShell: {
     input: OrchestrationV2SubscribeShellInput,
     output: OrchestrationV2ShellStreamItem,
@@ -5126,6 +5148,10 @@ export const OrchestrationV2PortfolioActionInput = Schema.Union([
     action: Schema.Literal("clearAllQueues"),
     ...OrchestrationV2RpcSchemas.clearAllQueues.input.fields,
   }),
+  Schema.Struct({
+    action: Schema.Literal("swapProviderInstance"),
+    ...OrchestrationV2RpcSchemas.swapProviderInstance.input.fields,
+  }),
 ]);
 export type OrchestrationV2PortfolioActionInput = typeof OrchestrationV2PortfolioActionInput.Type;
 
@@ -5145,6 +5171,10 @@ export const OrchestrationV2PortfolioActionOutput = Schema.Union([
   Schema.Struct({
     action: Schema.Literal("clearAllQueues"),
     ...OrchestrationV2RpcSchemas.clearAllQueues.output.fields,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("swapProviderInstance"),
+    ...OrchestrationV2RpcSchemas.swapProviderInstance.output.fields,
   }),
 ]);
 export type OrchestrationV2PortfolioActionOutput = typeof OrchestrationV2PortfolioActionOutput.Type;

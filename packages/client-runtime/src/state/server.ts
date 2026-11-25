@@ -1580,6 +1580,10 @@ export function createServerEnvironmentAtoms<R, E>(
       "environment-data:server:refresh-thread-checklist",
     ),
     clearAllQueues: portfolioCommand("clearAllQueues", "environment-data:server:clear-all-queues"),
+    swapProviderInstance: portfolioCommand(
+      "swapProviderInstance",
+      "environment-data:server:swap-provider-instance",
+    ),
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",
       tag: WS_METHODS.serverRunStorageCleanup,

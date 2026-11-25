@@ -126,6 +126,17 @@ export function clientRpcRequiredScopes(
     )
       return [AuthSourceControlWriteScope, AuthOrchestrationReadScope];
   }
+  // Moving the text generation model along is a settings change.
+  if (
+    method === ORCHESTRATION_V2_WS_METHODS.portfolioAction &&
+    typeof input === "object" &&
+    input !== null &&
+    "action" in input &&
+    input.action === "swapProviderInstance" &&
+    "includeTextGeneration" in input &&
+    input.includeTextGeneration === true
+  )
+    return [AuthOrchestrationOperateScope, AuthSettingsWriteScope];
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
     ? [CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]]
     : [];

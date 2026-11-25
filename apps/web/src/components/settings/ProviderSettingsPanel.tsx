@@ -100,6 +100,7 @@ import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { useManagedPolicy } from "~/state/managedPolicy";
 import { ExpandableText } from "./ExpandableText";
 import { IntervalSecondsField } from "./IntervalSecondsField";
+import { ProviderAccountSwapRow, type ProviderAccountSwapTarget } from "./ProviderAccountSwapRow";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { useSecretSources } from "./SecretSourceInput";
 import { TextGeneratorsSettings } from "./TextGeneratorsSettings";
@@ -979,6 +980,13 @@ export function EnvironmentProviderSettings({
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
 
   const representativeProjectId = projectIds[0];
+  // Other enabled accounts of the same provider, which can take this one's threads.
+  const swapTargetsFor = (row: InstanceRow): ReadonlyArray<ProviderAccountSwapTarget> =>
+    serverProviders.flatMap((provider) =>
+      provider.instanceId !== row.instanceId && provider.driver === row.driver && provider.enabled
+        ? [{ instanceId: provider.instanceId, label: provider.displayName ?? provider.instanceId }]
+        : [],
+    );
   const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
     const showProjectOverride =
       representativeProjectId !== undefined && supportsProjectProviderOverrides;
@@ -1018,6 +1026,10 @@ export function EnvironmentProviderSettings({
         modelPreferences={settings.providerModelPreferences?.[row.instanceId]}
         favorites={favorites}
         actions={actions}
+        swapTargets={swapTargetsFor(row)}
+        movesTextGeneration={
+          canWriteSettings && settings.textGenerationModelSelection.instanceId === row.instanceId
+        }
       />
     );
   };
@@ -1307,6 +1319,8 @@ function ProviderInstanceRow({
   modelPreferences,
   favorites,
   actions,
+  swapTargets,
+  movesTextGeneration,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
@@ -1329,6 +1343,8 @@ function ProviderInstanceRow({
     | undefined;
   readonly favorites: UnifiedSettings["favorites"];
   readonly actions: ProviderInstanceRowActions;
+  readonly swapTargets: ReadonlyArray<ProviderAccountSwapTarget>;
+  readonly movesTextGeneration: boolean;
 }) {
   const gt = useGT();
   const allProjects = useProjects();
@@ -1395,6 +1411,17 @@ function ProviderInstanceRow({
         ) : undefined
       }
       canWriteSettings={canWriteSettings}
+      threads={
+        mode === "editor" && !readOnly ? (
+          <ProviderAccountSwapRow
+            environmentId={environmentId}
+            instanceId={instanceId}
+            label={liveProvider?.displayName ?? explicitInstance?.displayName ?? instanceId}
+            targets={swapTargets}
+            movesTextGeneration={movesTextGeneration}
+          />
+        ) : undefined
+      }
       setup={
         mode === "editor" && driver === "antigravity" ? (
           <ProviderSetupSection

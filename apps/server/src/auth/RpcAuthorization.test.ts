@@ -25,6 +25,7 @@ import {
   RunId,
   WS_METHODS,
   WsRpcGroup,
+  clientRpcRequiredScopes,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -95,6 +96,21 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.workspaceAddTaskFolderRepository)).toBe(
       AuthSourceControlWriteScope,
     );
+  });
+
+  it("takes settings write only when a provider swap also moves the text generation model", () => {
+    const swap = {
+      action: "swapProviderInstance",
+      commandId: "command:swap",
+      fromInstanceId: "codex",
+      toInstanceId: "codex_stark_cli",
+    };
+    const method = ORCHESTRATION_V2_WS_METHODS.portfolioAction;
+    expect(clientRpcRequiredScopes(method, swap)).toEqual([AuthOrchestrationOperateScope]);
+    expect(clientRpcRequiredScopes(method, { ...swap, includeTextGeneration: true })).toEqual([
+      AuthOrchestrationOperateScope,
+      AuthSettingsWriteScope,
+    ]);
   });
 
   it("still lets readers load settings the way installed Swift clients ask", () => {

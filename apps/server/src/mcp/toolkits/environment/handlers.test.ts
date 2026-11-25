@@ -14,6 +14,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as Environment from "../../../environment/ServerEnvironment.ts";
+import * as ProviderInstanceSwap from "../../../orchestration-v2/ProviderInstanceSwap.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Settings from "../../../serverSettings.ts";
@@ -59,6 +60,7 @@ it.effect("refuses a preferences update when the caller's turn ends while it wai
     const checked = yield* Deferred.make<void>();
     const layerDependencies = Layer.mergeAll(
       ThreadCommandExecutor.layer,
+      Layer.mock(ProviderInstanceSwap.ProviderInstanceSwap)({}),
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId,
         requestNamespace: "provider:preferences",
@@ -184,6 +186,7 @@ it.effect("lets a thread set a pause and refuses to let it lift one", () =>
           }),
         ),
         Layer.provide(layerEnvironment),
+        Layer.provide(Layer.mock(ProviderInstanceSwap.ProviderInstanceSwap)({})),
         Layer.provideMerge(Settings.layerTest()),
       ),
     ),
