@@ -2041,15 +2041,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           makeCodexReplayTranscript({
             scenario: `own-approval-${serverName}-${asked}`,
             entries: [
-              ...codexReplayPreamble({
-                nativeThreadId,
-                nativeTurnId,
-                prompt,
-                turnPolicy: {
-                  approvalPolicy: "on-request",
-                  sandboxPolicy: { type: "workspaceWrite" },
-                },
-              }),
+              ...withWorkspaceWriteConfigRead(
+                codexReplayPreamble({
+                  nativeThreadId,
+                  nativeTurnId,
+                  prompt,
+                  turnPolicy: {
+                    approvalPolicy: "on-request",
+                    sandboxPolicy: { type: "workspaceWrite" },
+                  },
+                }),
+              ),
               {
                 type: "emit_inbound",
                 frame: {
