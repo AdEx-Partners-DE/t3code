@@ -630,12 +630,20 @@ export async function archiveSelectedThreadEntries<
 export function buildMultiSelectThreadContextMenuItems(
   input: {
     count: number;
+    markUnreadCount: number;
     hasRunningThread: boolean;
   },
   resolve: MessageResolver = m,
 ): readonly ContextMenuItem<"mark-unread" | "archive" | "delete">[] {
   return [
-    { id: "mark-unread", label: resolve(msg("Mark unread ({count})", { count: input.count })) },
+    ...(input.markUnreadCount > 0
+      ? [
+          {
+            id: "mark-unread" as const,
+            label: resolve(msg("Mark unread ({count})", { count: input.markUnreadCount })),
+          },
+        ]
+      : []),
     {
       id: "archive",
       label: resolve(msg("Archive ({count})", { count: input.count })),
