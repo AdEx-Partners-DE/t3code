@@ -382,7 +382,7 @@ function PoolWindowCard({
             accessibilityLabel={
               resetsIn && credits
                 ? gt(
-                    "{account}, {remaining}% left, {resetsIn}, {credits, plural, other {{credits} reset credits banked}}",
+                    "{account}, {remaining}% left, {resetsIn}, {credits, plural, one {{credits} reset credit banked} other {{credits} reset credits banked}}",
                     {
                       account: accountName(account, m),
                       remaining: remainingPercent(window),
@@ -398,7 +398,7 @@ function PoolWindowCard({
                     })
                   : credits
                     ? gt(
-                        "{account}, {remaining}% left, {credits, plural, other {{credits} reset credits banked}}",
+                        "{account}, {remaining}% left, {credits, plural, one {{credits} reset credit banked} other {{credits} reset credits banked}}",
                         {
                           account: accountName(account, m),
                           remaining: remainingPercent(window),

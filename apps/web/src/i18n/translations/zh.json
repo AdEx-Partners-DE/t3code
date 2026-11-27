@@ -13288,5 +13288,16 @@
   "717c1c47a852a1a5": "暂停朗读",
   "0eceb5780908eb6c": "朗读",
   "3ee98da81538c6de": "无法播放朗读音频。",
-  "95435f0b59cb2193": "音频预览"
+  "95435f0b59cb2193": "音频预览",
+  "16e982826513baed": "Move {count, plural, one {# thread} other {# threads}} and their scheduled tasks from {from} to {to}? Model and options stay; each thread's next turn starts on {to} with its context handed over.",
+  "7d34f76bab895a4f": "The text generation model moves too.",
+  "651853fcf9933800": "Threads with a run under way stay on {from}. Archived threads stay. You can move them back the same way.",
+  "e9699aa45b7aca4a": "{count, plural, one {# thread with a run under way stayed} other {# threads with a run under way stayed}}; move again after it ends.",
+  "539825252283cb4d": "{count, plural, one {# thread could not move} other {# threads could not move}}: {reason}",
+  "290248ffb61f66f8": "{count, plural, one {# scheduled task moved} other {# scheduled tasks moved}}.",
+  "e2d40de648246497": "The text generation model moved.",
+  "4800407ce10f6222": "Moved {count, plural, one {# thread} other {# threads}} to {to}",
+  "28feca298bea3321": "Could not move the threads to {to}",
+  "8ef0e235d5dee4c9": "{count, plural, =0 {No open thread uses this account.} one {# open thread uses this account.} other {# open threads use this account.}} Move them to another account of the same provider; model and options stay.",
+  "6dee5c3966ebc6f0": "Move threads to…"
 }
