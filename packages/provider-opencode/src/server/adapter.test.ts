@@ -326,8 +326,12 @@ describe("OpenCodeAdapterV2", () => {
         const harness = yield* makeOpenCodeRuntimeHarness(`restart-${status}`, "root", {
           event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
           session: {
-            create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
-            get: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+            create: async () => ({
+              data: { id: "root", directory: "/workspace", time: { created: 1, updated: 1 } },
+            }),
+            get: async () => ({
+              data: { id: "root", directory: "/workspace", time: { created: 1, updated: 1 } },
+            }),
             status: async () => ({ data: { root: { type: status } } }),
             messages: async () => {
               // A live update lands while history loads; the older snapshot must not undo it.

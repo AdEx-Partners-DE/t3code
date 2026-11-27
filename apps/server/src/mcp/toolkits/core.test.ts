@@ -1088,10 +1088,10 @@ it.effect("only a full-access client may change a thread's own agent mode", () =
                     deletedAt: null,
                   },
                 } as never),
-              dispatch: (command: { readonly modelSelection?: unknown }) =>
+              configureModelSelection: (input: { readonly modelSelection: unknown }) =>
                 Effect.sync(() => {
-                  picks.push(command.modelSelection);
-                  return { sequence: 7 } as never;
+                  picks.push(input.modelSelection);
+                  return { sequence: 7 };
                 }),
             } as never),
           ),
