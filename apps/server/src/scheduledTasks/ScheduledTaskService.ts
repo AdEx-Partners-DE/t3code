@@ -98,6 +98,7 @@ import {
 import { describeFailedWebhookFilter, findFailedWebhookFilter } from "./webhookFilter.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
 import { withLocalTracing } from "@t3tools/shared/relayTracing";
+import { routineSpan } from "@t3tools/shared/observability";
 
 export const WEBHOOK_ROUTE_PREFIX = "/api/hooks";
 
@@ -1361,6 +1362,7 @@ export const layer = Layer.effect(
                     commandId,
                     projectId: active.projectId,
                     title: active.title,
+                    titleRenamed: true,
                     modelSelection: active.modelSelection,
                     runtimeMode: active.runtimeMode,
                     interactionMode: active.interactionMode,
@@ -1559,71 +1561,73 @@ export const layer = Layer.effect(
       if (updated.length > 0) yield* notifyChanged;
     });
 
-    const runDueTasks = Effect.fn("ScheduledTaskService.runDueTasks")(function* () {
-      const now = yield* localNow;
-      const nowMs = DateTime.toEpochMillis(now);
-      if (yield* dueTasks.isIdle(nowMs)) return;
-      const readVersion = yield* dueTasks.version;
-      const [next] = yield* sql<{ next_run_at: string | null }>`
+    const runDueTasks = Effect.fn("ScheduledTaskService.runDueTasks", { attributes: routineSpan })(
+      function* () {
+        const now = yield* localNow;
+        const nowMs = DateTime.toEpochMillis(now);
+        if (yield* dueTasks.isIdle(nowMs)) return;
+        const readVersion = yield* dueTasks.version;
+        const [next] = yield* sql<{ next_run_at: string | null }>`
         SELECT MIN(next_run_at) AS next_run_at FROM scheduled_tasks
         WHERE enabled = 1 AND next_run_at IS NOT NULL AND last_run_status <> 'running'
       `.pipe(
-        NodeSqliteClient.readOnly,
-        Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
-      );
-      // Compare as text like listDueTasks: expanded years (`+011533-…`) sort first but parse far ahead.
-      const nextRunAt = next?.next_run_at ?? null;
-      if (nextRunAt === null || nextRunAt > iso(now)) {
-        const nextDueAt =
-          nextRunAt === null
-            ? Option.some(Infinity)
-            : DateTime.make(nextRunAt).pipe(Option.map(DateTime.toEpochMillis));
-        if (Option.isSome(nextDueAt) && nextDueAt.value > nowMs) {
-          yield* dueTasks.record(readVersion, nextDueAt.value, nowMs);
+          NodeSqliteClient.readOnly,
+          Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
+        );
+        // Compare as text like listDueTasks: expanded years (`+011533-…`) sort first but parse far ahead.
+        const nextRunAt = next?.next_run_at ?? null;
+        if (nextRunAt === null || nextRunAt > iso(now)) {
+          const nextDueAt =
+            nextRunAt === null
+              ? Option.some(Infinity)
+              : DateTime.make(nextRunAt).pipe(Option.map(DateTime.toEpochMillis));
+          if (Option.isSome(nextDueAt) && nextDueAt.value > nowMs) {
+            yield* dueTasks.record(readVersion, nextDueAt.value, nowMs);
+          }
+          return;
         }
-        return;
-      }
-      const tasks = yield* listDueTasks(now).pipe(
-        Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
-      );
-      // A held task is left exactly as it is, due time and all, until it is resumed.
-      const free = yield* Effect.filter(tasks, (task) => startsByItself(task.id));
-      const due = free.flatMap((task) =>
-        task.nextRunAt === null ? [] : [{ task, dueAt: DateTime.makeUnsafe(task.nextRunAt) }],
-      );
-      // Moving a missed fixed-time run on starts nothing, so all of them go at once.
-      const missed = due.filter(({ task, dueAt }) =>
-        isMissedFixedTimeRun(task.schedule, dueAt, now),
-      );
-      const startable = due.filter(
-        ({ task, dueAt }) => !isMissedFixedTimeRun(task.schedule, dueAt, now),
-      );
-      const starting = dueTasksToStartNow(startable, yield* Ref.get(lastScheduledStartMs), nowMs);
-      if (starting.length < startable.length && starting.length > 0) {
-        yield* Ref.set(lastScheduledStartMs, nowMs);
-      }
-      yield* Effect.forEach(
-        [
-          ...missed.map(({ task }) => ({
-            task,
-            effect: rescheduleMissedRun(
+        const tasks = yield* listDueTasks(now).pipe(
+          Effect.mapError((cause) => taskError("Could not list schedule tasks.", { cause })),
+        );
+        // A held task is left exactly as it is, due time and all, until it is resumed.
+        const free = yield* Effect.filter(tasks, (task) => startsByItself(task.id));
+        const due = free.flatMap((task) =>
+          task.nextRunAt === null ? [] : [{ task, dueAt: DateTime.makeUnsafe(task.nextRunAt) }],
+        );
+        // Moving a missed fixed-time run on starts nothing, so all of them go at once.
+        const missed = due.filter(({ task, dueAt }) =>
+          isMissedFixedTimeRun(task.schedule, dueAt, now),
+        );
+        const startable = due.filter(
+          ({ task, dueAt }) => !isMissedFixedTimeRun(task.schedule, dueAt, now),
+        );
+        const starting = dueTasksToStartNow(startable, yield* Ref.get(lastScheduledStartMs), nowMs);
+        if (starting.length < startable.length && starting.length > 0) {
+          yield* Ref.set(lastScheduledStartMs, nowMs);
+        }
+        yield* Effect.forEach(
+          [
+            ...missed.map(({ task }) => ({
               task,
-              now,
-              "missed",
-              "Missed a scheduled run because the server was not running at that time.",
+              effect: rescheduleMissedRun(
+                task,
+                now,
+                "missed",
+                "Missed a scheduled run because the server was not running at that time.",
+              ),
+            })),
+            ...starting.map(({ task }) => ({ task, effect: runTask(task, "scheduled") })),
+          ],
+          ({ task, effect }) =>
+            Effect.suspend(() => effect).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Scheduled task run failed", { taskId: task.id, cause }),
+              ),
             ),
-          })),
-          ...starting.map(({ task }) => ({ task, effect: runTask(task, "scheduled") })),
-        ],
-        ({ task, effect }) =>
-          Effect.suspend(() => effect).pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("Scheduled task run failed", { taskId: task.id, cause }),
-            ),
-          ),
-        { concurrency: 1, discard: true },
-      );
-    });
+          { concurrency: 1, discard: true },
+        );
+      },
+    );
 
     // Recover crash-left running rows that the due-task filter would otherwise skip forever.
     yield* Effect.gen(function* () {
@@ -3312,7 +3316,9 @@ export const layer = Layer.effect(
       );
     });
 
-    const dispatchPending = Effect.fn("ScheduledTaskService.dispatchPendingWebhooks")(function* () {
+    const dispatchPending = Effect.fn("ScheduledTaskService.dispatchPendingWebhooks", {
+      attributes: routineSpan,
+    })(function* () {
       const now = DateTime.toEpochMillis(yield* localNow);
       if (yield* pendingWebhooks.isIdle(now)) return;
       const readVersion = yield* pendingWebhooks.version;

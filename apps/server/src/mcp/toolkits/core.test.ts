@@ -95,6 +95,10 @@ const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
   Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
   Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
   Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+  // Tool analytics read the registry whenever one is present.
+  Layer.provide(
+    Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+  ),
 );
 
 const threadId = ThreadId.make("mcp-core-thread");
@@ -938,6 +942,7 @@ it.effect("search names the calling thread, so an agent can tell its own match a
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(Layer.mock(ThreadChecklist.ThreadChecklist)({})),
@@ -1035,6 +1040,82 @@ it.effect("a read-only client reads threads and is refused every write before it
   ),
 );
 const dispatched: Array<string> = [];
+
+it.effect("only a full-access client may change a thread's own agent mode", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const picks: Array<unknown> = [];
+    const configure = (access: "approval-required" | "full-access", mode: string) =>
+      server
+        .callTool({
+          name: "t3_thread_configure",
+          arguments: {
+            threadId: "agent-thread",
+            modelSelection: {
+              instanceId: "acp-agent",
+              model: "default",
+              options: [{ id: "_t3/session-mode", value: mode }],
+            },
+          },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope(access)),
+          Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.provideService(
+            ThreadManagement.ThreadManagementService,
+            ThreadManagement.ThreadManagementService.of({
+              getThreadShell: () =>
+                Effect.succeed({
+                  id: ThreadId.make("agent-thread"),
+                  projectId: "project",
+                  runtimeMode: "approval-required",
+                  interactionMode: "default",
+                  deletedAt: null,
+                } as never),
+              getProjectThreadRecords: () =>
+                Effect.succeed({
+                  thread: {
+                    id: ThreadId.make("agent-thread"),
+                    projectId: "project",
+                    providerInstanceId: "acp-agent",
+                    modelSelection: {
+                      instanceId: "acp-agent",
+                      model: "default",
+                      options: [{ id: "_t3/session-mode", value: "ask" }],
+                    },
+                    runtimeMode: "approval-required",
+                    interactionMode: "default",
+                    deletedAt: null,
+                  },
+                } as never),
+              dispatch: (command: { readonly modelSelection?: unknown }) =>
+                Effect.sync(() => {
+                  picks.push(command.modelSelection);
+                  return { sequence: 7 } as never;
+                }),
+            } as never),
+          ),
+        );
+
+    expect(declaredFailure(yield* configure("approval-required", "yolo"))).toMatchObject({
+      code: "runtime_mode_escalation_denied",
+    });
+    expect(picks).toEqual([]);
+
+    // The mode the thread already runs in can be sent again.
+    expect((yield* configure("approval-required", "ask")).isError).toBe(false);
+    expect((yield* configure("full-access", "yolo")).isError).toBe(false);
+    expect(picks).toHaveLength(2);
+  }).pipe(
+    Effect.provide(
+      layerThreadToolkit.pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+      ),
+    ),
+  ),
+);
 
 it.effect("hides act-as-caller tools from a client caller", () =>
   Effect.gen(function* () {
@@ -1191,6 +1272,7 @@ it.effect.each([
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
@@ -1231,6 +1313,7 @@ it.effect("run_scheduled_task_now reports why a started run failed to dispatch",
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
@@ -1703,6 +1786,9 @@ it.effect(
         McpHttpServer.layerThreadToolkit.pipe(
           Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
           Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+          Layer.provide(
+            Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+          ),
           Layer.provide(
             Layer.mock(ThreadChecklist.ThreadChecklist)({
               read: () => Effect.succeed(checklist as never),
