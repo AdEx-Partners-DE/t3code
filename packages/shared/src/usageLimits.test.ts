@@ -1299,6 +1299,7 @@ describe("pools", () => {
       remainingPercent: 40,
       usedPercent: 60,
       pace: "under",
+      paceRemainingPercent: 30,
     });
     expect(
       session?.resets.map((reset) => [reset.member.account.key, reset.restoresPercent]),
