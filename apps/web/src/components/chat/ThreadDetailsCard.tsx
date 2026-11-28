@@ -80,11 +80,10 @@ export function ThreadDetailsCard({
     const measure = () => {
       const frame = element.closest<HTMLElement>("[data-thread-details-card]");
       const next = element.offsetHeight + (frame ? frame.offsetHeight - frame.clientHeight : 0);
-      // Lineage, side chats, PR and issue lists, repositories, checklist and automations grow with the thread and
-      // scroll in the card. Counting them toward density would fold the card and hide them exactly
-      // when they hold the most.
+      // Lineage, side chats, PR and issue lists, servers, repositories, tasks, checklist and automations
+      // scroll as they grow. Counting them toward density would fold the card and hide them.
       const growing = element.querySelectorAll<HTMLElement>(
-        "[data-thread-relationships-panel], [data-thread-side-chats-panel], [data-thread-details-pr-list], [data-thread-details-issue-list], [data-thread-checklist-panel], [data-thread-automations-panel], [data-thread-details-server-overflow], [data-thread-details-repository-overflow]",
+        "[data-thread-relationships-panel], [data-thread-side-chats-panel], [data-thread-details-pr-list], [data-thread-details-issue-list], [data-thread-checklist-panel], [data-thread-automations-panel], [data-thread-details-server-overflow], [data-thread-details-repository-overflow], [data-thread-details-task-list]",
       );
       const fittingHeight =
         next - Array.from(growing).reduce((sum, section) => sum + section.offsetHeight, 0);

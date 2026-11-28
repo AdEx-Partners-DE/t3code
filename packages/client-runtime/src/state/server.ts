@@ -23,6 +23,7 @@ import {
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
   ORCHESTRATION_V2_WS_METHODS,
+  resolveProviderInstanceEnabled,
   shouldRecommendDatabaseCompaction,
   type UsageSummary,
   type WorkflowRunsSnapshot,
@@ -498,6 +499,7 @@ const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEven
 export interface ServerConfigSubscriptionOptions {
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
+  readonly hostPressure?: boolean;
   readonly usageLimitsCommand?: boolean;
   readonly providerCatalogsOnDemand?: boolean;
   readonly providerCatalogDigests?: boolean;
@@ -612,10 +614,12 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     ) {
       // A cached stall would read as a fresh freeze on the next launch, and
       // serverTime changes every connect, which would rewrite the cache each time.
+      // Pressure is live-only.
       const {
         environmentThemes: _themes,
         usageLimitSources: _sources,
         lastEventLoopStall: _stall,
+        hostPressure: _pressure,
         serverTime: _serverTime,
         ...cacheable
       } = config;
@@ -670,6 +674,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const configUpdates = subscribe(WS_METHODS.subscribeServerConfig, {
       ...(subscription.environmentThemes === true ? { environmentThemes: true } : {}),
       ...(subscription.usageLimitSources === true ? { usageLimitSources: true } : {}),
+      ...(subscription.hostPressure === true ? { hostPressure: true } : {}),
       ...(subscription.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
       ...(subscription.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
       ...(subscription.providerCatalogDigests === true ? { providerCatalogDigests: true } : {}),
@@ -995,6 +1000,7 @@ export function createServerEnvironmentAtoms<R, E>(
     ) => Atom.Atom<ServerConfig | null>;
     readonly environmentThemes?: boolean;
     readonly usageLimitSources?: boolean;
+    readonly hostPressure?: boolean;
     readonly usageLimitsCommand?: boolean;
     readonly providerCatalogsOnDemand?: boolean;
     readonly providerCatalogDigests?: boolean;
@@ -1055,6 +1061,7 @@ export function createServerEnvironmentAtoms<R, E>(
           {
             ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
             ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
+            ...(options.hostPressure === true ? { hostPressure: true } : {}),
             ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
             ...(options.providerCatalogsOnDemand === true
               ? { providerCatalogsOnDemand: true }
@@ -1467,11 +1474,20 @@ export function createServerEnvironmentAtoms<R, E>(
     Atom.make((get) => {
       const settings = get(settingsValueAtom(environmentId));
       const aliases = settings?.usageModelAliases ?? {};
+      const instances = settings?.providerInstances ?? {};
       return JSON.stringify([
         get(usagePricesAtom(environmentId)),
         Object.keys(aliases)
           .sort()
           .map((model) => [model, aliases[model]]),
+        // The server scans only enabled instances whose usage access is allowed.
+        Object.entries(instances)
+          .map(([id, instance]) => [
+            id,
+            resolveProviderInstanceEnabled(instance),
+            instance.usageAccess,
+          ])
+          .sort(([a], [b]) => String(a).localeCompare(String(b))),
       ]);
     }).pipe(Atom.withLabel(`environment-data:server:usage-scan-settings:${environmentId}`)),
   );
@@ -1726,6 +1742,15 @@ export function createServerEnvironmentAtoms<R, E>(
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostResources>) =>
         request(WS_METHODS.serverGetHostResources, input).pipe(Effect.timeout("5 seconds")),
     }),
+    /** The same snapshot, refreshed while a thread's details card shows machine load. */
+    liveHostResources: createEnvironmentQueryAtomFamily(runtime, {
+      label: "environment-data:server:live-host-resources",
+      idleTtlMs: 0,
+      staleTimeMs: 5_000,
+      refreshIntervalMs: 5_000,
+      execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostResources>) =>
+        request(WS_METHODS.serverGetHostResources, input).pipe(Effect.timeout("5 seconds")),
+    }),
     processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,
@@ -1948,6 +1973,7 @@ export function createServerEnvironmentAtoms<R, E>(
             input.fresh ?? false,
             input.refreshModels ?? false,
             input.modelCatalogOnly ?? false,
+            input.limitsOnly ?? false,
           ]),
       },
     }),

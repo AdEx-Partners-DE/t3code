@@ -150,6 +150,10 @@ export function clientRpcRequiredScopes(
     input.includeTextGeneration === true
   )
     return [AuthOrchestrationOperateScope, AuthSettingsWriteScope];
+  // Checking a secret source resolves a caller-named reference and applies it to providers.
+  if (method === WS_METHODS.serverCheckSecretSource) {
+    return [AuthSettingsWriteScope, AuthProvidersManageScope];
+  }
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
     ? [CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]]
     : [];

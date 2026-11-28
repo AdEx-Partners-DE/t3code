@@ -16,6 +16,7 @@ import {
   RunAttemptId,
 } from "@t3tools/contracts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -468,7 +469,7 @@ it.effect.each(["cancel", "expiry", "queue held", "queues paused"] as const)(
       Effect.provide(
         Layer.mergeAll(
           queueRuntime,
-          ProjectionStore.layer,
+          ProjectionStore.layer.pipe(Layer.provide(NodeCrypto.layerDigest)),
           DeploymentDrain.layer.pipe(Layer.provide(queueRuntime)),
         ).pipe(Layer.provide(database)),
       ),

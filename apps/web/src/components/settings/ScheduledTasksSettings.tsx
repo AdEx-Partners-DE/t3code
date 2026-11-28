@@ -50,6 +50,7 @@ import {
   ProviderInstanceId,
   resolveEnvironmentMachineKind,
   scheduledTaskThreadMode,
+  trimAsciiWhitespace,
 } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -2037,7 +2038,8 @@ function ScheduledTaskEditorForm({
           )
           .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
           .slice(0, 100);
-  const automaticBaseRef = draft.workspaceMode === "worktree" && !draft.baseRef.trim();
+  const automaticBaseRef =
+    draft.workspaceMode === "worktree" && !trimAsciiWhitespace(draft.baseRef);
   const automaticBaseRefs = usePaginatedBranches({
     environmentId,
     cwd: automaticBaseRef ? (selectedProject?.workspaceRoot ?? null) : null,

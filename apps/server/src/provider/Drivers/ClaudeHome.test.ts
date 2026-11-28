@@ -147,7 +147,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
   });
 
   it.effect(
-    "drops the launching Claude session and Electron's run-as-Node flag, and labels processes t3-code unless overridden",
+    "drops the launching Claude session and Electron's run-as-Node flag, and labels processes t3-code unless overridden, without reading settings while turned off",
     () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -167,11 +167,15 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
           { name: "CLAUDE_EFFORT", value: "low", sensitive: false },
         ];
 
-        expect(yield* mergeClaudeProcessEnvironment({ homePath }, undefined, host)).toEqual({
+        expect(
+          yield* mergeClaudeProcessEnvironment({ homePath, enabled: true }, undefined, host),
+        ).toEqual({
           CLAUDE_CODE_ENTRYPOINT: "t3-code",
           KEEP: "1",
         });
-        expect(yield* mergeClaudeProcessEnvironment({ homePath }, instance, host)).toEqual({
+        expect(
+          yield* mergeClaudeProcessEnvironment({ homePath, enabled: true }, instance, host),
+        ).toEqual({
           CLAUDE_CODE_ENTRYPOINT: "instance",
           CLAUDE_EFFORT: "low",
           KEEP: "1",
@@ -182,9 +186,13 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
           JSON.stringify({ env: { CLAUDE_CODE_ENTRYPOINT: "custom" } }),
         );
         expect(
-          (yield* mergeClaudeProcessEnvironment({ homePath }, instance, host))
+          (yield* mergeClaudeProcessEnvironment({ homePath, enabled: true }, instance, host))
             .CLAUDE_CODE_ENTRYPOINT,
         ).toBe("custom");
+        expect(
+          (yield* mergeClaudeProcessEnvironment({ homePath, enabled: false }, instance, host))
+            .CLAUDE_CODE_ENTRYPOINT,
+        ).toBe("instance");
       }),
   );
 });

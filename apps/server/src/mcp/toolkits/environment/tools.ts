@@ -2,6 +2,7 @@ import {
   BackgroundActivityProfile,
   BackgroundActivityProfileSelection,
   ExecutionEnvironmentDescriptor,
+  HostPressureLevel,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
   OrchestrationV2RpcSchemas,
@@ -13,6 +14,7 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ProviderInstanceSwap from "../../../orchestration-v2/ProviderInstanceSwap.ts";
+import * as HostResources from "../../../resourceTelemetry/HostResources.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Settings from "../../../serverSettings.ts";
@@ -45,12 +47,29 @@ const shared = {
     Settings.ServerSettingsService,
     ThreadCommandExecutor.ThreadCommandExecutor,
     ProviderInstanceSwap.ProviderInstanceSwap,
+    HostResources.HostResources,
   ],
 };
+const Machine = Schema.Struct({
+  pressure: Schema.Struct({
+    memory: HostPressureLevel,
+    cpu: HostPressureLevel,
+    io: HostPressureLevel,
+    disk: HostPressureLevel,
+  }).annotate({
+    description:
+      "Whether work here is stalling, by cause. `none` is fine even when busy; `elevated` slows agents; `severe` stalls or fails them.",
+  }),
+  cpuCount: Schema.Number,
+  cpuUsedPercent: Schema.NullOr(Schema.Number),
+  memoryAvailableGb: Schema.Number,
+  memoryTotalGb: Schema.Number,
+  diskFreeGb: Schema.NullOr(Schema.Number),
+});
 const EnvironmentReadTool = Tool.make("t3_environment_read", {
   ...shared,
   description:
-    "Read this server's identity and preferences. Providers and models: `orchestrator_capabilities`.",
+    "Read this server's identity, preferences and current machine load. To pick the least loaded machine, read each linked environment and compare `machine`. Providers and models: `orchestrator_capabilities`.",
   parameters: Schema.Struct({ environmentId: OrchestratorMcpEnvironmentTarget }),
   success: Schema.Struct({
     environmentId: ExecutionEnvironmentDescriptor.fields.environmentId,
@@ -58,6 +77,8 @@ const EnvironmentReadTool = Tool.make("t3_environment_read", {
     serverVersion: Schema.String,
     platform: ExecutionEnvironmentDescriptor.fields.platform,
     preferences: Schema.Struct(PreferenceFields),
+    /** Absent from older servers. */
+    machine: Schema.optionalKey(Machine),
   }),
 })
   .annotate(Tool.Readonly, true)
